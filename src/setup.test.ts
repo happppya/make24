@@ -865,6 +865,32 @@ describe('Make 24 Remastered — Playable UI Flow (App.vue)', () => {
     wrapper.unmount()
   })
 
+  it('keeps a floating cue on its own spot when older cues drop off', async () => {
+    const wrapper = mount(App)
+    await wrapper.find('[data-testid="enter-singleplayer"]').trigger('click')
+    await wrapper.find('[data-testid="start-round-btn"]').trigger('click')
+
+    // Each operator press raises a cue (arming, or the NOPE once arming repeats).
+    await wrapper.findAll('.expr-node--root')[0]!.trigger('click')
+    const addBtn = wrapper.find('[data-testid="op-add"]')
+    for (let i = 0; i < 4; i++) await addBtn.trigger('click')
+    await nextTick()
+    expect(wrapper.findAll('.float-cue')).toHaveLength(4)
+
+    const survivorStyle = wrapper.findAll('.float-cue')[1]!.attributes('style')
+    expect(survivorStyle).toMatch(/left: -?\d+(\.\d+)?%/)
+
+    // A fifth cue evicts the oldest; the survivors must not be re-positioned.
+    await addBtn.trigger('click')
+    await nextTick()
+    const cues = wrapper.findAll('.float-cue')
+    expect(cues).toHaveLength(4)
+    expect(cues[0]!.attributes('style')).toBe(survivorStyle)
+    expect(new Set(cues.map((cue) => cue.attributes('style'))).size).toBeGreaterThan(1)
+
+    wrapper.unmount()
+  })
+
   it('takes Multiplayer to the lobby selector, not straight into a room', async () => {
     const wrapper = mount(App)
     await wrapper.find('[data-testid="enter-multiplayer"]').trigger('click')

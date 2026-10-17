@@ -278,7 +278,9 @@ async function glideToGroups(groupIds: string[]): Promise<void> {
   cueTimers.add(timer)
 }
 
-const floatingCues = ref<{ id: number; text: string; tone: 'good' | 'bad' | 'neutral' }[]>([])
+const floatingCues = ref<
+  { id: number; text: string; tone: 'good' | 'bad' | 'neutral'; offsetX: number }[]
+>([])
 let cueSeed = 0
 let impactTimer: ReturnType<typeof setTimeout> | null = null
 let sawAcceptable = false
@@ -365,7 +367,11 @@ function triggerImpact(kind: 'op' | 'split' | 'error' | 'hit'): void {
 
 function pushCue(text: string, tone: 'good' | 'bad' | 'neutral' = 'neutral'): void {
   const id = ++cueSeed
-  floatingCues.value = [...floatingCues.value.slice(-3), { id, text, tone }]
+  // The horizontal spot belongs to the cue, not its list position: cues are
+  // dropped from the front as new ones arrive, and a CSS nth-child offset made
+  // the survivors hop sideways mid-rise when they were re-indexed.
+  const offsetX = 50 + (((id * 37) % 25) - 12)
+  floatingCues.value = [...floatingCues.value.slice(-3), { id, text, tone, offsetX }]
   const timer = setTimeout(() => {
     floatingCues.value = floatingCues.value.filter((cue) => cue.id !== id)
     cueTimers.delete(timer)
@@ -2154,6 +2160,7 @@ onBeforeUnmount(() => {
             :key="cue.id"
             class="float-cue"
             :class="`float-cue--${cue.tone}`"
+            :style="{ left: `${cue.offsetX}%` }"
           >
             {{ cue.text }}
           </span>
@@ -3649,14 +3656,6 @@ fieldset.settings-form:disabled {
   text-shadow: 0 3px 0 #09080f, 0 0 12px rgba(255, 190, 11, 0.5);
   white-space: nowrap;
   animation: cue-rise 1s cubic-bezier(0.2, 1, 0.3, 1) forwards;
-}
-
-.float-cue:nth-child(even) {
-  left: 42%;
-}
-
-.float-cue:nth-child(3n) {
-  left: 58%;
 }
 
 .float-cue--bad {
