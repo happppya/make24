@@ -1,0 +1,689 @@
+import type {
+  AllowedOperatorsConfig,
+  BinaryOperator,
+  ExprNode,
+  OperatorId,
+  OperatorMeta,
+  UnaryOperator,
+} from './types'
+
+export const OPERATOR_CATALOG: OperatorMeta[] = [
+  // Basic binary
+  {
+    id: 'add',
+    arity: 'binary',
+    category: 'basic',
+    label: 'Add',
+    shortSymbol: '+',
+    description: 'a + b',
+    hotkey: '+',
+  },
+  {
+    id: 'sub',
+    arity: 'binary',
+    category: 'basic',
+    label: 'Subtract',
+    shortSymbol: '−',
+    description: 'a − b',
+    hotkey: '-',
+  },
+  {
+    id: 'mult',
+    arity: 'binary',
+    category: 'basic',
+    label: 'Multiply',
+    shortSymbol: '×',
+    description: 'a × b',
+    hotkey: '*',
+  },
+  {
+    id: 'div',
+    arity: 'binary',
+    category: 'basic',
+    label: 'Divide',
+    shortSymbol: '÷',
+    description: 'a ÷ b',
+    hotkey: '/',
+  },
+  // Powers and roots
+  {
+    id: 'pow',
+    arity: 'binary',
+    category: 'powers',
+    label: 'Power',
+    shortSymbol: 'xʸ',
+    description: 'a ^ b',
+    hotkey: '^',
+  },
+  {
+    id: 'root',
+    arity: 'binary',
+    category: 'powers',
+    label: 'Root',
+    shortSymbol: 'ʸ√x',
+    description: 'a ^ (1/b)',
+    hotkey: 'r',
+  },
+  // Factorials and gamma
+  {
+    id: 'fact',
+    arity: 'unary',
+    category: 'factorial',
+    label: 'Factorial',
+    shortSymbol: 'x!',
+    description: 'Γ(x + 1)',
+    hotkey: '!',
+  },
+  {
+    id: 'gamma',
+    arity: 'unary',
+    category: 'factorial',
+    label: 'Gamma',
+    shortSymbol: 'Γ(x)',
+    description: 'Γ(x)',
+    hotkey: 'g',
+  },
+  // Basic trig (degrees)
+  {
+    id: 'sin',
+    arity: 'unary',
+    category: 'trig',
+    label: 'Sine',
+    shortSymbol: 'sin°',
+    description: 'sin(x°)',
+    hotkey: 's',
+  },
+  {
+    id: 'cos',
+    arity: 'unary',
+    category: 'trig',
+    label: 'Cosine',
+    shortSymbol: 'cos°',
+    description: 'cos(x°)',
+    hotkey: 'c',
+  },
+  {
+    id: 'tan',
+    arity: 'unary',
+    category: 'trig',
+    label: 'Tangent',
+    shortSymbol: 'tan°',
+    description: 'tan(x°)',
+    hotkey: 't',
+  },
+  // Inverse
+  {
+    id: 'inv',
+    arity: 'unary',
+    category: 'inverse',
+    label: 'Inverse',
+    shortSymbol: '1/x',
+    description: '1 ÷ x',
+    hotkey: 'i',
+  },
+  // Bit shifting
+  {
+    id: 'lshift',
+    arity: 'binary',
+    category: 'bitshift',
+    label: 'LSHIFT',
+    shortSymbol: '<<',
+    description: 'LSHIFT(a, b)',
+    hotkey: '<',
+  },
+  {
+    id: 'rshift',
+    arity: 'binary',
+    category: 'bitshift',
+    label: 'RSHIFT',
+    shortSymbol: '>>',
+    description: 'RSHIFT(a, b)',
+    hotkey: '>',
+  },
+]
+
+export function getEnabledOperators(allowed: AllowedOperatorsConfig): OperatorMeta[] {
+  return OPERATOR_CATALOG.filter((op) => allowed[op.category])
+}
+
+export function isUnaryOperator(op: OperatorId): op is UnaryOperator {
+  return (
+    op === 'fact' ||
+    op === 'gamma' ||
+    op === 'sin' ||
+    op === 'cos' ||
+    op === 'tan' ||
+    op === 'inv'
+  )
+}
+
+export function isBinaryOperator(op: OperatorId): op is BinaryOperator {
+  return !isUnaryOperator(op)
+}
+
+const LANCZOS_G = 7
+const LANCZOS_COEFFS = [
+  0.99999999999980993,
+  676.5203681218851,
+  -1259.1392167224028,
+  771.32342877765313,
+  -176.61502916214059,
+  12.507343278686905,
+  -0.13857109526572012,
+  9.9843695780195716e-6,
+  1.5056327351493116e-7,
+]
+
+const EPSILON = 1e-11
+
+export function cleanFloat(n: number): number {
+  if (!Number.isFinite(n)) return n
+  const rounded = Math.round(n)
+  if (Math.abs(n - rounded) < EPSILON) {
+    return Object.is(rounded, -0) ? 0 : rounded
+  }
+  // Also snap clean decimal fractions like 0.5, 0.25, etc.
+  const scaled = Math.round(n * 1e9) / 1e9
+  if (Math.abs(n - scaled) < EPSILON) {
+    return Object.is(scaled, -0) ? 0 : scaled
+  }
+  return Object.is(n, -0) ? 0 : n
+}
+
+export function formatNumber(n: number): string {
+  if (!Number.isFinite(n)) return 'Undefined'
+  const clean = cleanFloat(n)
+  if (Number.isInteger(clean)) {
+    return String(clean)
+  }
+  const abs = Math.abs(clean)
+  if (abs >= 1e7 || (abs > 0 && abs < 1e-4)) {
+    return clean.toExponential(3)
+  }
+  return Number(clean.toFixed(4)).toString()
+}
+
+export function realGamma(z: number): number | null {
+  if (!Number.isFinite(z)) return null
+  // Poles at non-positive integers: 0, -1, -2, ...
+  if (z <= 0 && Math.abs(z - Math.round(z)) < 1e-9) {
+    return null
+  }
+  // Exact small positive integers: Gamma(n) = (n - 1)!
+  const rounded = Math.round(z)
+  if (rounded >= 1 && rounded <= 21 && Math.abs(z - rounded) < 1e-9) {
+    let prod = 1
+    for (let i = 1; i < rounded; i++) {
+      prod *= i
+    }
+    return prod
+  }
+  if (z > 171.6) {
+    return null // Overflows double precision
+  }
+  if (z < 0.5) {
+    const sinTerm = Math.sin(Math.PI * z)
+    if (Math.abs(sinTerm) < 1e-12) return null
+    const reflected = realGamma(1 - z)
+    if (reflected === null) return null
+    const res = Math.PI / (sinTerm * reflected)
+    return Number.isFinite(res) ? cleanFloat(res) : null
+  }
+
+  const shifted = z - 1
+  let x = LANCZOS_COEFFS[0]!
+  for (let i = 1; i < LANCZOS_COEFFS.length; i++) {
+    x += LANCZOS_COEFFS[i]! / (shifted + i)
+  }
+  const t = shifted + LANCZOS_G + 0.5
+  const result = Math.sqrt(2 * Math.PI) * Math.pow(t, shifted + 0.5) * Math.exp(-t) * x
+  if (!Number.isFinite(result)) return null
+  return cleanFloat(result)
+}
+
+export function realFactorial(x: number): number | null {
+  if (!Number.isFinite(x)) return null
+  return realGamma(x + 1)
+}
+
+export interface EvalResult {
+  ok: boolean
+  value: number
+  headerText: string
+  error?: string
+}
+
+export function applyUnaryOperator(op: UnaryOperator, x: number): EvalResult {
+  const xStr = formatNumber(x)
+  switch (op) {
+    case 'fact': {
+      const val = realFactorial(x)
+      if (val === null) {
+        return {
+          ok: false,
+          value: NaN,
+          headerText: '',
+          error: `Factorial of ${xStr} is undefined or overflows.`,
+        }
+      }
+      return {
+        ok: true,
+        value: val,
+        headerText: `${xStr}! = ${formatNumber(val)}`,
+      }
+    }
+    case 'gamma': {
+      const val = realGamma(x)
+      if (val === null) {
+        return {
+          ok: false,
+          value: NaN,
+          headerText: '',
+          error: `Γ(${xStr}) is undefined or overflows.`,
+        }
+      }
+      return {
+        ok: true,
+        value: val,
+        headerText: `Γ(${xStr}) = ${formatNumber(val)}`,
+      }
+    }
+    case 'sin': {
+      const rad = (x * Math.PI) / 180
+      const val = cleanFloat(Math.sin(rad))
+      return {
+        ok: true,
+        value: val,
+        headerText: `sin(${xStr} deg) = ${formatNumber(val)}`,
+      }
+    }
+    case 'cos': {
+      const rad = (x * Math.PI) / 180
+      const val = cleanFloat(Math.cos(rad))
+      return {
+        ok: true,
+        value: val,
+        headerText: `cos(${xStr} deg) = ${formatNumber(val)}`,
+      }
+    }
+    case 'tan': {
+      // Check odd multiples of 90 deg where cos(x) = 0
+      const mod180 = ((x % 180) + 180) % 180
+      if (Math.abs(mod180 - 90) < 1e-9) {
+        return {
+          ok: false,
+          value: NaN,
+          headerText: '',
+          error: `tan(${xStr} deg) is undefined.`,
+        }
+      }
+      const rad = (x * Math.PI) / 180
+      const val = cleanFloat(Math.tan(rad))
+      if (!Number.isFinite(val)) {
+        return {
+          ok: false,
+          value: NaN,
+          headerText: '',
+          error: `tan(${xStr} deg) is undefined.`,
+        }
+      }
+      return {
+        ok: true,
+        value: val,
+        headerText: `tan(${xStr} deg) = ${formatNumber(val)}`,
+      }
+    }
+    case 'inv': {
+      if (Math.abs(x) < 1e-12) {
+        return {
+          ok: false,
+          value: NaN,
+          headerText: '',
+          error: 'Cannot take the inverse of 0.',
+        }
+      }
+      const val = cleanFloat(1 / x)
+      return {
+        ok: true,
+        value: val,
+        headerText: `1 / ${xStr} = ${formatNumber(val)}`,
+      }
+    }
+  }
+}
+
+export function applyBinaryOperator(op: BinaryOperator, a: number, b: number): EvalResult {
+  const aStr = formatNumber(a)
+  const bStr = formatNumber(b)
+  switch (op) {
+    case 'add': {
+      const val = cleanFloat(a + b)
+      return { ok: true, value: val, headerText: `${aStr} + ${bStr} = ${formatNumber(val)}` }
+    }
+    case 'sub': {
+      const val = cleanFloat(a - b)
+      return { ok: true, value: val, headerText: `${aStr} - ${bStr} = ${formatNumber(val)}` }
+    }
+    case 'mult': {
+      const val = cleanFloat(a * b)
+      return { ok: true, value: val, headerText: `${aStr} × ${bStr} = ${formatNumber(val)}` }
+    }
+    case 'div': {
+      if (Math.abs(b) < 1e-12) {
+        return {
+          ok: false,
+          value: NaN,
+          headerText: '',
+          error: 'Cannot divide by 0.',
+        }
+      }
+      const val = cleanFloat(a / b)
+      return { ok: true, value: val, headerText: `${aStr} ÷ ${bStr} = ${formatNumber(val)}` }
+    }
+    case 'pow': {
+      if (Math.abs(a) < 1e-12 && b < 0) {
+        return {
+          ok: false,
+          value: NaN,
+          headerText: '',
+          error: '0 cannot be raised to a negative power.',
+        }
+      }
+      const raw = Math.pow(a, b)
+      if (!Number.isFinite(raw) || Number.isNaN(raw)) {
+        return {
+          ok: false,
+          value: NaN,
+          headerText: '',
+          error: `${aStr} ^ ${bStr} is undefined or overflows.`,
+        }
+      }
+      const val = cleanFloat(raw)
+      return { ok: true, value: val, headerText: `${aStr} ^ ${bStr} = ${formatNumber(val)}` }
+    }
+    case 'root': {
+      if (Math.abs(b) < 1e-12) {
+        return {
+          ok: false,
+          value: NaN,
+          headerText: '',
+          error: 'Cannot take the 0th root.',
+        }
+      }
+      let raw: number
+      if (a < 0) {
+        const bInt = Math.round(b)
+        if (Math.abs(b - bInt) < 1e-9 && Math.abs(bInt % 2) === 1) {
+          raw = -Math.pow(-a, 1 / bInt)
+        } else {
+          return {
+            ok: false,
+            value: NaN,
+            headerText: '',
+            error: `Real ${bStr}-th root of negative number ${aStr} is undefined.`,
+          }
+        }
+      } else {
+        raw = Math.pow(a, 1 / b)
+      }
+      if (!Number.isFinite(raw) || Number.isNaN(raw)) {
+        return {
+          ok: false,
+          value: NaN,
+          headerText: '',
+          error: `${aStr} root ${bStr} is undefined or overflows.`,
+        }
+      }
+      const val = cleanFloat(raw)
+      return {
+        ok: true,
+        value: val,
+        headerText: `${aStr} root ${bStr} = ${formatNumber(val)}`,
+      }
+    }
+    case 'lshift': {
+      const aInt = Math.round(a)
+      const bInt = Math.round(b)
+      if (Math.abs(a - aInt) > 1e-9 || Math.abs(b - bInt) > 1e-9) {
+        return {
+          ok: false,
+          value: NaN,
+          headerText: '',
+          error: 'Bit shifting requires integer values.',
+        }
+      }
+      if (bInt < 0 || bInt > 52) {
+        return {
+          ok: false,
+          value: NaN,
+          headerText: '',
+          error: 'Shift amount must be between 0 and 52.',
+        }
+      }
+      const val = cleanFloat(aInt * Math.pow(2, bInt))
+      return {
+        ok: true,
+        value: val,
+        headerText: `LSHIFT(${aInt}, ${bInt}) = ${formatNumber(val)}`,
+      }
+    }
+    case 'rshift': {
+      const aInt = Math.round(a)
+      const bInt = Math.round(b)
+      if (Math.abs(a - aInt) > 1e-9 || Math.abs(b - bInt) > 1e-9) {
+        return {
+          ok: false,
+          value: NaN,
+          headerText: '',
+          error: 'Bit shifting requires integer values.',
+        }
+      }
+      if (bInt < 0 || bInt > 52) {
+        return {
+          ok: false,
+          value: NaN,
+          headerText: '',
+          error: 'Shift amount must be between 0 and 52.',
+        }
+      }
+      const val = Math.floor(aInt / Math.pow(2, bInt))
+      return {
+        ok: true,
+        value: val,
+        headerText: `RSHIFT(${aInt}, ${bInt}) = ${formatNumber(val)}`,
+      }
+    }
+  }
+}
+
+export interface TargetCheckResult {
+  acceptable: boolean
+  minAcceptable: number
+  maxAcceptable: number
+  errorPercent: number
+}
+
+export function checkTargetAcceptance(
+  value: number,
+  target: number,
+  approximationPercent: number
+): TargetCheckResult {
+  if (!Number.isFinite(value)) {
+    return {
+      acceptable: false,
+      minAcceptable: target,
+      maxAcceptable: target,
+      errorPercent: Infinity,
+    }
+  }
+  const cleanTarget = cleanFloat(target)
+  const cleanVal = cleanFloat(value)
+
+  // Target of 0 just has 0 tolerable error
+  if (Math.abs(cleanTarget) < 1e-12 || approximationPercent <= 0) {
+    const diff = Math.abs(cleanVal - cleanTarget)
+    const acceptable = diff < 1e-7
+    const errorPercent =
+      Math.abs(cleanTarget) < 1e-12
+        ? acceptable
+          ? 0
+          : 100
+        : (diff / Math.abs(cleanTarget)) * 100
+    return {
+      acceptable,
+      minAcceptable: cleanTarget,
+      maxAcceptable: cleanTarget,
+      errorPercent: cleanFloat(errorPercent),
+    }
+  }
+
+  const band = Math.abs(cleanTarget) * (approximationPercent / 100)
+  const minAcceptable = cleanFloat(cleanTarget - band)
+  const maxAcceptable = cleanFloat(cleanTarget + band)
+  const acceptable =
+    cleanVal >= minAcceptable - 1e-7 && cleanVal <= maxAcceptable + 1e-7
+  const errorPercent = (Math.abs(cleanVal - cleanTarget) / Math.abs(cleanTarget)) * 100
+
+  return {
+    acceptable,
+    minAcceptable,
+    maxAcceptable,
+    errorPercent: cleanFloat(errorPercent),
+  }
+}
+
+/**
+ * Calculates the score of an expression tree according to the spec:
+ * - Lower score is better.
+ * - 10 score is added for each binary operator used.
+ * - The unary penalty increases per layer: the first unary operator is 10,
+ *   then the second is 20, then the third is 30, and so on with 40, 50, 60...
+ *   So, using o(o(x)) incurs 30 points while o(o(o(x))) incurs 60 points.
+ * - Nested unary operators on the same group count as a consecutive unary,
+ *   and a binary operation resets the chain.
+ * - Factorial and gamma nested together incur 200 points each time when nested:
+ *   e.g. factorial(gamma(x)) or gamma(factorial(x)).
+ */
+export function calculateScore(node: ExprNode): number {
+  function walk(curr: ExprNode, unaryDepthAbove: number): number {
+    if (curr.kind === 'card') {
+      return 0
+    }
+    if (curr.kind === 'binary') {
+      // Binary operator costs 10 and resets the consecutive unary chain for its operands
+      return 10 + walk(curr.left, 0) + walk(curr.right, 0)
+    }
+    // Unary operator
+    const currentLayer = unaryDepthAbove + 1
+    let layerCost = currentLayer * 10
+
+    // Check if factorial and gamma are nested together directly
+    if (curr.operand.kind === 'unary') {
+      const outerOp = curr.operator
+      const innerOp = curr.operand.operator
+      if (
+        (outerOp === 'fact' && innerOp === 'gamma') ||
+        (outerOp === 'gamma' && innerOp === 'fact')
+      ) {
+        layerCost += 200
+      }
+    }
+
+    return layerCost + walk(curr.operand, currentLayer)
+  }
+
+  return walk(node, 0)
+}
+
+function getBinaryPrecedence(op: BinaryOperator): number {
+  switch (op) {
+    case 'lshift':
+    case 'rshift':
+      return 1
+    case 'add':
+    case 'sub':
+      return 2
+    case 'mult':
+    case 'div':
+      return 3
+    case 'pow':
+    case 'root':
+      return 4
+  }
+}
+
+export function formatExpressionLhs(node: ExprNode): string {
+  if (node.kind === 'card') {
+    return String(node.card.value)
+  }
+
+  if (node.kind === 'unary') {
+    const inner = formatExpressionLhs(node.operand)
+    const needsParens =
+      node.operand.kind === 'binary' ||
+      (node.operator === 'fact' && node.operand.kind === 'unary' && node.operand.operator === 'fact') ||
+      (node.operator === 'inv' && node.operand.kind !== 'card')
+    switch (node.operator) {
+      case 'fact':
+        return needsParens ? `(${inner})!` : `${inner}!`
+      case 'gamma':
+        return `Γ(${inner})`
+      case 'sin':
+        return `sin(${inner}°)`
+      case 'cos':
+        return `cos(${inner}°)`
+      case 'tan':
+        return `tan(${inner}°)`
+      case 'inv':
+        return needsParens ? `1 / (${inner})` : `1 / ${inner}`
+    }
+  }
+
+  // Binary
+  const leftStr = formatExpressionLhs(node.left)
+  const rightStr = formatExpressionLhs(node.right)
+
+  if (node.operator === 'lshift') {
+    return `LSHIFT(${leftStr}, ${rightStr})`
+  }
+  if (node.operator === 'rshift') {
+    return `RSHIFT(${leftStr}, ${rightStr})`
+  }
+  if (node.operator === 'root') {
+    const leftWrapped = node.left.kind === 'binary' ? `(${leftStr})` : leftStr
+    return `${leftWrapped} ^ (1 / ${node.right.kind === 'binary' ? `(${rightStr})` : rightStr})`
+  }
+
+  const prec = getBinaryPrecedence(node.operator)
+  const wrapLeft =
+    node.left.kind === 'binary' &&
+    node.left.operator !== 'lshift' &&
+    node.left.operator !== 'rshift' &&
+    (getBinaryPrecedence(node.left.operator) < prec ||
+      (node.operator === 'pow' && getBinaryPrecedence(node.left.operator) <= prec))
+
+  const wrapRight =
+    node.right.kind === 'binary' &&
+    node.right.operator !== 'lshift' &&
+    node.right.operator !== 'rshift' &&
+    (getBinaryPrecedence(node.right.operator) < prec ||
+      ((node.operator === 'sub' || node.operator === 'div' || node.operator === 'pow') &&
+        getBinaryPrecedence(node.right.operator) === prec))
+
+  const lFinal = wrapLeft ? `(${leftStr})` : leftStr
+  const rFinal = wrapRight ? `(${rightStr})` : rightStr
+
+  const symbolMap: Record<Exclude<BinaryOperator, 'lshift' | 'rshift' | 'root'>, string> = {
+    add: '+',
+    sub: '-',
+    mult: '*',
+    div: '/',
+    pow: '^',
+  }
+
+  return `${lFinal} ${symbolMap[node.operator]} ${rFinal}`
+}
+
+export function formatFullEquation(node: ExprNode): string {
+  return `${formatExpressionLhs(node)} = ${formatNumber(node.value)}`
+}

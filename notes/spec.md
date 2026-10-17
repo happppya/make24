@@ -7,7 +7,7 @@ A twist on the make 24 game. Players can either enter singleplayer or multiplaye
 
 ## Visual Style
 
-Kind of a pixel art style inspired by Balatro. Maintain a sensible and easy-to-use game UI with icons where applicable.
+Kind of a pixel art style inspired by Balatro. Maintain a sensible and easy-to-use game UI with icons and smooth animations.
 
 ## Lobby
 

@@ -1,12 +1,227 @@
 :root {
-  color-scheme: light dark;
+  --bg-felt-deep: #0b1c15;
+  --bg-felt-mid: #163628;
+  --bg-felt-bright: #1f4d39;
+  --bg-panel: #1a1826;
+  --bg-panel-dark: #110f1a;
+  --bg-panel-raised: #282438;
+  --ink-cream: #f8f2e0;
+  --ink-muted: #b8b09c;
+  --gold: #ffbe0b;
+  --gold-bright: #ffe169;
+  --crimson: #fe4a49;
+  --crimson-dark: #a61c1c;
+  --royal-blue: #009fb7;
+  --chip-blue: #2563eb;
+  --emerald: #2ec4b6;
+  --font-display: 'Press Start 2P', 'Silkscreen', 'Courier New', monospace;
+  --font-pixel: 'Silkscreen', 'VT323', 'Courier New', monospace;
+  --font-mono: 'VT323', 'Silkscreen', 'Consolas', monospace;
+  --font-sans: 'Silkscreen', 'Trebuchet MS', monospace;
 }
 
 * {
   box-sizing: border-box;
 }
 
+html,
 body {
   margin: 0;
-  font-family: system-ui, sans-serif;
+  padding: 0;
+  min-height: 100vh;
+  background-color: var(--bg-felt-deep);
+  background-image:
+    radial-gradient(ellipse at 55% 42%, rgba(46, 196, 182, 0.18) 0%, transparent 60%),
+    radial-gradient(circle at 20% 80%, rgba(254, 74, 73, 0.12) 0%, transparent 50%),
+    repeating-conic-gradient(
+      from 0deg at 55% 48%,
+      rgba(22, 54, 40, 0.45) 0deg 15deg,
+      rgba(14, 36, 26, 0.45) 15deg 30deg
+    );
+  color: var(--ink-cream);
+  font-family: var(--font-pixel);
+  overflow-x: hidden;
+  -webkit-font-smoothing: none;
+}
+
+/* Subtle Balatro CRT scanline & vignette overlay */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9999;
+  background:
+    repeating-linear-gradient(
+      0deg,
+      rgba(0, 0, 0, 0.16) 0px,
+      rgba(0, 0, 0, 0.16) 1px,
+      transparent 1px,
+      transparent 3px
+    ),
+    radial-gradient(circle at 50% 50%, transparent 62%, rgba(4, 6, 10, 0.58) 100%);
+}
+
+button,
+input,
+select {
+  font-family: var(--font-pixel);
+}
+
+.pixel-sprite {
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+/* Chunky Balatro-inspired arcade buttons with stepped pixel shadows */
+.btn-arcade {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: var(--bg-panel-raised);
+  color: var(--ink-cream);
+  border: 3px solid var(--ink-cream);
+  outline: 3px solid #09080f;
+  padding: 8px 14px;
+  font-family: var(--font-pixel);
+  font-weight: 700;
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+  box-shadow:
+    inset 0 2px 0 rgba(255, 255, 255, 0.22),
+    inset 0 -3px 0 rgba(0, 0, 0, 0.45),
+    0 5px 0 #09080f;
+  transition: transform 0.08s steps(2), box-shadow 0.08s steps(2), background 0.1s ease;
+}
+
+.btn-arcade:hover:not(:disabled) {
+  background: #38324f;
+  border-color: var(--gold-bright);
+  transform: translateY(-2px);
+  box-shadow:
+    inset 0 2px 0 rgba(255, 255, 255, 0.3),
+    inset 0 -3px 0 rgba(0, 0, 0, 0.45),
+    0 7px 0 #09080f;
+}
+
+.btn-arcade:active:not(:disabled) {
+  transform: translateY(3px);
+  box-shadow:
+    inset 0 2px 0 rgba(0, 0, 0, 0.35),
+    0 2px 0 #09080f;
+}
+
+.btn-arcade:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  filter: grayscale(0.45);
+}
+
+.btn-arcade--crimson {
+  background: var(--crimson);
+  border-color: #fff3e6;
+  color: #fff;
+  text-shadow: 0 2px 0 #7a1212;
+}
+
+.btn-arcade--crimson:hover:not(:disabled) {
+  background: #ff5e5d;
+}
+
+.btn-arcade--gold {
+  background: var(--gold);
+  border-color: #fff9db;
+  color: #15111e;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.45);
+}
+
+.btn-arcade--gold:hover:not(:disabled) {
+  background: #ffd03b;
+}
+
+.btn-arcade--blue {
+  background: var(--chip-blue);
+  border-color: #dbeafe;
+  color: #fff;
+  text-shadow: 0 2px 0 #1e3a8a;
+}
+
+.btn-arcade--blue:hover:not(:disabled) {
+  background: #3b82f6;
+}
+
+.btn-arcade--emerald {
+  background: #14967f;
+  border-color: #a8f9ec;
+  color: #f8f2e0;
+  text-shadow: 0 2px 0 #09493e;
+}
+
+.btn-arcade--emerald:hover:not(:disabled) {
+  background: #1ab297;
+}
+
+.panel-box {
+  background: var(--bg-panel);
+  border: 3px solid var(--gold);
+  outline: 3px solid #09080f;
+  box-shadow:
+    inset 0 2px 0 rgba(255, 255, 255, 0.12),
+    inset 0 -4px 0 rgba(0, 0, 0, 0.5),
+    0 8px 0 #09080f;
+  padding: 16px;
+}
+
+@keyframes balatro-float {
+  0%,
+  100% {
+    transform: translateY(0px) rotate(-0.6deg);
+  }
+  50% {
+    transform: translateY(-4px) rotate(0.6deg);
+  }
+}
+
+@keyframes balatro-pop {
+  0% {
+    transform: scale(0.86);
+  }
+  55% {
+    transform: scale(1.08) rotate(-1.5deg);
+  }
+  100% {
+    transform: scale(1) rotate(0deg);
+  }
+}
+
+@keyframes balatro-shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  20% {
+    transform: translateX(-6px) rotate(-1deg);
+  }
+  40% {
+    transform: translateX(6px) rotate(1deg);
+  }
+  60% {
+    transform: translateX(-4px);
+  }
+  80% {
+    transform: translateX(4px);
+  }
+}
+
+@keyframes pulse-glow {
+  0%,
+  100% {
+    filter: drop-shadow(0 0 8px rgba(255, 190, 11, 0.75));
+  }
+  50% {
+    filter: drop-shadow(0 0 16px rgba(254, 74, 73, 0.95));
+  }
 }

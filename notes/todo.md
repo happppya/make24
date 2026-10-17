@@ -10,7 +10,8 @@ Remove todos that are already completed. Remove documents from current status on
 
 ## Current Status
 
-- spec.md (repo + framework setup): done — git repo initialized, Vue 3 + Vite + TS scaffold builds clean, AGENTS.md written. No gameplay, lobby, settings, or serverside work started.
+- spec.md: frontend core game engine, math/operators (basic, powers/roots, real factorial/gamma via Lanczos, trig in degrees, inverse, bit-shifting), scoring system, deck pools (1/2/3/unlimited decks), 5 auto-saved workspaces per round with fixed-size pannable canvas + freely draggable card groups, ungroup action (`U` / button), `Z`/`Y` undo & redo, and full Balatro-inspired pixel-art playable loop (Title, Lobby & Settings, Live Gameplay, Round End, and Match End) are implemented and tested. Real-time multiplayer backend on Oracle Cloud Infrastructure is not started yet.
 
 ## Todos
 
+- [ ] Build real-time multiplayer serverside synchronization (rooms, shared hand/target, synchronized round timer, and live scoreboard)
