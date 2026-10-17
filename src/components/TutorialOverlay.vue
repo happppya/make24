@@ -85,11 +85,11 @@ const sections: Section[] = [
     blocks: [
       {
         t: 'p',
-        text: 'Deal a hand, then combine every card into one expression. The header above a group is that group’s value; with one group left, that value is your answer.',
+        text: 'The goal of the game is to make the target number by combining all of your cards into one expression using operators like plus and divide. Whenever you use an operator to change the value of a card, it goes into a group with the total value shown above it. Once all cards are in one group, that is your final answer.',
       },
       {
         t: 'p',
-        text: 'Hit the target to take the round. Every card is used exactly once, with no discards and no duplicates.',
+        text: 'A valid solution has a final value that lands on the target number (or in the acceptable error range). Every card is used exactly once.',
       },
     ],
   },
@@ -100,7 +100,7 @@ const sections: Section[] = [
     blocks: [
       {
         t: 'p',
-        text: 'Select a piece, then press an operator. A unary wraps the piece where it sits and prints the result above it. A binary waits for a second piece, which stacks underneath.',
+        text: 'To build an expression, select a card or group, and then select an operator. A unary operator (like factorial, highlighted in cyan) just needs one item to function. A binary operator (like plus) waits for you to select a second card. Then a group is made that wraps the card or cards with the final value shown above.',
       },
       {
         t: 'p',
