@@ -865,6 +865,45 @@ describe('Make 24 Remastered — Playable UI Flow (App.vue)', () => {
     wrapper.unmount()
   })
 
+  it('bobs the picked card when an operator is equipped, not the whole felt', async () => {
+    const originalAnimate = Element.prototype.animate
+    const animate = vi.fn()
+    Element.prototype.animate = animate as unknown as typeof Element.prototype.animate
+    try {
+      const wrapper = mount(App)
+      await wrapper.find('[data-testid="enter-singleplayer"]').trigger('click')
+      await wrapper.find('[data-testid="start-round-btn"]').trigger('click')
+
+      const firstCard = wrapper.findAll('.expr-node--root')[0]!
+      await firstCard.trigger('click')
+      animate.mockClear()
+
+      await wrapper.find('[data-testid="op-add"]').trigger('click')
+
+      // Exactly one thing moves: the card the operator was equipped on.
+      expect(animate).toHaveBeenCalledTimes(1)
+      const bobbed = animate.mock.contexts[0] as HTMLElement
+      expect(bobbed.className).toContain('draggable-group-slot')
+      expect(bobbed.querySelector('.expr-node--root')).not.toBeNull()
+      expect(animate.mock.contexts).not.toContain(wrapper.find('.felt-table').element)
+
+      const options = animate.mock.calls[0]![1] as KeyframeAnimationOptions
+      expect(options.duration).toBeLessThan(500)
+
+      // A unary operation swaps in a brand-new group node; it bobs too.
+      animate.mockClear()
+      await wrapper.find('[data-testid="op-fact"]').trigger('click')
+      expect(animate).toHaveBeenCalledTimes(1)
+      expect((animate.mock.contexts[0] as HTMLElement).getAttribute('data-testid')).toMatch(
+        /^group-slot-/
+      )
+
+      wrapper.unmount()
+    } finally {
+      Element.prototype.animate = originalAnimate
+    }
+  })
+
   it('keeps a floating cue on its own spot when older cues drop off', async () => {
     const wrapper = mount(App)
     await wrapper.find('[data-testid="enter-singleplayer"]').trigger('click')

@@ -218,7 +218,7 @@ const actionError = ref<string | null>(null)
 /* ------------------------- juice: SFX, impact, cues ------------------------- */
 
 const sfxOn = ref(isSfxEnabled())
-const impactKind = ref<'op' | 'split' | 'error' | 'hit' | null>(null)
+const impactKind = ref<'split' | 'error' | 'hit' | null>(null)
 const hitSignal = ref(0)
 const shellRef = ref<HTMLElement | null>(null)
 const feltRef = ref<HTMLElement | null>(null)
@@ -286,8 +286,36 @@ let impactTimer: ReturnType<typeof setTimeout> | null = null
 let sawAcceptable = false
 const cueTimers = new Set<ReturnType<typeof setTimeout>>()
 
+/**
+ * A short bob on one piece. The felt itself stays put: equipping an operator
+ * should read as the card acknowledging it, not as the whole board lurching.
+ */
+function bobGroup(groupId: string | null): void {
+  if (!groupId) return
+  const reduceMotion =
+    typeof window !== 'undefined' &&
+    window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+  if (reduceMotion) return
+  const slot = viewportRef.value?.querySelector<HTMLElement>(
+    `[data-testid="group-slot-${groupId}"]`
+  )
+  // The slot owns the card's position, so animating it leaves the selected
+  // piece's own lift/pulse transform untouched.
+  if (!slot || typeof slot.animate !== 'function') return
+  slot.animate(
+    [
+      { transform: 'translateY(0)' },
+      { transform: 'translateY(-9px)', offset: 0.32 },
+      { transform: 'translateY(0)', offset: 0.62 },
+      { transform: 'translateY(-4px)', offset: 0.82 },
+      { transform: 'translateY(0)' },
+    ],
+    { duration: 340, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' }
+  )
+}
+
 /** Physical feedback: Web Animations API so every repeat replays cleanly. */
-function triggerImpact(kind: 'op' | 'split' | 'error' | 'hit'): void {
+function triggerImpact(kind: 'split' | 'error' | 'hit'): void {
   impactKind.value = kind
   if (impactTimer) clearTimeout(impactTimer)
   impactTimer = setTimeout(
@@ -349,18 +377,13 @@ function triggerImpact(kind: 'op' | 'split' | 'error' | 'hit'): void {
     return
   }
 
+  // Splitting a group presses the felt down a touch; nothing else moves it.
   feel?.animate(
-    kind === 'op'
-      ? [
-          { transform: 'translateY(0) scale(1)' },
-          { transform: 'translateY(-5px) scale(1.008)' },
-          { transform: 'translateY(0) scale(1)' },
-        ]
-      : [
-          { transform: 'translateY(0) scale(1)' },
-          { transform: 'translateY(3px) scale(0.995)' },
-          { transform: 'translateY(0) scale(1)' },
-        ],
+    [
+      { transform: 'translateY(0) scale(1)' },
+      { transform: 'translateY(3px) scale(0.995)' },
+      { transform: 'translateY(0) scale(1)' },
+    ],
     { duration: 200, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' }
   )
 }
@@ -1086,7 +1109,10 @@ function handleApplyOperator(opId: OperatorId): void {
   if (res.changed) {
     const meta = OPERATOR_CATALOG.find((op) => op.id === opId)
     playSfx('place')
-    triggerImpact('op')
+    // A unary operation wraps the piece in a new group id, so the slot it now
+    // lives in only exists after the board re-renders.
+    const bobTarget = ws.selectedGroupId
+    void nextTick(() => bobGroup(bobTarget))
     pushCue(`${meta?.shortSymbol ?? '?'} ${costLabel}`, 'neutral')
   } else {
     if (res.error) actionError.value = res.error
