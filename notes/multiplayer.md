@@ -57,7 +57,9 @@ Turn order for a round:
 3. A player reaches an acceptable single-group board → `submit`.
 4. `first-to-solve` ends the round immediately with that player as winner; timed
    modes keep accepting boards until the server clock passes `deadline`.
-5. Round end awards one point; reaching `firstToPoints` ends the match.
+5. Round end awards one point; equal best scores share the round, so every tied
+   player scores. Reaching `firstToPoints` ends the match, and players who get
+   there on the same round draw the series.
 
 Host controls: `skip-round` closes a round early (pays the best submitted board
 if there is one, otherwise no point), `next-round` deals again, `end-match`

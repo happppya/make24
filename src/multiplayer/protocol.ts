@@ -34,7 +34,8 @@ export interface RoundState {
   /** Epoch ms when timed modes expire; null for first-to-solve. */
   deadline: number | null
   solutions: SubmittedSolution[]
-  winnerId: string | null
+  /** Everyone who took the round. Two or more entries mean the best boards tied. */
+  winnerIds: string[]
   endedReason: RoundEndReason | null
 }
 
@@ -47,7 +48,8 @@ export interface RoomState {
   players: LobbyPlayer[]
   settings: GameSettings
   round: RoundState | null
-  matchWinnerId: string | null
+  /** Everyone who reached the points target; two or more entries mean a drawn series. */
+  matchWinnerIds: string[]
 }
 
 /** What a client may claim about its own solution; identity and timing are set by the server. */

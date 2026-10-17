@@ -128,7 +128,7 @@ export function createRoomState(code: string): RoomState {
     players: [],
     settings: createDefaultSettings(),
     round: null,
-    matchWinnerId: null,
+    matchWinnerIds: [],
   }
 }
 
@@ -198,12 +198,20 @@ function findPlayer(room: RoomState, playerId: string): LobbyPlayer | undefined 
   return room.players.find((p) => p.id === playerId)
 }
 
-function computeWinner(solutions: SubmittedSolution[]): SubmittedSolution | null {
-  if (solutions.length === 0) return null
-  return [...solutions].sort((a, b) => {
-    if (a.score !== b.score) return a.score - b.score
-    return a.timestampMs - b.timestampMs
-  })[0]!
+/**
+ * Every player holding the cheapest submitted board. Score is the only measure,
+ * so equal scores share the round instead of being split by who typed first.
+ */
+function computeWinnerIds(solutions: SubmittedSolution[]): string[] {
+  if (solutions.length === 0) return []
+  const bestScore = Math.min(...solutions.map((solution) => solution.score))
+  const winners: string[] = []
+  for (const solution of solutions) {
+    if (solution.score === bestScore && !winners.includes(solution.playerId)) {
+      winners.push(solution.playerId)
+    }
+  }
+  return winners
 }
 
 function dealRound(room: RoomState, now: number): void {
@@ -216,12 +224,12 @@ function dealRound(room: RoomState, now: number): void {
     startedAt: now,
     deadline: duration === null ? null : now + duration * 1000,
     solutions: [],
-    winnerId: null,
+    winnerIds: [],
     endedReason: null,
   }
   room.round = round
   room.phase = 'playing'
-  room.matchWinnerId = null
+  room.matchWinnerIds = []
   for (const player of room.players) {
     player.bestRoundScore = null
   }
@@ -229,9 +237,9 @@ function dealRound(room: RoomState, now: number): void {
 }
 
 /**
- * Ends the active round, awards the point and decides whether the match is over.
- * `forcedWinnerId` is used by first-to-solve, where the first valid submit wins
- * outright rather than on score.
+ * Ends the active round, awards a point to every winner and decides whether the
+ * match is over. `forcedWinnerId` is used by first-to-solve, where the first
+ * valid submit wins outright rather than on score.
  */
 function endRound(
   room: RoomState,
@@ -242,24 +250,31 @@ function endRound(
   if (!round) return
   round.endedReason = reason
 
-  let winnerId: string | null = null
-  if (reason !== 'skip') {
-    const winnerSolution = forcedWinnerId
-      ? (round.solutions.find((s) => s.playerId === forcedWinnerId) ?? null)
-      : computeWinner(round.solutions)
-    winnerId = winnerSolution?.playerId ?? null
-  }
-  round.winnerId = winnerId
+  const winnerIds =
+    reason === 'skip'
+      ? []
+      : forcedWinnerId
+        ? [forcedWinnerId]
+        : computeWinnerIds(round.solutions)
+  round.winnerIds = winnerIds
 
-  const winner = winnerId ? findPlayer(room, winnerId) : undefined
-  if (winner) {
-    winner.points += 1
-    if (winner.points >= room.settings.firstToPoints) {
-      room.phase = 'game-over'
-      room.matchWinnerId = winner.id
-      room.revision += 1
-      return
-    }
+  for (const winnerId of winnerIds) {
+    const player = findPlayer(room, winnerId)
+    if (player) player.points += 1
+  }
+
+  // Ties can push several players past the target in the same round; the series
+  // is drawn between whoever got there.
+  const matchWinners = winnerIds
+    .map((winnerId) => findPlayer(room, winnerId))
+    .filter((player): player is LobbyPlayer => player !== undefined)
+    .filter((player) => player.points >= room.settings.firstToPoints)
+
+  if (matchWinners.length > 0) {
+    room.phase = 'game-over'
+    room.matchWinnerIds = matchWinners.map((player) => player.id)
+    room.revision += 1
+    return
   }
 
   room.phase = 'round-end'
@@ -393,7 +408,7 @@ export function handleClientMessage(
         p.bestRoundScore = null
       }
       room.round = null
-      room.matchWinnerId = null
+      room.matchWinnerIds = []
       room.hostId = playerId
       dealRound(room, now)
       return ok(true)
@@ -418,8 +433,10 @@ export function handleClientMessage(
     case 'end-match': {
       if (!isRoomHost(room, playerId)) return fail('not-host', 'Only the host can end the match.')
       const standings = [...room.players].sort((a, b) => b.points - a.points)
-      const leader = standings[0]
-      room.matchWinnerId = leader && leader.points > 0 ? leader.id : null
+      const top = standings[0]?.points ?? 0
+      // A host ending the series declares whoever is level at the top, which can
+      // be more than one player.
+      room.matchWinnerIds = top > 0 ? standings.filter((p) => p.points === top).map((p) => p.id) : []
       room.phase = 'game-over'
       room.revision += 1
       return ok(true)

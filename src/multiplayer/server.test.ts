@@ -199,7 +199,7 @@ describe('multiplayer server — playing a round', () => {
     const hostView = await host.waitFor('state', (m) => m.room.phase === 'round-end')
     const guestView = await guest.waitFor('state', (m) => m.room.phase === 'round-end')
 
-    expect(hostView.room.round!.winnerId).toBe(welcomeGuest.selfId)
+    expect(hostView.room.round!.winnerIds).toEqual([welcomeGuest.selfId])
     expect(guestView.room.round!.solutions).toHaveLength(1)
     expect(guestView.room.round!.solutions[0]!.lhs).toBe(solution.lhs)
     expect(guestView.room.players.find((p) => p.id === welcomeGuest.selfId)!.points).toBe(1)
@@ -217,7 +217,7 @@ describe('multiplayer server — playing a round', () => {
 
     host.send({ t: 'submit', solution })
     const roundOne = await guest.waitFor('state', (m) => m.room.phase === 'round-end')
-    expect(roundOne.room.round!.winnerId).toBe(welcomeHost.selfId)
+    expect(roundOne.room.round!.winnerIds).toEqual([welcomeHost.selfId])
 
     host.send({ t: 'next-round' })
     const roundTwo = await guest.waitFor(
@@ -228,7 +228,7 @@ describe('multiplayer server — playing a round', () => {
 
     host.send({ t: 'submit', solution })
     const matchOver = await guest.waitFor('state', (m) => m.room.phase === 'game-over')
-    expect(matchOver.room.matchWinnerId).toBe(welcomeHost.selfId)
+    expect(matchOver.room.matchWinnerIds).toEqual([welcomeHost.selfId])
     expect(matchOver.room.players.find((p) => p.id === welcomeHost.selfId)!.points).toBe(2)
     expect(matchOver.room.players.find((p) => p.id === welcomeGuest.selfId)!.points).toBe(0)
   })

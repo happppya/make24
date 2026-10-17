@@ -147,18 +147,54 @@ const roundSolutions = computed<SubmittedSolution[]>(() => {
   return localRoundSolutions.value
 })
 
-const roundWinnerId = computed<string | null>(() => {
-  if (settings.isMultiplayer) return multiplayerSession.room?.round?.winnerId ?? null
-  return localRoundWinnerId.value
+/** Everyone who took the round; two or more ids mean the best boards tied. */
+const roundWinnerIds = computed<string[]>(() => {
+  if (settings.isMultiplayer) return multiplayerSession.room?.round?.winnerIds ?? []
+  return localRoundWinnerId.value ? [localRoundWinnerId.value] : []
 })
 
-const matchWinner = computed<PlayerInfo | null>(() => {
-  if (settings.isMultiplayer) {
-    const winnerId = multiplayerSession.room?.matchWinnerId
-    return winnerId ? (players.value.find((p) => p.id === winnerId) ?? null) : null
+const roundWinners = computed(() =>
+  players.value.filter((player) => roundWinnerIds.value.includes(player.id))
+)
+
+const roundWinnerNames = computed(() =>
+  roundWinners.value.map((player) => player.name).join(' + ')
+)
+
+/**
+ * The board each winner is credited with: their cheapest submission. Solutions
+ * arrive sorted by score, so the first one per player is the one that won.
+ */
+const winningSolutionIds = computed(() => {
+  const ids = new Set<string>()
+  const credited = new Set<string>()
+  for (const solution of sortedRoundSolutions.value) {
+    if (!roundWinnerIds.value.includes(solution.playerId) || credited.has(solution.playerId)) {
+      continue
+    }
+    credited.add(solution.playerId)
+    ids.add(solution.id)
   }
-  return localMatchWinner.value
+  return ids
 })
+
+const matchWinnerIds = computed<string[]>(() => {
+  if (settings.isMultiplayer) return multiplayerSession.room?.matchWinnerIds ?? []
+  return localMatchWinner.value ? [localMatchWinner.value.id] : []
+})
+
+const matchWinners = computed(() =>
+  players.value.filter((player) => matchWinnerIds.value.includes(player.id))
+)
+
+/** The single series winner, or null when the match was drawn or never won. */
+const matchWinner = computed<PlayerInfo | null>(() =>
+  matchWinners.value.length === 1 ? matchWinners.value[0]! : null
+)
+
+const matchWinnerNames = computed(() =>
+  matchWinners.value.map((player) => player.name).join(' + ')
+)
 
 const currentTarget = ref(24)
 const currentHand = ref<Card[]>([])
@@ -1208,8 +1244,8 @@ onBeforeUnmount(() => {
           >
             <span class="mode-btn__sigil" aria-hidden="true">♠</span>
             <span class="mode-btn__body">
-              <span class="mode-btn__title">SOLO RUN</span>
-              <span class="mode-btn__copy">Five workspaces, no clock. Finish when you like.</span>
+              <span class="mode-btn__title">SOLO</span>
+              <span class="mode-btn__copy">No clock. Finish when you like.</span>
             </span>
             <span class="mode-btn__arrow" aria-hidden="true">▸</span>
           </button>
@@ -1222,8 +1258,8 @@ onBeforeUnmount(() => {
           >
             <span class="mode-btn__sigil" aria-hidden="true">♥</span>
             <span class="mode-btn__body">
-              <span class="mode-btn__title">HEAD TO HEAD</span>
-              <span class="mode-btn__copy">Same hand, one table. First clean solve takes it.</span>
+              <span class="mode-btn__title">MULTIPLAYER</span>
+              <span class="mode-btn__copy">Play competitive against friends.</span>
             </span>
             <span class="mode-btn__arrow" aria-hidden="true">▸</span>
           </button>
@@ -1866,7 +1902,10 @@ onBeforeUnmount(() => {
 
     <!-- ======================== ROUND END SCREEN ======================== -->
     <main v-else-if="phase === 'round-end'" class="screen-round-end" :inert="menuOpen || tutorialOpen">
-      <div class="results-cabinet" :class="roundWinnerId ? 'results-cabinet--win' : 'results-cabinet--bust'">
+      <div
+        class="results-cabinet"
+        :class="roundWinnerIds.length ? 'results-cabinet--win' : 'results-cabinet--bust'"
+      >
         <div class="results-marquee">
           <span class="results-marquee__round">ROUND {{ roundNumber }}</span>
           <span class="results-marquee__target">
@@ -1876,17 +1915,30 @@ onBeforeUnmount(() => {
 
         <div
           class="results-stamp"
-          :class="roundWinnerId ? 'results-stamp--win' : 'results-stamp--bust'"
+          :class="roundWinnerIds.length ? 'results-stamp--win' : 'results-stamp--bust'"
         >
-          {{ roundWinnerId ? 'ROUND CLEAR' : 'NO POINT' }}
+          {{
+            roundWinnerIds.length > 1
+              ? 'POINT SPLIT'
+              : roundWinnerIds.length
+                ? 'ROUND CLEAR'
+                : 'NO POINT'
+          }}
         </div>
+
+        <p v-if="roundWinnerIds.length > 1" class="split-note" data-testid="round-tie-note">
+          Equal best boards, so <strong>{{ roundWinnerNames }}</strong> each take a point.
+        </p>
 
         <h2 class="results-title">
           <template v-if="settings.isMultiplayer && settings.mode === 'first-to-solve'">
             Winning solution
           </template>
+          <template v-else-if="roundWinnerIds.length > 1">
+            Best expression, shared
+          </template>
           <template v-else>
-            {{ roundWinnerId ? 'Best expression this round' : 'Nobody closed the round' }}
+            {{ roundWinnerIds.length ? 'Best expression this round' : 'Nobody closed the round' }}
           </template>
         </h2>
 
@@ -1897,10 +1949,10 @@ onBeforeUnmount(() => {
               : sortedRoundSolutions"
             :key="sol.id"
             class="solution-row"
-            :class="{ 'solution-row--winner': idx === 0 }"
+            :class="{ 'solution-row--winner': winningSolutionIds.has(sol.id) }"
           >
             <div class="sol-rank">
-              {{ idx === 0 ? '★ WINNER' : `#${idx + 1}` }}
+              {{ winningSolutionIds.has(sol.id) ? '★ WINNER' : `#${idx + 1}` }}
             </div>
             <div class="sol-player">
               <strong>{{ sol.playerName }}</strong>
@@ -1942,7 +1994,7 @@ onBeforeUnmount(() => {
             :disabled="settings.isMultiplayer && !multiplayerHost"
             @click="advanceAfterRoundEnd"
           >
-            {{ matchWinner ? 'View Match Winner' : 'Deal Next Round' }}
+            {{ matchWinnerIds.length ? 'View Match Winner' : 'Deal Next Round' }}
           </button>
           <button type="button" class="btn-arcade" @click="goToLobby">
             Back to Lobby
@@ -1973,7 +2025,11 @@ onBeforeUnmount(() => {
           class="pixel-sprite gameover-joker"
         />
         <h2 class="gameover-title">MATCH COMPLETE</h2>
-        <p v-if="matchWinner" class="winner-callout">
+        <p v-if="matchWinners.length > 1" class="winner-callout" data-testid="match-draw-callout">
+          Series shared: <strong>{{ matchWinnerNames }}</strong> ·
+          <strong>{{ pointsLabel(matchWinners[0]?.points ?? 0) }} each</strong>
+        </p>
+        <p v-else-if="matchWinner" class="winner-callout">
           Series winner: <strong>{{ matchWinner.name }}</strong> ·
           <strong>{{ pointsLabel(matchWinner.points) }}</strong>
         </p>
@@ -1984,7 +2040,7 @@ onBeforeUnmount(() => {
             v-for="p in players"
             :key="p.id"
             class="standing-card"
-            :class="{ 'standing-card--top': matchWinner && p.id === matchWinner.id }"
+            :class="{ 'standing-card--top': matchWinnerIds.includes(p.id) }"
           >
             <span class="standing-name">{{ p.name }}</span>
             <span class="standing-pts">{{ pointsLabel(p.points) }}</span>
@@ -3544,6 +3600,20 @@ fieldset.settings-form:disabled {
   font-family: var(--font-pixel);
   font-size: 1rem;
   font-weight: 700;
+  color: var(--ink-cream);
+}
+
+/* Shown when several boards tie for best and share the round */
+.split-note {
+  margin: 6px 0 0;
+  max-width: 46ch;
+  font-family: var(--font-mono);
+  font-size: 1.1rem;
+  line-height: 1.3;
+  color: var(--gold-bright);
+}
+
+.split-note strong {
   color: var(--ink-cream);
 }
 

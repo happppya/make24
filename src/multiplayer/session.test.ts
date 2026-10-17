@@ -48,7 +48,7 @@ describe('multiplayer session — swappable transport', () => {
     })
     await waitUntil(() => multiplayer.room?.phase === 'round-end')
 
-    expect(multiplayer.room?.round?.winnerId).toBe(multiplayer.selfId)
+    expect(multiplayer.room?.round?.winnerIds).toEqual([multiplayer.selfId])
     expect(multiplayer.room?.players[0]?.points).toBe(1)
   })
 

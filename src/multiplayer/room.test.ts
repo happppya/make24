@@ -145,7 +145,7 @@ describe('multiplayer room — rounds', () => {
     expect(tickRoom(room, 1_000 + 60_000)).toBe(true)
     expect(room.phase).toBe('round-end')
     expect(room.round!.endedReason).toBe('timer')
-    expect(room.round!.winnerId).toBeNull()
+    expect(room.round!.winnerIds).toEqual([])
     expect(room.players[0]!.points).toBe(0)
   })
 
@@ -157,7 +157,7 @@ describe('multiplayer room — rounds', () => {
 
     expect(submit(room, 'p2', 40).error).toBeUndefined()
     expect(room.phase).toBe('round-end')
-    expect(room.round!.winnerId).toBe('p2')
+    expect(room.round!.winnerIds).toEqual(['p2'])
     expect(room.round!.endedReason).toBe('first-to-solve')
     expect(room.players.find((p) => p.id === 'p2')!.points).toBe(1)
 
@@ -179,9 +179,58 @@ describe('multiplayer room — rounds', () => {
 
     tickRoom(room, room.round!.deadline!)
     expect(room.phase).toBe('round-end')
-    expect(room.round!.winnerId).toBe('p2')
+    expect(room.round!.winnerIds).toEqual(['p2'])
     expect(room.players.find((p) => p.id === 'p2')!.points).toBe(1)
     expect(room.players.find((p) => p.id === 'p2')!.bestRoundScore).toBe(20)
+  })
+
+  it('pays every player whose best board ties for cheapest', () => {
+    const room = createRoomState('test')
+    seat(room, 'p1', 'Host')
+    seat(room, 'p2', 'Guest')
+    room.settings.mode = 'best-30s'
+    startMatch(room)
+
+    submit(room, 'p1', 30, 'a')
+    submit(room, 'p2', 30, 'b')
+    tickRoom(room, room.round!.deadline!)
+
+    expect(room.phase).toBe('round-end')
+    expect(room.round!.winnerIds).toEqual(['p1', 'p2'])
+    expect(room.players.map((p) => p.points)).toEqual([1, 1])
+  })
+
+  it('declares a drawn series when tied players reach first-to-x together', () => {
+    const room = createRoomState('test')
+    seat(room, 'p1', 'Host')
+    seat(room, 'p2', 'Guest')
+    room.settings.mode = 'best-30s'
+    room.settings.firstToPoints = 1
+    startMatch(room)
+
+    submit(room, 'p1', 25, 'a')
+    submit(room, 'p2', 25, 'b')
+    tickRoom(room, room.round!.deadline!)
+
+    expect(room.phase).toBe('game-over')
+    expect(room.matchWinnerIds).toEqual(['p1', 'p2'])
+  })
+
+  it('shares an early-ended series between players level at the top', () => {
+    const room = createRoomState('test')
+    seat(room, 'p1', 'Host')
+    seat(room, 'p2', 'Guest')
+    room.settings.mode = 'best-30s'
+    startMatch(room)
+
+    submit(room, 'p1', 20, 'a')
+    submit(room, 'p2', 20, 'b')
+    tickRoom(room, room.round!.deadline!)
+    expect(handleClientMessage(room, 'p1', { t: 'next-round' }).error).toBeUndefined()
+
+    expect(handleClientMessage(room, 'p1', { t: 'end-match' }).error).toBeUndefined()
+    expect(room.phase).toBe('game-over')
+    expect(room.matchWinnerIds).toEqual(['p1', 'p2'])
   })
 
   it('replaces a repeated board instead of stacking duplicates', () => {
@@ -208,7 +257,7 @@ describe('multiplayer room — rounds', () => {
     expect(handleClientMessage(room, 'p1', { t: 'skip-round' }).error).toBeUndefined()
     expect(room.phase).toBe('round-end')
     expect(room.round!.endedReason).toBe('skip')
-    expect(room.round!.winnerId).toBeNull()
+    expect(room.round!.winnerIds).toEqual([])
     expect(room.players.every((p) => p.points === 0)).toBe(true)
 
     expect(handleClientMessage(room, 'p2', { t: 'next-round' }).error?.code).toBe('not-host')
@@ -231,7 +280,7 @@ describe('multiplayer room — rounds', () => {
     expect(handleClientMessage(room, 'p1', { t: 'skip-round' }).error).toBeUndefined()
     expect(room.phase).toBe('round-end')
     expect(room.round!.endedReason).toBe('host-end')
-    expect(room.round!.winnerId).toBe('p2')
+    expect(room.round!.winnerIds).toEqual(['p2'])
     expect(room.players.find((p) => p.id === 'p2')!.points).toBe(1)
   })
 
@@ -244,7 +293,7 @@ describe('multiplayer room — rounds', () => {
 
     submit(room, 'p1', 25)
     expect(room.phase).toBe('game-over')
-    expect(room.matchWinnerId).toBe('p1')
+    expect(room.matchWinnerIds).toEqual(['p1'])
   })
 
   it('refuses a board that misses the target, however cheap it claims to be', () => {
