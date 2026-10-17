@@ -25,24 +25,6 @@ function onUngroupClick(event: MouseEvent): void {
   emit('ungroup', props.node.id)
 }
 
-function suitSymbol(suit: string): string {
-  switch (suit) {
-    case 'spades':
-      return '♠'
-    case 'hearts':
-      return '♥'
-    case 'diamonds':
-      return '♦'
-    case 'clubs':
-      return '♣'
-    default:
-      return ''
-  }
-}
-
-function isRedSuit(suit: string): boolean {
-  return suit === 'hearts' || suit === 'diamonds'
-}
 </script>
 
 <template>
@@ -106,19 +88,12 @@ function isRedSuit(suit: string): boolean {
       </div>
     </template>
 
-    <!-- Leaf card: crisp 3x integer pixel scale (96x141) with top-left value corner -->
+    <!-- Leaf card: crisp 3x integer pixel scale (96x141); the sprite already shows rank & value -->
     <template v-else>
       <div
         class="playing-card"
         :title="`${node.card.label} of ${node.card.suit} (Value: ${node.card.value})`"
       >
-        <div
-          class="playing-card-corner"
-          :class="{ 'playing-card-corner--red': isRedSuit(node.card.suit) }"
-        >
-          <span class="corner-rank">{{ node.card.label }}{{ suitSymbol(node.card.suit) }}</span>
-          <span class="corner-val">{{ node.card.value }}</span>
-        </div>
         <img
           :src="node.card.spritePath"
           :alt="`${node.card.label} of ${node.card.suit}`"
@@ -267,9 +242,9 @@ function isRedSuit(suit: string): boolean {
 }
 
 /*
- * Tight vertical stacking:
- * The second card/group is tucked closely under the first so only ~30px of the
- * top card (where the top-left rank/value corner lives) remains exposed!
+ * Tight vertical stacking: the second card/group is tucked closely under the first
+ * so only a thin slice of the upper item peeks out, keeping tall nested stacks
+ * inside the felt viewport.
  */
 .group-body--stack {
   display: flex;
@@ -289,75 +264,36 @@ function isRedSuit(suit: string): boolean {
 }
 
 .stack-item--bottom {
-  margin-top: -114px;
+  margin-top: -117px;
   position: relative;
   z-index: 2;
   filter: drop-shadow(0 -3px 0 rgba(9, 8, 15, 0.92));
 }
 
-/* If the top item in a binary stack is itself a group with a header, leave slightly more room so its header + top card corner show */
+/* If the top item in a binary stack is itself a group with a header, leave slightly more room so its header stays legible */
 .stack-item--top:has(.group-rect) + .stack-item--bottom {
-  margin-top: -110px;
+  margin-top: -106px;
 }
 
-/* Leaf playing card: crisp 3x integer scale of 32x47 sprite (96x141) */
+/* Leaf playing card: the 32x47 sprite at 3x (96x141) is the whole card —
+   no background plate, frame or inset shadow layered behind the art. */
 .playing-card {
   position: relative;
-  width: 102px;
-  height: 147px;
-  background: #f8f2e0;
-  border: 3px solid #120e1a;
-  box-shadow:
-    inset 0 1px 0 #fff,
-    0 5px 0 #09080f;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
+  width: 96px;
+  height: 141px;
+  line-height: 0;
+  filter: drop-shadow(0 4px 0 rgba(9, 8, 15, 0.8));
 }
 
 .expr-node--selected > .playing-card {
-  border-color: var(--gold);
-  box-shadow:
-    0 0 0 3px var(--crimson),
-    0 8px 0 #09080f;
-}
-
-/* Compact top-left corner strip showing rank + numeric value even when tightly stacked */
-.playing-card-corner {
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  z-index: 3;
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  background: rgba(248, 242, 224, 0.94);
-  border: 1px solid #120e1a;
-  padding: 1px 4px;
-  font-family: var(--font-pixel);
-  font-size: 0.62rem;
-  font-weight: 700;
-  line-height: 1.1;
-  color: #120e1a;
-  box-shadow: 1px 1px 0 rgba(0, 0, 0, 0.25);
-}
-
-.playing-card-corner--red {
-  color: #d62828;
-}
-
-.corner-val {
-  background: #1a1826;
-  color: var(--gold-bright);
-  padding: 0 3px;
-  font-family: var(--font-mono);
-  font-size: 0.78rem;
+  filter:
+    drop-shadow(0 0 5px var(--gold)) drop-shadow(0 0 10px rgba(254, 74, 73, 0.8))
+    drop-shadow(0 4px 0 rgba(9, 8, 15, 0.8));
 }
 
 .playing-card-sprite {
-  width: 96px;
-  height: 141px;
+  width: 100%;
+  height: 100%;
   object-fit: contain;
   image-rendering: pixelated;
   image-rendering: crisp-edges;

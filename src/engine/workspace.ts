@@ -24,6 +24,49 @@ export const DEFAULT_CARD_SPACING_X = 148
 export const DEFAULT_CANVAS_CENTER_X = 480
 export const DEFAULT_CANVAS_CENTER_Y = 130
 
+/** Vertical stagger applied to the right-hand piece when a group is split apart. */
+export const UNGROUP_STAGGER_Y = 34
+
+/**
+ * Small random nudge for split-apart pieces.
+ *
+ * Ungrouping used to drop both halves on the same coordinates, so a split could
+ * look like cards had vanished underneath each other. A little scatter keeps the
+ * new cards visibly distinct without letting them fly across the felt.
+ */
+function ungroupScatter(): GroupPosition {
+  const randomBetween = (min: number, max: number): number =>
+    Math.round(min + Math.random() * (max - min))
+  return {
+    x: randomBetween(-14, 14),
+    y: randomBetween(-16, 8),
+  }
+}
+
+/** Roughly how close two groups can sit before they visually cover each other. */
+const UNGROUP_MIN_GAP_X = 110
+const UNGROUP_MIN_GAP_Y = 150
+
+/**
+ * Slides a split piece sideways until it no longer covers an existing group.
+ * Without this, a freshly separated card can land right on top of a neighbour
+ * that was already resting at the default slot, which reads as a lost card.
+ * Horizontal hops are preferred because the felt is much wider than it is tall.
+ */
+function findFreeSpot(base: GroupPosition, occupied: GroupPosition[]): GroupPosition {
+  let candidate = base
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const overlaps = occupied.some(
+      (spot) =>
+        Math.abs(spot.x - candidate.x) < UNGROUP_MIN_GAP_X &&
+        Math.abs(spot.y - candidate.y) < UNGROUP_MIN_GAP_Y
+    )
+    if (!overlaps) return candidate
+    candidate = { x: candidate.x + 132, y: candidate.y + 12 }
+  }
+  return candidate
+}
+
 let nextGroupIdCounter = 1
 
 export function resetGroupIdCounter(): void {
@@ -375,15 +418,30 @@ export function ungroupInWorkspace(
   const leftNode = cloneExprNode(node.left)
   const rightNode = cloneExprNode(node.right)
 
-  // Place left at the group's position (or slightly left) and right next to it
-  ws.positions[leftNode.id] = {
-    x: parentPos.x,
-    y: parentPos.y,
-  }
-  ws.positions[rightNode.id] = {
-    x: parentPos.x + DEFAULT_CARD_SPACING_X,
-    y: parentPos.y,
-  }
+  // Fan the halves apart: left near the group's old spot, right offset down-right,
+  // each with a small random nudge so repeated splits never stack exactly.
+  const occupied = ws.groups
+    .filter((_, groupIdx) => groupIdx !== idx)
+    .map((group, groupIdx) => getGroupPosition(ws, group.id, groupIdx))
+
+  const leftScatter = ungroupScatter()
+  const leftSpot = findFreeSpot(
+    { x: parentPos.x + leftScatter.x, y: parentPos.y + leftScatter.y },
+    occupied
+  )
+  occupied.push(leftSpot)
+
+  const rightScatter = ungroupScatter()
+  const rightSpot = findFreeSpot(
+    {
+      x: parentPos.x + DEFAULT_CARD_SPACING_X + rightScatter.x,
+      y: parentPos.y + UNGROUP_STAGGER_Y + rightScatter.y,
+    },
+    occupied
+  )
+
+  ws.positions[leftNode.id] = leftSpot
+  ws.positions[rightNode.id] = rightSpot
 
   const nextGroups: ExprNode[] = []
   for (let i = 0; i < ws.groups.length; i++) {

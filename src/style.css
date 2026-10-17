@@ -44,22 +44,14 @@ body {
   -webkit-font-smoothing: none;
 }
 
-/* Subtle Balatro CRT scanline & vignette overlay */
+/* Soft vignette only — no CRT scanline overlay so card art stays clean */
 body::after {
   content: '';
   position: fixed;
   inset: 0;
   pointer-events: none;
   z-index: 9999;
-  background:
-    repeating-linear-gradient(
-      0deg,
-      rgba(0, 0, 0, 0.16) 0px,
-      rgba(0, 0, 0, 0.16) 1px,
-      transparent 1px,
-      transparent 3px
-    ),
-    radial-gradient(circle at 50% 50%, transparent 62%, rgba(4, 6, 10, 0.58) 100%);
+  background: radial-gradient(circle at 50% 50%, transparent 62%, rgba(4, 6, 10, 0.5) 100%);
 }
 
 button,

@@ -1,13 +1,10 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import CardGroupNode from './components/CardGroupNode.vue'
+import ScorePanel from './components/ScorePanel.vue'
+import { isSfxEnabled, playSfx, toggleSfx } from './audio/sfx'
 import { dealHand, generateTargetNumber } from './engine/deck'
-import {
-  OPERATOR_CATALOG,
-  checkTargetAcceptance,
-  formatNumber,
-  getEnabledOperators,
-} from './engine/math'
+import { OPERATOR_CATALOG, formatNumber, getEnabledOperators } from './engine/math'
 import { findSampleSolutions } from './engine/solver'
 import type {
   BinaryOperator,
@@ -79,6 +76,211 @@ const actionError = ref<string | null>(null)
 const roundSolutions = ref<SubmittedSolution[]>([])
 const roundWinnerId = ref<string | null>(null)
 const matchWinner = ref<PlayerInfo | null>(null)
+
+/* ------------------------- juice: SFX, impact, cues ------------------------- */
+
+const sfxOn = ref(isSfxEnabled())
+const impactKind = ref<'op' | 'split' | 'error' | 'hit' | null>(null)
+const hitSignal = ref(0)
+const shellRef = ref<HTMLElement | null>(null)
+const feltRef = ref<HTMLElement | null>(null)
+const sidebarRef = ref<HTMLElement | null>(null)
+const viewportRef = ref<HTMLElement | null>(null)
+const panGlide = ref(false)
+
+/**
+ * Ease the felt so a freshly merged group (which can be a tall nested stack)
+ * stays inside the workspace viewport instead of sliding off the bottom edge.
+ */
+async function glideToGroups(groupIds: string[]): Promise<void> {
+  if (groupIds.length === 0) return
+  await nextTick()
+  // Let the pop-in animation finish so the measured box is the settled layout box.
+  await new Promise((resolve) => setTimeout(resolve, 200))
+  const viewport = viewportRef.value
+  const ws = activeWorkspace.value
+  if (!viewport || !ws) return
+
+  const slots = groupIds
+    .map((id) => viewport.querySelector<HTMLElement>(`[data-testid="group-slot-${id}"]`))
+    .filter((slot): slot is HTMLElement => slot !== null)
+  if (slots.length === 0) return
+
+  // Union of every slot's layout box (ignores selected/pop transforms).
+  let minX = Infinity
+  let minY = Infinity
+  let maxX = -Infinity
+  let maxY = -Infinity
+  for (const slot of slots) {
+    minX = Math.min(minX, slot.offsetLeft)
+    minY = Math.min(minY, slot.offsetTop)
+    maxX = Math.max(maxX, slot.offsetLeft + slot.offsetWidth)
+    maxY = Math.max(maxY, slot.offsetTop + slot.offsetHeight)
+  }
+
+  const boxW = maxX - minX
+  const boxH = maxY - minY
+  const desiredPanX = Math.round((viewport.clientWidth - boxW) / 2 - minX)
+  const desiredPanY = Math.round((viewport.clientHeight - boxH) / 2 - minY)
+  if (Math.abs(desiredPanX - ws.panX) < 2 && Math.abs(desiredPanY - ws.panY) < 2) return
+
+  panGlide.value = true
+  setWorkspacePan(ws, desiredPanX, desiredPanY)
+  const timer = setTimeout(() => {
+    panGlide.value = false
+    cueTimers.delete(timer)
+  }, 300)
+  cueTimers.add(timer)
+}
+
+const floatingCues = ref<{ id: number; text: string; tone: 'good' | 'bad' | 'neutral' }[]>([])
+let cueSeed = 0
+let impactTimer: ReturnType<typeof setTimeout> | null = null
+let sawAcceptable = false
+const cueTimers = new Set<ReturnType<typeof setTimeout>>()
+
+/** Physical feedback: Web Animations API so every repeat replays cleanly. */
+function triggerImpact(kind: 'op' | 'split' | 'error' | 'hit'): void {
+  impactKind.value = kind
+  if (impactTimer) clearTimeout(impactTimer)
+  impactTimer = setTimeout(
+    () => {
+      impactKind.value = null
+    },
+    kind === 'hit' ? 900 : 380
+  )
+
+  const canAnimate =
+    typeof Element !== 'undefined' && typeof Element.prototype.animate === 'function'
+  if (!canAnimate) return
+
+  const feel = feltRef.value
+  const side = sidebarRef.value
+  const shell = shellRef.value
+
+  if (kind === 'hit') {
+    shell?.animate(
+      [
+        { transform: 'translate(0, 0) rotate(0deg)' },
+        { transform: 'translate(-8px, 4px) rotate(-0.5deg)' },
+        { transform: 'translate(7px, -3px) rotate(0.5deg)' },
+        { transform: 'translate(-4px, 2px) rotate(-0.2deg)' },
+        { transform: 'translate(0, 0) rotate(0deg)' },
+      ],
+      { duration: 460, easing: 'steps(5, end)' }
+    )
+    side?.animate(
+      [
+        { transform: 'scale(1)' },
+        { transform: 'scale(1.05) rotate(-1deg)' },
+        { transform: 'scale(1)' },
+      ],
+      { duration: 420, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' }
+    )
+    feel?.animate(
+      [
+        { filter: 'brightness(1)' },
+        { filter: 'brightness(1.45) saturate(1.2)' },
+        { filter: 'brightness(1)' },
+      ],
+      { duration: 520, easing: 'ease-out' }
+    )
+    return
+  }
+
+  if (kind === 'error') {
+    shell?.animate(
+      [
+        { transform: 'translateX(0)' },
+        { transform: 'translateX(-9px)' },
+        { transform: 'translateX(7px)' },
+        { transform: 'translateX(-5px)' },
+        { transform: 'translateX(0)' },
+      ],
+      { duration: 260, easing: 'steps(4, end)' }
+    )
+    return
+  }
+
+  feel?.animate(
+    kind === 'op'
+      ? [
+          { transform: 'translateY(0) scale(1)' },
+          { transform: 'translateY(-5px) scale(1.008)' },
+          { transform: 'translateY(0) scale(1)' },
+        ]
+      : [
+          { transform: 'translateY(0) scale(1)' },
+          { transform: 'translateY(3px) scale(0.995)' },
+          { transform: 'translateY(0) scale(1)' },
+        ],
+    { duration: 200, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' }
+  )
+}
+
+function pushCue(text: string, tone: 'good' | 'bad' | 'neutral' = 'neutral'): void {
+  const id = ++cueSeed
+  floatingCues.value = [...floatingCues.value.slice(-3), { id, text, tone }]
+  const timer = setTimeout(() => {
+    floatingCues.value = floatingCues.value.filter((cue) => cue.id !== id)
+    cueTimers.delete(timer)
+  }, 1000)
+  cueTimers.add(timer)
+}
+
+function onToggleSfx(): void {
+  sfxOn.value = toggleSfx()
+  if (sfxOn.value) playSfx('select')
+}
+
+function goToTitle(): void {
+  playSfx('click')
+  phase.value = 'title'
+}
+
+function goToLobby(): void {
+  playSfx('click')
+  phase.value = 'lobby'
+}
+
+/* ------------------------------- ESC menu ------------------------------- */
+
+const menuOpen = ref(false)
+
+function openMenu(): void {
+  menuOpen.value = true
+  playSfx('select')
+}
+
+function closeMenu(): void {
+  menuOpen.value = false
+  playSfx('click')
+}
+
+function menuGoToLobby(): void {
+  menuOpen.value = false
+  goToLobby()
+}
+
+function menuGoToTitle(): void {
+  menuOpen.value = false
+  goToTitle()
+}
+
+function handleEscape(): void {
+  if (menuOpen.value) {
+    closeMenu()
+    return
+  }
+  // First Esc cancels a waiting binary operator; otherwise it opens the menu.
+  const ws = activeWorkspace.value
+  if (phase.value === 'playing' && ws?.pendingOperator) {
+    ws.pendingOperator = null
+    playSfx('click')
+    return
+  }
+  openMenu()
+}
 
 // Timer for timed multiplayer modes
 const remainingSeconds = ref<number | null>(null)
@@ -201,14 +403,6 @@ function handleRecenterView(): void {
   if (!ws) return
   setWorkspacePan(ws, 0, 0)
 }
-
-const targetBandInfo = computed(() => {
-  return checkTargetAcceptance(
-    currentTarget.value,
-    currentTarget.value,
-    settings.approximationPercent
-  )
-})
 
 const currentEvaluation = computed(() => {
   const ws = activeWorkspace.value
@@ -333,6 +527,8 @@ function startNewRound(): void {
   actionError.value = null
   roundSolutions.value = []
   roundWinnerId.value = null
+  sawAcceptable = false
+  playSfx('deal')
 
   currentTarget.value = generateTargetNumber(settings)
   currentHand.value = dealHand(settings.numCards, settings.cardPool)
@@ -352,6 +548,7 @@ function startNewRound(): void {
       timerHandle = setInterval(() => {
         if (remainingSeconds.value !== null && remainingSeconds.value > 0) {
           remainingSeconds.value--
+          if (remainingSeconds.value <= 5) playSfx('tick')
           if (remainingSeconds.value <= 0) {
             finishRound('timer')
           }
@@ -406,7 +603,15 @@ watch(
   currentEvaluation,
   (evalRes) => {
     if (phase.value !== 'playing' || !evalRes) return
-    if (evalRes.isSingleGroup && evalRes.acceptable) {
+    const acceptableNow = evalRes.isSingleGroup && evalRes.acceptable
+    if (acceptableNow && !sawAcceptable) {
+      hitSignal.value += 1
+      playSfx('hit')
+      triggerImpact('hit')
+      pushCue('TARGET HIT', 'good')
+    }
+    sawAcceptable = acceptableNow
+    if (acceptableNow) {
       recordPlayerSolutionFromWorkspace()
       if (settings.isMultiplayer && settings.mode === 'first-to-solve') {
         finishRound('first-to-solve')
@@ -416,6 +621,14 @@ watch(
   { deep: true }
 )
 
+// Sound design per screen transition
+watch(phase, (next) => {
+  menuOpen.value = false
+  if (next === 'round-end' || next === 'game-over') {
+    playSfx('fanfare')
+  }
+})
+
 function handleSelectGroup(groupId: string): void {
   if (suppressNextSelectClick) {
     suppressNextSelectClick = false
@@ -424,9 +637,21 @@ function handleSelectGroup(groupId: string): void {
   const ws = activeWorkspace.value
   if (!ws) return
   actionError.value = null
+  const groupsBefore = ws.groups.length
   const res = selectGroupInWorkspace(ws, groupId)
-  if (!res.changed && res.error) {
-    actionError.value = res.error
+  if (res.changed) {
+    if (ws.groups.length < groupsBefore) {
+      // Two groups were fused: thunk, and keep the taller stack on screen.
+      playSfx('merge')
+      void glideToGroups(ws.groups.map((group) => group.id))
+    } else {
+      playSfx('select')
+    }
+  } else {
+    if (res.error) actionError.value = res.error
+    playSfx('error')
+    triggerImpact('error')
+    pushCue('NOPE', 'bad')
   }
 }
 
@@ -435,8 +660,17 @@ function handleUngroup(targetGroupId?: string): void {
   if (!ws) return
   actionError.value = null
   const res = ungroupInWorkspace(ws, targetGroupId)
-  if (!res.changed && res.error) {
-    actionError.value = res.error
+  if (res.changed) {
+    playSfx('ungroup')
+    triggerImpact('split')
+    pushCue('SPLIT', 'neutral')
+    // Reframe the felt so every fanned-out piece stays reachable.
+    void glideToGroups(ws.groups.map((group) => group.id))
+  } else {
+    if (res.error) actionError.value = res.error
+    playSfx('error')
+    triggerImpact('error')
+    pushCue('NOPE', 'bad')
   }
 }
 
@@ -445,9 +679,22 @@ function handleApplyOperator(opId: OperatorId): void {
   if (!ws) return
   actionError.value = null
   const res = applyOperatorInWorkspace(ws, opId)
-  if (!res.changed && res.error) {
-    actionError.value = res.error
+  if (res.changed) {
+    const meta = OPERATOR_CATALOG.find((op) => op.id === opId)
+    playSfx('place')
+    triggerImpact('op')
+    pushCue(`${meta?.shortSymbol ?? '?'} ${operationCueSuffix()}`, 'neutral')
+  } else {
+    if (res.error) actionError.value = res.error
+    playSfx('error')
+    triggerImpact('error')
+    pushCue('NOPE', 'bad')
   }
+}
+
+function operationCueSuffix(): string {
+  // Binary merges always cost a flat 10 pts; unary stacks ramp up.
+  return '+10'
 }
 
 function handleUndo(): void {
@@ -455,6 +702,7 @@ function handleUndo(): void {
   if (!ws) return
   actionError.value = null
   undoWorkspace(ws)
+  playSfx('click')
 }
 
 function handleRedo(): void {
@@ -462,6 +710,7 @@ function handleRedo(): void {
   if (!ws) return
   actionError.value = null
   redoWorkspace(ws)
+  playSfx('click')
 }
 
 function handleResetWorkspace(): void {
@@ -469,12 +718,16 @@ function handleResetWorkspace(): void {
   if (!ws) return
   actionError.value = null
   resetWorkspaceToHand(ws, currentHand.value)
+  playSfx('ungroup')
+  triggerImpact('split')
+  pushCue('RESET', 'neutral')
 }
 
 function switchWorkspace(index: number): void {
   if (index >= 0 && index < WORKSPACE_COUNT) {
     activeWorkspaceIdx.value = index
     actionError.value = null
+    playSfx('click')
   }
 }
 
@@ -559,6 +812,10 @@ function endEntireGameNow(): void {
   phase.value = 'game-over'
 }
 
+function pointsLabel(points: number): string {
+  return `${points} ${points === 1 ? 'pt' : 'pts'}`
+}
+
 function formatTimer(seconds: number | null): string {
   if (seconds === null) return '∞'
   const m = Math.floor(seconds / 60)
@@ -571,7 +828,15 @@ function spriteUrl(name: string): string {
 }
 
 function handleKeyDown(e: KeyboardEvent): void {
-  if (phase.value !== 'playing') return
+  const key = e.key.toLowerCase()
+
+  // Esc always works, even while typing in a settings field.
+  if (key === 'escape') {
+    e.preventDefault()
+    handleEscape()
+    return
+  }
+
   const target = e.target as HTMLElement | null
   if (
     target &&
@@ -582,7 +847,8 @@ function handleKeyDown(e: KeyboardEvent): void {
     return
   }
 
-  const key = e.key.toLowerCase()
+  if (menuOpen.value || phase.value !== 'playing') return
+
   if (key === 'z') {
     e.preventDefault()
     handleUndo()
@@ -601,14 +867,6 @@ function handleKeyDown(e: KeyboardEvent): void {
   if (key >= '1' && key <= '5' && e.altKey) {
     e.preventDefault()
     switchWorkspace(Number(key) - 1)
-    return
-  }
-  if (key === 'escape') {
-    const ws = activeWorkspace.value
-    if (ws) {
-      ws.pendingOperator = null
-      ws.selectedGroupId = null
-    }
   }
 }
 
@@ -625,122 +883,114 @@ onBeforeUnmount(() => {
   window.removeEventListener('pointerup', handleWindowPointerUp)
   window.removeEventListener('pointercancel', handleWindowPointerUp)
   clearRoundTimer()
+  if (impactTimer) clearTimeout(impactTimer)
+  cueTimers.forEach((timer) => clearTimeout(timer))
+  cueTimers.clear()
 })
 </script>
 
 <template>
-  <div class="app-shell">
-    <!-- Top Arcade Header Bar -->
-    <header class="top-bar">
-      <div class="brand-lockup" @click="phase = 'title'">
-        <img
-          :src="spriteUrl('joker-red.png')"
-          alt="Joker"
-          class="brand-joker pixel-sprite"
-        />
-        <div>
-          <div class="brand-title">MAKE 24 REMASTERED</div>
-          <div class="brand-sub">ARCADE ARITHMETIC DECKBUILDER</div>
-        </div>
-      </div>
-
-      <div v-if="phase !== 'title'" class="top-bar-actions">
-        <span class="phase-pill">
-          {{ settings.isMultiplayer ? 'MULTIPLAYER' : 'SINGLEPLAYER' }}
-        </span>
-        <button
-          v-if="phase !== 'lobby'"
-          type="button"
-          class="btn-arcade"
-          @click="phase = 'lobby'"
-        >
-          Lobby &amp; Settings
-        </button>
-      </div>
-    </header>
-
+  <div ref="shellRef" class="app-shell" :class="impactKind ? `impact--${impactKind}` : ''">
     <!-- ======================== TITLE SCREEN ======================== -->
-    <main v-if="phase === 'title'" class="screen-title">
-      <div class="hero-showcase panel-box">
-        <div class="hero-card-fan">
-          <img
-            :src="spriteUrl('ace-of-spades-large.png')"
-            alt="Ace of Spades"
-            class="fan-card fan-card--1 pixel-sprite"
-          />
-          <img
-            :src="spriteUrl('8-of-hearts.png')"
-            alt="8 of Hearts"
-            class="fan-card fan-card--2 pixel-sprite"
-          />
-          <img
-            :src="spriteUrl('3-of-clubs.png')"
-            alt="3 of Clubs"
-            class="fan-card fan-card--3 pixel-sprite"
-          />
-          <img
-            :src="spriteUrl('queen-of-diamonds.png')"
-            alt="Queen of Diamonds"
-            class="fan-card fan-card--4 pixel-sprite"
-          />
+    <main v-if="phase === 'title'" class="screen-title" :inert="menuOpen">
+      <div class="title-cabinet">
+        <!-- marquee bulbs -->
+        <div class="marquee-bulbs" aria-hidden="true">
+          <span v-for="n in 22" :key="n" :style="{ animationDelay: `${(n % 6) * 0.12}s` }"></span>
         </div>
 
-        <h1 class="hero-heading">MAKE 24 REMASTERED</h1>
-        <p class="hero-lead">
-          Stack dealt cards with binary &amp; unary operators to hit the target number.
-          Every card must be used. Lower operator score wins.
-        </p>
+        <div class="title-cabinet__inner">
+          <div class="hero-card-fan" aria-hidden="true">
+            <img
+              :src="spriteUrl('ace-of-spades-large.png')"
+              alt="Ace of Spades"
+              class="fan-card fan-card--1 pixel-sprite"
+            />
+            <img
+              :src="spriteUrl('8-of-hearts.png')"
+              alt="8 of Hearts"
+              class="fan-card fan-card--2 pixel-sprite"
+            />
+            <img
+              :src="spriteUrl('3-of-clubs.png')"
+              alt="3 of Clubs"
+              class="fan-card fan-card--3 pixel-sprite"
+            />
+            <img
+              :src="spriteUrl('queen-of-diamonds.png')"
+              alt="Queen of Diamonds"
+              class="fan-card fan-card--4 pixel-sprite"
+            />
+          </div>
 
-        <div class="mode-cards">
-          <div class="mode-card">
-            <h2>Singleplayer</h2>
-            <p>
-              Explore 5 parallel workspaces, refine your lowest-score equation at your own
-              pace, and end each round whenever you’re satisfied.
-            </p>
+          <h1 class="hero-heading">
+            <span class="hero-heading__make">MAKE</span>
+            <span class="hero-heading__num">24</span>
+          </h1>
+          <div class="mode-cards">
             <button
               type="button"
-              class="btn-arcade btn-arcade--gold"
+              class="mode-card mode-card--solo"
               data-testid="enter-singleplayer"
               @click="enterLobby(false)"
             >
-              Enter Singleplayer Lobby
+              <span class="mode-card__icon" aria-hidden="true">♠</span>
+              <span class="mode-card__title">SOLO RUN</span>
+              <span class="mode-card__copy">
+                5 auto-saved workspaces. Tinker, refine, submit whenever you like.
+              </span>
+              <span class="mode-card__cta">Enter singleplayer ▸</span>
             </button>
-          </div>
 
-          <div class="mode-card">
-            <h2>Multiplayer</h2>
-            <p>
-              Race to the first valid solution or compete for the lowest operator score
-              under a round timer. First player to the target points wins the match.
-            </p>
             <button
               type="button"
-              class="btn-arcade btn-arcade--crimson"
+              class="mode-card mode-card--versus"
               data-testid="enter-multiplayer"
               @click="enterLobby(true)"
             >
-              Enter Multiplayer Lobby
+              <span class="mode-card__icon" aria-hidden="true">♥</span>
+              <span class="mode-card__title">HEAD TO HEAD</span>
+              <span class="mode-card__copy">
+                Race to the first valid solution, or post the cheapest one before the clock
+                dies.
+              </span>
+              <span class="mode-card__cta">Enter multiplayer ▸</span>
             </button>
+          </div>
+
+          <div class="title-foot">
+            <span class="title-foot__blink">▮</span> INSERT A LITTLE ARITHMETIC
+            <span class="title-foot__sep">·</span>
+            <span class="title-foot__key">ESC</span> MENU
           </div>
         </div>
       </div>
     </main>
 
     <!-- ======================== LOBBY & SETTINGS SCREEN ======================== -->
-    <main v-else-if="phase === 'lobby'" class="screen-lobby">
+    <main v-else-if="phase === 'lobby'" class="screen-lobby" :inert="menuOpen">
+      <div class="lobby-marquee">
+        <div class="lobby-marquee__left">
+          <span class="lobby-marquee__badge">
+            {{ settings.isMultiplayer ? 'MULTIPLAYER' : 'SINGLEPLAYER' }}
+          </span>
+          <span class="lobby-marquee__name">Table Setup</span>
+        </div>
+        <span class="lobby-marquee__hint">Pick your table rules, then deal the cards</span>
+        <button
+          type="button"
+          class="btn-arcade btn-arcade--tiny lobby-marquee__back"
+          @click="goToTitle"
+        >
+          ◂ Main Menu
+        </button>
+      </div>
+
       <div class="lobby-grid">
         <!-- Left column: Players & Match Controls -->
         <section class="panel-box lobby-players">
           <div class="section-header">
             <h2>{{ settings.isMultiplayer ? 'Multiplayer Lobby' : 'Singleplayer Setup' }}</h2>
-            <button
-              type="button"
-              class="btn-arcade"
-              @click="enterLobby(!settings.isMultiplayer)"
-            >
-              Switch to {{ settings.isMultiplayer ? 'Singleplayer' : 'Multiplayer' }}
-            </button>
           </div>
 
           <div class="player-list">
@@ -974,87 +1224,56 @@ onBeforeUnmount(() => {
     </main>
 
     <!-- ======================== LIVE GAMEPLAY SCREEN ======================== -->
-    <main v-else-if="phase === 'playing'" class="screen-playing">
-      <!-- Top HUD Strip -->
-      <section class="hud-strip panel-box">
-        <div class="hud-block hud-target">
-          <div class="hud-label">ROUND {{ roundNumber }} TARGET</div>
-          <div class="hud-target-number" data-testid="target-display">
-            {{ formatNumber(currentTarget) }}
-          </div>
-          <div class="hud-approx-note">
-            <template v-if="settings.approximationPercent > 0 && currentTarget !== 0">
-              Accepts ±{{ settings.approximationPercent }}%:
-              <strong>
-                [{{ formatNumber(targetBandInfo.minAcceptable) }},
-                {{ formatNumber(targetBandInfo.maxAcceptable) }}]
-              </strong>
-            </template>
-            <template v-else>Exact match required (0% error)</template>
-          </div>
-        </div>
+    <main v-else-if="phase === 'playing'" class="screen-playing" :inert="menuOpen">
+      <div class="table-layout">
+        <!-- ============ Left blind / score sidebar (Balatro HUD) ============ -->
+        <aside ref="sidebarRef" class="table-sidebar">
+          <ScorePanel
+            :round-number="roundNumber"
+            :target="currentTarget"
+            :approximation-percent="settings.approximationPercent"
+            :value="currentEvaluation?.finalValue ?? null"
+            :error-percent="currentEvaluation?.errorPercent ?? null"
+            :score="currentEvaluation?.score ?? null"
+            :acceptable="!!(currentEvaluation?.isSingleGroup && currentEvaluation.acceptable)"
+            :groups-left="activeWorkspace?.groups.length ?? currentHand.length"
+            :groups-total="currentHand.length"
+            :hit-signal="hitSignal"
+          />
 
-        <!-- Workspace Switcher (5 independent auto-saved workspaces) -->
-        <div class="hud-block hud-workspaces">
-          <div class="hud-label">WORKSPACES (AUTO-SAVED PER ROUND)</div>
-          <div class="workspace-tabs">
-            <button
-              v-for="ws in workspaces"
-              :key="ws.index"
-              type="button"
-              class="ws-tab"
-              :class="{ 'ws-tab--active': ws.index === activeWorkspaceIdx }"
-              :data-testid="`workspace-tab-${ws.index + 1}`"
-              @click="switchWorkspace(ws.index)"
-            >
-              <span class="ws-tab-num">W{{ ws.index + 1 }}</span>
-              <span class="ws-tab-meta">{{ ws.groups.length }} grp</span>
-            </button>
-          </div>
-        </div>
-
-        <!-- Live Status / Solution Banner -->
-        <div class="hud-block hud-status">
-          <div class="hud-label">FINAL SOLUTION STATUS</div>
-          <template v-if="currentEvaluation && currentEvaluation.isSingleGroup">
-            <div
-              class="solution-badge"
-              :class="
-                currentEvaluation.acceptable
-                  ? 'solution-badge--valid'
-                  : 'solution-badge--invalid'
-              "
-              data-testid="solution-status-badge"
-            >
-              <span>
-                {{ currentEvaluation.acceptable ? 'ACCEPTABLE' : 'NOT ACCEPTABLE' }}
-              </span>
-              <span>Value: {{ formatNumber(currentEvaluation.finalValue!) }}</span>
-              <span>Score: {{ currentEvaluation.score }} pts</span>
+          <div class="sidebar-panel">
+            <div class="sidebar-panel__title">Workspaces</div>
+            <div class="workspace-stack">
+              <button
+                v-for="ws in workspaces"
+                :key="ws.index"
+                type="button"
+                class="ws-tab"
+                :class="{ 'ws-tab--active': ws.index === activeWorkspaceIdx }"
+                :data-testid="`workspace-tab-${ws.index + 1}`"
+                @click="switchWorkspace(ws.index)"
+              >
+                <span class="ws-tab-num">W{{ ws.index + 1 }}</span>
+                <span class="ws-tab-meta">{{ ws.groups.length }} grp</span>
+                <span class="ws-tab-key">⌥{{ ws.index + 1 }}</span>
+              </button>
             </div>
-            <div class="solution-eq-preview">{{ currentEvaluation.equation }}</div>
-          </template>
-          <template v-else>
-            <div class="solution-incomplete" data-testid="solution-status-incomplete">
-              Combine all {{ currentHand.length }} cards into 1 group ({{
-                activeWorkspace?.groups.length ?? 0
-              }}
-              remaining)
-            </div>
-          </template>
-        </div>
-
-        <!-- Timer & Round / Match Host Controls -->
-        <div class="hud-block hud-controls">
-          <div v-if="settings.isMultiplayer && remainingSeconds !== null" class="timer-box">
-            <span class="hud-label">TIME LEFT</span>
-            <span class="timer-digits">{{ formatTimer(remainingSeconds) }}</span>
           </div>
-          <div class="host-buttons">
+
+          <div
+            v-if="settings.isMultiplayer && remainingSeconds !== null"
+            class="sidebar-timer"
+            :class="{ 'sidebar-timer--urgent': remainingSeconds <= 10 }"
+          >
+            <span class="sidebar-timer__label">TIME LEFT</span>
+            <span class="sidebar-timer__digits">{{ formatTimer(remainingSeconds) }}</span>
+          </div>
+
+          <div class="sidebar-actions">
             <button
               v-if="!settings.isMultiplayer || settings.mode !== 'first-to-solve'"
               type="button"
-              class="btn-arcade btn-arcade--gold"
+              class="btn-arcade btn-arcade--gold btn-arcade--block"
               data-testid="finish-round-btn"
               @click="finishRound('player-end')"
             >
@@ -1062,7 +1281,7 @@ onBeforeUnmount(() => {
             </button>
             <button
               type="button"
-              class="btn-arcade"
+              class="btn-arcade btn-arcade--block"
               data-testid="skip-round-btn"
               @click="finishRound('skip')"
             >
@@ -1070,17 +1289,38 @@ onBeforeUnmount(() => {
             </button>
             <button
               type="button"
-              class="btn-arcade btn-arcade--crimson"
+              class="btn-arcade btn-arcade--crimson btn-arcade--block"
               @click="endEntireGameNow"
             >
               End Match
             </button>
           </div>
-        </div>
-      </section>
+        </aside>
+
+        <!-- ============ Table ============ -->
+        <div class="table-main">
+          <div
+            v-if="currentEvaluation && currentEvaluation.isSingleGroup"
+            class="equation-ribbon"
+            :class="currentEvaluation.acceptable ? 'equation-ribbon--good' : 'equation-ribbon--bad'"
+            data-testid="solution-status-badge"
+          >
+            <span class="equation-ribbon__tag">
+              {{ currentEvaluation.acceptable ? 'ACCEPTABLE' : 'NOT ACCEPTABLE' }}
+            </span>
+            <span class="equation-ribbon__eq">{{ currentEvaluation.equation }}</span>
+            <span class="equation-ribbon__score">{{ currentEvaluation.score }} pts</span>
+          </div>
+          <div v-else class="equation-ribbon equation-ribbon--idle" data-testid="solution-status-incomplete">
+            <span class="equation-ribbon__tag">MERGING</span>
+            <span class="equation-ribbon__eq">
+              {{ activeWorkspace?.groups.length ?? 0 }} group(s) left · combine all
+              {{ currentHand.length }} cards into one
+            </span>
+          </div>
 
       <!-- Interactive Felt Board for Active Workspace -->
-      <section class="felt-table">
+      <section ref="feltRef" class="felt-table">
         <div class="board-instructions">
           <div class="instruction-text">
             <template v-if="!activeWorkspace?.selectedGroupId">
@@ -1132,6 +1372,7 @@ onBeforeUnmount(() => {
         <!-- Fixed-Size Panner Viewport & Draggable Card Groups -->
         <div
           v-if="activeWorkspace"
+          ref="viewportRef"
           class="workspace-viewport"
           :class="{ 'workspace-viewport--panning': activeDrag?.kind === 'pan' && activeDrag.moved }"
           data-testid="workspace-canvas"
@@ -1143,6 +1384,9 @@ onBeforeUnmount(() => {
             data-testid="workspace-plane"
             :style="{
               transform: `translate3d(${activeWorkspace.panX}px, ${activeWorkspace.panY}px, 0)`,
+              transition: panGlide
+                ? 'transform 0.28s cubic-bezier(0.22, 1, 0.36, 1)'
+                : 'none',
             }"
           >
             <div
@@ -1177,6 +1421,16 @@ onBeforeUnmount(() => {
               />
             </div>
           </div>
+        </div>
+        <div class="cue-layer" aria-hidden="true">
+          <span
+            v-for="cue in floatingCues"
+            :key="cue.id"
+            class="float-cue"
+            :class="`float-cue--${cue.tone}`"
+          >
+            {{ cue.text }}
+          </span>
         </div>
       </section>
 
@@ -1269,27 +1523,35 @@ onBeforeUnmount(() => {
           </div>
         </div>
       </section>
+        </div>
+      </div>
     </main>
 
     <!-- ======================== ROUND END SCREEN ======================== -->
-    <main v-else-if="phase === 'round-end'" class="screen-round-end">
-      <div class="panel-box round-end-box">
-        <div class="round-end-header">
-          <div>
-            <div class="hud-label">ROUND {{ roundNumber }} COMPLETE</div>
-            <h2>
-              <template v-if="settings.isMultiplayer && settings.mode === 'first-to-solve'">
-                Winning Solution (First to Solve)
-              </template>
-              <template v-else>
-                Round {{ roundNumber }} Acceptable Solutions
-              </template>
-            </h2>
-          </div>
-          <div class="round-target-pill">
-            Target: <strong>{{ formatNumber(currentTarget) }}</strong>
-          </div>
+    <main v-else-if="phase === 'round-end'" class="screen-round-end" :inert="menuOpen">
+      <div class="results-cabinet" :class="roundWinnerId ? 'results-cabinet--win' : 'results-cabinet--bust'">
+        <div class="results-marquee">
+          <span class="results-marquee__round">ROUND {{ roundNumber }}</span>
+          <span class="results-marquee__target">
+            TARGET <strong>{{ formatNumber(currentTarget) }}</strong>
+          </span>
         </div>
+
+        <div
+          class="results-stamp"
+          :class="roundWinnerId ? 'results-stamp--win' : 'results-stamp--bust'"
+        >
+          {{ roundWinnerId ? 'ROUND CLEAR' : 'NO POINT' }}
+        </div>
+
+        <h2 class="results-title">
+          <template v-if="settings.isMultiplayer && settings.mode === 'first-to-solve'">
+            Winning solution
+          </template>
+          <template v-else>
+            {{ roundWinnerId ? 'Best expression this round' : 'Nobody closed the round' }}
+          </template>
+        </h2>
 
         <div v-if="sortedRoundSolutions.length > 0" class="solutions-table">
           <div
@@ -1320,12 +1582,13 @@ onBeforeUnmount(() => {
         </div>
 
         <div v-else class="no-solutions-banner">
-          No acceptable solutions were completed this round. Nobody receives a point.
+          No acceptable expressions were submitted. Nobody takes the point — deal again and try a
+          cheaper route.
         </div>
 
         <!-- Standings -->
         <div class="standings-strip">
-          <h3>Match Standings (First to {{ settings.firstToPoints }} pts)</h3>
+          <h3>Match standings · first to {{ settings.firstToPoints }} pts</h3>
           <div class="standings-row">
             <div v-for="p in players" :key="p.id" class="standing-card">
               <span class="standing-name">{{ p.name }}</span>
@@ -1343,7 +1606,7 @@ onBeforeUnmount(() => {
           >
             {{ matchWinner ? 'View Match Winner' : 'Deal Next Round' }}
           </button>
-          <button type="button" class="btn-arcade" @click="phase = 'lobby'">
+          <button type="button" class="btn-arcade" @click="goToLobby">
             Back to Lobby
           </button>
           <button
@@ -1358,28 +1621,38 @@ onBeforeUnmount(() => {
     </main>
 
     <!-- ======================== GAME OVER SCREEN ======================== -->
-    <main v-else-if="phase === 'game-over'" class="screen-game-over">
-      <div class="panel-box game-over-box">
+    <main v-else-if="phase === 'game-over'" class="screen-game-over" :inert="menuOpen">
+      <div class="results-cabinet results-cabinet--final">
+        <div class="results-marquee">
+          <span class="results-marquee__round">FINAL BELL</span>
+          <span class="results-marquee__target">SERIES OVER</span>
+        </div>
+
         <img
           :src="spriteUrl('joker-black.png')"
           alt="Joker"
           class="pixel-sprite gameover-joker"
         />
-        <h2>MATCH COMPLETE</h2>
+        <h2 class="gameover-title">MATCH COMPLETE</h2>
         <p v-if="matchWinner" class="winner-callout">
-          <strong>{{ matchWinner.name }}</strong> wins the match with
-          <strong>{{ matchWinner.points }}</strong> points!
+          Series winner: <strong>{{ matchWinner.name }}</strong> ·
+          <strong>{{ pointsLabel(matchWinner.points) }}</strong>
         </p>
-        <p v-else class="winner-callout">Match ended by host.</p>
+        <p v-else class="winner-callout">Match ended early — no winner on the board.</p>
 
-        <div class="standings-row">
-          <div v-for="p in players" :key="p.id" class="standing-card">
+        <div class="standings-row standings-row--centered">
+          <div
+            v-for="p in players"
+            :key="p.id"
+            class="standing-card"
+            :class="{ 'standing-card--top': matchWinner && p.id === matchWinner.id }"
+          >
             <span class="standing-name">{{ p.name }}</span>
-            <span class="standing-pts">{{ p.points }} pts</span>
+            <span class="standing-pts">{{ pointsLabel(p.points) }}</span>
           </div>
         </div>
 
-        <div class="round-end-actions">
+        <div class="round-end-actions round-end-actions--centered">
           <button
             type="button"
             class="btn-arcade btn-arcade--gold"
@@ -1387,12 +1660,78 @@ onBeforeUnmount(() => {
           >
             Play Again
           </button>
-          <button type="button" class="btn-arcade" @click="phase = 'lobby'">
+          <button type="button" class="btn-arcade" @click="goToLobby">
             Return to Lobby
           </button>
         </div>
       </div>
     </main>
+
+    <!-- ======================== ESC MENU ======================== -->
+    <div
+      v-if="menuOpen"
+      class="pause-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Menu"
+      data-testid="pause-menu"
+      @click.self="closeMenu"
+    >
+      <div class="pause-card">
+        <div class="pause-card__marquee">
+          <span class="pause-card__badge">
+            {{
+              phase === 'title'
+                ? 'START SCREEN'
+                : settings.isMultiplayer
+                  ? 'MULTIPLAYER'
+                  : 'SINGLEPLAYER'
+            }}
+          </span>
+          <span class="pause-card__title">MENU</span>
+        </div>
+
+        <div class="pause-card__body">
+          <button
+            type="button"
+            class="btn-arcade btn-arcade--gold btn-arcade--block"
+            data-testid="menu-resume"
+            @click="closeMenu"
+          >
+            Resume
+          </button>
+          <button
+            type="button"
+            class="btn-arcade btn-arcade--block"
+            data-testid="menu-lobby"
+            :disabled="phase === 'lobby'"
+            @click="menuGoToLobby"
+          >
+            Lobby &amp; Settings
+          </button>
+          <button
+            type="button"
+            class="btn-arcade btn-arcade--block"
+            data-testid="menu-title"
+            @click="menuGoToTitle"
+          >
+            Main Menu
+          </button>
+          <button
+            type="button"
+            class="btn-arcade btn-arcade--block"
+            :class="sfxOn ? 'btn-arcade--emerald' : ''"
+            data-testid="menu-sfx"
+            :aria-pressed="sfxOn"
+            @click="onToggleSfx"
+          >
+            {{ sfxOn ? '♪ Sound On' : '♪ Sound Off' }}
+          </button>
+        </div>
+
+        <div class="pause-card__hint">Esc to resume</div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -1403,156 +1742,412 @@ onBeforeUnmount(() => {
   flex-direction: column;
 }
 
-.top-bar {
+/* Esc menu overlay */
+.pause-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9500;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: radial-gradient(
+    circle at 50% 40%,
+    rgba(20, 16, 32, 0.74) 0%,
+    rgba(6, 5, 10, 0.92) 100%
+  );
+  backdrop-filter: blur(2px);
+}
+
+.pause-card {
+  width: min(340px, 100%);
+  background: linear-gradient(180deg, #241a34 0%, #130f1e 100%);
+  border: 4px solid var(--gold);
+  outline: 4px solid #09080f;
+  box-shadow:
+    inset 0 0 40px rgba(255, 190, 11, 0.08),
+    0 12px 0 #09080f;
+  padding: 14px 16px 16px;
+  animation: balatro-pop 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.pause-card__marquee {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 24px;
-  background: #14111b;
-  border-bottom: 3px solid var(--gold);
-  box-shadow: 0 4px 0 rgba(0, 0, 0, 0.5);
+  gap: 10px;
+  background: #0b0912;
+  border: 2px solid rgba(255, 190, 11, 0.45);
+  padding: 6px 9px;
+  margin-bottom: 14px;
 }
 
-.brand-lockup {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  cursor: pointer;
-}
-
-.brand-joker {
-  width: 36px;
-  height: 48px;
-}
-
-.brand-title {
-  font-family: var(--font-display);
-  font-size: 1.25rem;
-  font-weight: 900;
+.pause-card__badge {
+  font-family: var(--font-pixel);
+  font-size: 0.54rem;
+  letter-spacing: 0.18em;
   color: var(--gold);
-  letter-spacing: 0.06em;
 }
 
-.brand-sub {
-  font-size: 0.72rem;
-  color: var(--ink-muted);
+.pause-card__title {
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+  color: var(--gold-bright);
   letter-spacing: 0.08em;
 }
 
-.top-bar-actions {
+.pause-card__body {
   display: flex;
-  align-items: center;
-  gap: 12px;
+  flex-direction: column;
+  gap: 9px;
 }
 
-.phase-pill {
-  background: #2b2338;
-  border: 1px solid var(--gold);
-  color: var(--gold);
-  padding: 5px 10px;
-  font-size: 0.75rem;
-  font-weight: 800;
-  letter-spacing: 0.06em;
+.pause-card__hint {
+  margin-top: 12px;
+  text-align: center;
+  font-family: var(--font-pixel);
+  font-size: 0.56rem;
+  letter-spacing: 0.18em;
+  color: var(--ink-muted);
 }
 
-/* Title screen */
+@keyframes menu-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.pause-overlay {
+  animation: menu-fade 0.14s ease-out;
+}
+
+/* Title screen: an arcade cabinet marquee */
 .screen-title {
   flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 32px 20px;
+  display: grid;
+  place-items: center;
+  padding: 28px 20px 42px;
 }
 
-.hero-showcase {
-  max-width: 860px;
-  width: 100%;
+.title-cabinet {
+  position: relative;
+  width: min(900px, 100%);
+  background:
+    radial-gradient(circle at 50% 0%, rgba(254, 74, 73, 0.16) 0%, transparent 55%),
+    linear-gradient(180deg, #241a34 0%, #130f1e 58%, #0b0912 100%);
+  border: 5px solid var(--gold);
+  outline: 4px solid #09080f;
+  box-shadow:
+    inset 0 0 70px rgba(255, 190, 11, 0.1),
+    0 14px 0 #09080f,
+    0 0 0 9px rgba(254, 74, 73, 0.32);
+  padding: 18px 22px 22px;
+}
+
+.marquee-bulbs {
+  display: flex;
+  justify-content: space-between;
+  padding: 0 4px 12px;
+}
+
+.marquee-bulbs span {
+  width: 9px;
+  height: 9px;
+  background: var(--gold);
+  border: 2px solid #09080f;
+  box-shadow: 0 0 9px var(--gold);
+  animation: bulb-flash 1.5s steps(2, end) infinite;
+}
+
+.title-cabinet__inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   text-align: center;
-  padding: 32px 28px;
 }
 
 .hero-card-fan {
   display: flex;
   justify-content: center;
   align-items: center;
-  margin-bottom: 18px;
+  margin: 6px 0 16px;
 }
 
 .fan-card {
-  width: 84px;
-  height: 112px;
-  background: #f6eedc;
-  border: 3px solid #191521;
-  padding: 3px;
-  box-shadow: 0 6px 0 #0c0910;
-  margin: 0 -10px;
+  display: block;
+  width: auto;
+  height: 118px;
+  margin: 0 -9px;
+  filter: drop-shadow(0 5px 0 rgba(12, 9, 16, 0.85));
+  animation: fan-bob 3.4s ease-in-out infinite;
 }
 
 .fan-card--1 {
-  transform: rotate(-10deg) translateY(6px);
+  transform: rotate(-11deg) translateY(7px);
+  animation-delay: 0s;
 }
 .fan-card--2 {
-  transform: rotate(-3deg);
+  transform: rotate(-4deg);
+  animation-delay: 0.25s;
 }
 .fan-card--3 {
   transform: rotate(4deg);
+  animation-delay: 0.5s;
 }
 .fan-card--4 {
-  transform: rotate(11deg) translateY(6px);
+  transform: rotate(11deg) translateY(7px);
+  animation-delay: 0.75s;
 }
 
 .hero-heading {
-  font-family: var(--font-display);
-  font-size: 2.3rem;
-  color: var(--gold);
-  margin: 8px 0;
-  text-shadow: 0 3px 0 #0b0910;
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 16px;
+  margin: 0 0 22px;
+  line-height: 0.9;
 }
 
-.hero-lead {
-  max-width: 58ch;
-  margin: 0 auto 28px;
+.hero-heading__make {
+  font-family: var(--font-display);
+  font-size: 2.2rem;
   color: var(--ink-cream);
-  line-height: 1.5;
+  letter-spacing: 0.04em;
+  text-shadow:
+    0 4px 0 var(--crimson-dark),
+    0 8px 0 #09080f;
+}
+
+.hero-heading__num {
+  font-family: var(--font-display);
+  font-size: 4.6rem;
+  color: var(--gold-bright);
+  text-shadow:
+    0 4px 0 #b06b00,
+    0 9px 0 #09080f,
+    0 0 30px rgba(255, 190, 11, 0.45);
+  animation: title-pulse 2.6s ease-in-out infinite;
 }
 
 .mode-cards {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 20px;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+  width: 100%;
+  margin-top: 0;
   text-align: left;
 }
 
 .mode-card {
-  background: #221d2d;
-  border: 2px solid rgba(242, 201, 76, 0.55);
-  padding: 20px;
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
-  gap: 14px;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 16px 16px 14px;
+  background: linear-gradient(180deg, #251e37 0%, #171226 100%);
+  border: 3px solid #4a4166;
+  outline: 3px solid #09080f;
+  box-shadow: 0 7px 0 #09080f;
+  font-family: inherit;
+  color: inherit;
+  cursor: pointer;
+  transition: transform 0.12s cubic-bezier(0.22, 1, 0.36, 1), border-color 0.14s ease,
+    box-shadow 0.12s ease;
 }
 
-.mode-card h2 {
-  margin: 0;
+.mode-card:hover,
+.mode-card:focus-visible {
+  transform: translateY(-5px) rotate(-0.4deg);
+  box-shadow: 0 12px 0 #09080f;
+}
+
+.mode-card:active {
+  transform: translateY(3px);
+  box-shadow: 0 3px 0 #09080f;
+}
+
+.mode-card--solo:hover,
+.mode-card--solo:focus-visible {
+  border-color: var(--emerald);
+}
+
+.mode-card--versus:hover,
+.mode-card--versus:focus-visible {
+  border-color: var(--crimson);
+}
+
+.mode-card__icon {
+  font-size: 1.9rem;
+  line-height: 1;
   color: var(--gold);
-  font-family: var(--font-display);
+  text-shadow: 0 3px 0 #09080f;
 }
 
-.mode-card p {
-  margin: 0;
-  color: var(--ink-muted);
-  font-size: 0.92rem;
+.mode-card--solo .mode-card__icon {
+  color: #72efdd;
+}
+
+.mode-card--versus .mode-card__icon {
+  color: #ff8fa3;
+}
+
+.mode-card__title {
+  font-family: var(--font-display);
+  font-size: 0.95rem;
+  color: var(--gold);
+  letter-spacing: 0.06em;
+}
+
+.mode-card__copy {
+  font-size: 0.84rem;
   line-height: 1.45;
+  color: var(--ink-muted);
+}
+
+.mode-card__cta {
+  margin-top: 6px;
+  font-family: var(--font-pixel);
+  font-size: 0.66rem;
+  letter-spacing: 0.1em;
+  padding: 5px 9px;
+  background: var(--gold);
+  color: #15111e;
+  border: 2px solid #fff9db;
+}
+
+.mode-card--versus .mode-card__cta {
+  background: var(--crimson);
+  color: #fff;
+  border-color: #fff3e6;
+}
+
+.title-foot {
+  margin-top: 20px;
+  font-family: var(--font-pixel);
+  font-size: 0.58rem;
+  letter-spacing: 0.22em;
+  color: var(--ink-muted);
+}
+
+.title-foot__blink {
+  color: var(--emerald);
+  animation: cursor-blink 1s steps(2, end) infinite;
+}
+
+.title-foot__sep {
+  opacity: 0.45;
+  margin: 0 8px;
+}
+
+.title-foot__key {
+  border: 1px solid currentColor;
+  color: var(--ink-cream);
+  padding: 0 4px;
+  margin-right: 4px;
+}
+
+@keyframes bulb-flash {
+  50% {
+    background: var(--crimson);
+    box-shadow: 0 0 11px var(--crimson);
+  }
+}
+
+@keyframes fan-bob {
+  0%,
+  100% {
+    translate: 0 0;
+  }
+  50% {
+    translate: 0 -6px;
+  }
+}
+
+@keyframes title-pulse {
+  0%,
+  100% {
+    filter: drop-shadow(0 0 10px rgba(255, 190, 11, 0.35));
+  }
+  50% {
+    filter: drop-shadow(0 0 22px rgba(255, 190, 11, 0.75));
+  }
+}
+
+@keyframes cursor-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+@media (max-width: 760px) {
+  .mode-cards {
+    grid-template-columns: 1fr;
+  }
+  .hero-heading {
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+  }
+  .hero-heading__num {
+    font-size: 3.6rem;
+    margin-top: 8px;
+  }
 }
 
 /* Lobby Screen */
 .screen-lobby {
   flex: 1;
-  padding: 24px;
+  padding: 18px 20px 30px;
   max-width: 1240px;
   width: 100%;
   margin: 0 auto;
+}
+
+.lobby-marquee {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+  background: linear-gradient(180deg, #241a34, #171226);
+  border: 4px solid var(--gold);
+  outline: 4px solid #09080f;
+  box-shadow:
+    inset 0 2px 0 rgba(255, 255, 255, 0.14),
+    0 8px 0 #09080f;
+  padding: 10px 14px;
+  margin-bottom: 18px;
+}
+
+.lobby-marquee__left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.lobby-marquee__badge {
+  font-family: var(--font-pixel);
+  font-size: 0.58rem;
+  letter-spacing: 0.18em;
+  background: #0b0912;
+  color: var(--gold);
+  border: 2px solid rgba(255, 190, 11, 0.55);
+  padding: 4px 8px;
+}
+
+.lobby-marquee__name {
+  font-family: var(--font-display);
+  font-size: 1.15rem;
+  color: var(--gold-bright);
+  text-shadow: 0 3px 0 #09080f;
+}
+
+.lobby-marquee__hint {
+  font-family: var(--font-pixel);
+  font-size: 0.66rem;
+  color: var(--ink-muted);
 }
 
 .lobby-grid {
@@ -1579,7 +2174,14 @@ onBeforeUnmount(() => {
 .lobby-settings h2 {
   margin: 0 0 14px;
   font-family: var(--font-display);
+  font-size: 1.05rem;
   color: var(--gold);
+  text-shadow: 0 3px 0 #09080f;
+}
+
+.lobby-players,
+.lobby-settings {
+  background: linear-gradient(180deg, #201a2e 0%, #15111f 100%);
 }
 
 .player-list {
@@ -1739,161 +2341,334 @@ onBeforeUnmount(() => {
   cursor: pointer;
 }
 
-/* Playing Screen */
+/* Playing Screen: Balatro-ish table with left HUD rail */
 .screen-playing {
   flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  padding: 16px 24px 24px;
-  max-width: 1380px;
+  padding: 14px 20px 26px;
+  max-width: 1460px;
   width: 100%;
   margin: 0 auto;
 }
 
-.hud-strip {
+.table-layout {
   display: grid;
-  grid-template-columns: 1.1fr 1.3fr 1.5fr auto;
-  gap: 18px;
-  align-items: center;
+  grid-template-columns: 262px minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
 }
 
-@media (max-width: 1080px) {
-  .hud-strip {
+.table-sidebar {
+  position: sticky;
+  top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.table-main {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+@media (max-width: 1000px) {
+  .table-layout {
+    grid-template-columns: 1fr;
+  }
+  .table-sidebar {
+    position: static;
+    display: grid;
     grid-template-columns: 1fr 1fr;
+    align-items: start;
+  }
+  .sidebar-actions {
+    grid-column: 1 / -1;
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+  .sidebar-actions .btn-arcade {
+    flex: 1;
   }
 }
 
-.hud-label {
-  font-size: 0.72rem;
-  font-weight: 800;
+@media (max-width: 640px) {
+  .table-sidebar {
+    grid-template-columns: 1fr;
+  }
+  .sidebar-actions {
+    grid-column: auto;
+    flex-direction: column;
+  }
+  .screen-playing {
+    padding: 10px 12px 22px;
+  }
+}
+
+.sidebar-panel {
+  background: #13111c;
+  border: 3px solid #3a3550;
+  outline: 3px solid #09080f;
+  box-shadow: 0 6px 0 #09080f;
+  padding: 8px 10px 10px;
+}
+
+.sidebar-panel__title {
+  font-family: var(--font-pixel);
+  font-size: 0.56rem;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
   color: var(--ink-muted);
-  letter-spacing: 0.08em;
-  margin-bottom: 4px;
+  margin-bottom: 6px;
 }
 
-.hud-target-number {
-  font-family: var(--font-display);
-  font-size: 2.2rem;
-  font-weight: 900;
-  color: var(--gold);
-  line-height: 1;
-}
-
-.hud-approx-note {
-  font-size: 0.78rem;
-  color: var(--ink-cream);
-  margin-top: 4px;
-}
-
-.workspace-tabs {
+.workspace-stack {
   display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
+  flex-direction: column;
+  gap: 5px;
 }
 
 .ws-tab {
-  background: #241f30;
-  color: var(--ink-cream);
-  border: 2px solid rgba(242, 201, 76, 0.45);
-  padding: 6px 10px;
-  cursor: pointer;
   display: flex;
-  flex-direction: column;
   align-items: center;
-  min-width: 56px;
+  gap: 8px;
+  background: #1d1830;
+  color: var(--ink-cream);
+  border: 2px solid #3a3550;
+  padding: 5px 8px;
+  font-family: var(--font-pixel);
+  text-align: left;
+  cursor: pointer;
+  transition: transform 0.1s steps(2), border-color 0.12s ease, background 0.12s ease;
+}
+
+.ws-tab:hover {
+  border-color: var(--gold);
+  transform: translateX(2px);
 }
 
 .ws-tab--active {
   background: var(--gold);
-  color: #191521;
-  border-color: #fff;
-  font-weight: 900;
+  border-color: #fff9db;
+  color: #15111e;
+  box-shadow: inset 0 -3px 0 rgba(0, 0, 0, 0.28);
+  transform: translateX(3px);
 }
 
 .ws-tab-num {
   font-weight: 800;
-  font-size: 0.85rem;
+  font-size: 0.82rem;
 }
 
 .ws-tab-meta {
-  font-size: 0.68rem;
-  opacity: 0.85;
+  font-size: 0.66rem;
+  opacity: 0.82;
+  margin-left: auto;
 }
 
-.solution-badge {
-  display: inline-flex;
+.ws-tab-key {
+  font-size: 0.56rem;
+  opacity: 0.55;
+  border: 1px solid currentColor;
+  padding: 0 3px;
+}
+
+.sidebar-timer {
+  display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 6px 12px;
-  font-weight: 900;
-  font-size: 0.84rem;
-  border: 2px solid;
+  justify-content: space-between;
+  gap: 8px;
+  background: #120f18;
+  border: 3px solid var(--crimson);
+  outline: 3px solid #09080f;
+  box-shadow: 0 6px 0 #09080f;
+  padding: 6px 10px;
 }
 
-.solution-badge--valid {
-  background: rgba(46, 196, 182, 0.2);
-  border-color: #2ec4b6;
-  color: #72efdd;
-}
-
-.solution-badge--invalid {
-  background: rgba(230, 57, 70, 0.22);
-  border-color: var(--crimson);
-  color: #ff8fa3;
-}
-
-.solution-eq-preview {
-  font-family: var(--font-mono);
-  font-size: 0.85rem;
-  color: var(--gold);
-  margin-top: 4px;
-}
-
-.solution-incomplete {
-  font-size: 0.88rem;
+.sidebar-timer__label {
+  font-family: var(--font-pixel);
+  font-size: 0.56rem;
+  letter-spacing: 0.2em;
   color: var(--ink-muted);
 }
 
-.hud-controls {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-}
-
-.timer-box {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  background: #120f18;
-  border: 2px solid var(--crimson);
-  padding: 6px 12px;
-}
-
-.timer-digits {
+.sidebar-timer__digits {
   font-family: var(--font-mono);
-  font-size: 1.35rem;
-  font-weight: 900;
+  font-size: 1.5rem;
+  line-height: 1;
   color: #ffccd5;
 }
 
-.host-buttons {
+.sidebar-timer--urgent {
+  animation: timer-throb 0.85s steps(2, end) infinite;
+}
+
+.sidebar-actions {
   display: flex;
+  flex-direction: column;
   gap: 8px;
-  flex-wrap: wrap;
+}
+
+.btn-arcade--block {
+  width: 100%;
+}
+
+/* Equation ribbon above the felt */
+.equation-ribbon {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 7px 12px;
+  border: 3px solid;
+  outline: 3px solid #09080f;
+  box-shadow: 0 5px 0 #09080f;
+  font-size: 0.86rem;
+  min-height: 44px;
+}
+
+.equation-ribbon--good {
+  background: rgba(46, 196, 182, 0.16);
+  border-color: var(--emerald);
+  color: #d8fffa;
+}
+
+.equation-ribbon--bad {
+  background: rgba(254, 74, 73, 0.14);
+  border-color: var(--crimson);
+  color: #ffd9d9;
+}
+
+.equation-ribbon--idle {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: #3a3550;
+  color: var(--ink-muted);
+}
+
+.equation-ribbon__tag {
+  font-family: var(--font-pixel);
+  font-size: 0.56rem;
+  letter-spacing: 0.14em;
+  padding: 3px 6px;
+  background: #09080f;
+  color: var(--gold);
+  white-space: nowrap;
+}
+
+.equation-ribbon__eq {
+  font-family: var(--font-mono);
+  font-size: 1.08rem;
+  color: #fff;
+  overflow-wrap: anywhere;
+}
+
+.equation-ribbon__score {
+  margin-left: auto;
+  font-family: var(--font-pixel);
+  font-size: 0.68rem;
+  background: var(--gold);
+  color: #15111e;
+  padding: 3px 7px;
+  white-space: nowrap;
+}
+
+.equation-ribbon--idle .equation-ribbon__tag {
+  color: #72efdd;
+}
+
+/* Floating operation cues over the felt */
+.cue-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 30;
+}
+
+.float-cue {
+  position: absolute;
+  top: 34%;
+  left: 50%;
+  font-family: var(--font-display);
+  font-size: 1.3rem;
+  color: var(--gold-bright);
+  text-shadow: 0 3px 0 #09080f, 0 0 12px rgba(255, 190, 11, 0.5);
+  white-space: nowrap;
+  animation: cue-rise 1s cubic-bezier(0.2, 1, 0.3, 1) forwards;
+}
+
+.float-cue:nth-child(even) {
+  left: 42%;
+}
+
+.float-cue:nth-child(3n) {
+  left: 58%;
+}
+
+.float-cue--bad {
+  color: var(--crimson);
+}
+
+.float-cue--good {
+  color: #72efdd;
+}
+
+/* Target-hit flash on the shell */
+.impact--hit::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9000;
+  background: radial-gradient(circle at 28% 40%, rgba(255, 190, 11, 0.3), transparent 62%);
+  animation: hit-flash 0.6s ease-out forwards;
+}
+
+@keyframes cue-rise {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, 14px) scale(0.78);
+  }
+  22% {
+    opacity: 1;
+    transform: translate(-50%, -8px) scale(1.12);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -72px) scale(1);
+  }
+}
+
+@keyframes hit-flash {
+  0% {
+    opacity: 0;
+  }
+  18% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes timer-throb {
+  50% {
+    background: #2a0f16;
+    box-shadow: 0 0 0 3px rgba(254, 74, 73, 0.45), 0 6px 0 #09080f;
+  }
 }
 
 /* Felt Board */
 .felt-table {
+  position: relative;
   background: radial-gradient(circle at 50% 50%, #1f4737 0%, #122b21 85%);
   border: 4px solid #2d5a46;
   box-shadow:
     inset 0 0 40px rgba(0, 0, 0, 0.55),
     0 8px 0 #0b0910;
-  padding: 14px 18px 18px;
+  padding: 10px 14px 12px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 9px;
 }
 
 .board-instructions {
@@ -1901,11 +2676,11 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: 8px;
   background: rgba(14, 20, 24, 0.72);
   border: 1px solid rgba(242, 201, 76, 0.4);
-  padding: 8px 14px;
-  font-size: 0.88rem;
+  padding: 6px 12px;
+  font-size: 0.84rem;
 }
 
 .board-toolbar {
@@ -1941,9 +2716,9 @@ onBeforeUnmount(() => {
 .workspace-viewport {
   position: relative;
   width: 100%;
-  height: 440px;
-  min-height: 440px;
-  max-height: 440px;
+  height: 404px;
+  min-height: 404px;
+  max-height: 404px;
   overflow: hidden;
   cursor: grab;
   touch-action: none;
@@ -1983,13 +2758,13 @@ onBeforeUnmount(() => {
 
 /* Operator Dock */
 .operator-dock {
-  padding: 14px 18px;
+  padding: 11px 14px 13px;
 }
 
 .dock-groups {
   display: flex;
   flex-wrap: wrap;
-  gap: 22px;
+  gap: 14px 20px;
   align-items: flex-start;
   justify-content: space-between;
 }
@@ -2014,10 +2789,10 @@ onBeforeUnmount(() => {
 }
 
 .btn-op {
-  min-width: 72px;
+  min-width: 68px;
   flex-direction: column;
-  gap: 2px;
-  padding: 7px 12px;
+  gap: 1px;
+  padding: 5px 10px;
 }
 
 .btn-op--active {
@@ -2053,33 +2828,135 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 24px;
+  padding: 26px 20px 40px;
 }
 
-.round-end-box,
-.game-over-box {
-  max-width: 840px;
+.results-cabinet {
+  position: relative;
+  max-width: 880px;
   width: 100%;
+  background: linear-gradient(180deg, #221a34 0%, #120f1c 70%);
+  border: 5px solid var(--gold);
+  outline: 4px solid #09080f;
+  box-shadow:
+    inset 0 0 60px rgba(255, 190, 11, 0.08),
+    0 12px 0 #09080f;
+  padding: 20px 22px 22px;
+  animation: balatro-pop 0.35s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-.round-end-header {
+.results-cabinet--bust {
+  border-color: #6b5a7a;
+}
+
+.results-cabinet--win {
+  border-color: var(--gold);
+}
+
+.results-cabinet--final {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  border-color: var(--crimson);
+}
+
+.results-marquee {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 18px;
+  gap: 12px;
+  background: #0b0912;
+  border: 2px solid rgba(255, 190, 11, 0.5);
+  padding: 6px 10px;
 }
 
-.round-end-header h2 {
-  margin: 4px 0 0;
+.results-marquee__round {
+  font-family: var(--font-pixel);
+  font-size: 0.62rem;
+  letter-spacing: 0.24em;
   color: var(--gold);
-  font-family: var(--font-display);
 }
 
-.round-target-pill {
-  background: #241f30;
-  border: 2px solid var(--gold);
-  padding: 8px 14px;
-  font-size: 1.05rem;
+.results-marquee__target {
+  font-family: var(--font-mono);
+  font-size: 1rem;
+  color: var(--ink-cream);
+}
+
+.results-marquee__target strong {
+  font-family: var(--font-display);
+  font-size: 1.1rem;
+  color: var(--gold-bright);
+  margin-left: 4px;
+}
+
+.results-stamp {
+  display: inline-block;
+  margin: 20px 0 6px;
+  padding: 10px 18px 8px;
+  font-family: var(--font-display);
+  font-size: 1.5rem;
+  line-height: 1;
+  border: 4px solid;
+  outline: 4px solid #09080f;
+  box-shadow: 0 8px 0 #09080f;
+  transform: rotate(-4deg);
+  animation: stamp-drop 0.45s cubic-bezier(0.22, 1.4, 0.36, 1);
+}
+
+.results-stamp--win {
+  background: var(--gold);
+  border-color: #fff9db;
+  color: #15111e;
+  text-shadow: 0 2px 0 rgba(255, 255, 255, 0.5);
+}
+
+.results-stamp--bust {
+  background: #2a2338;
+  border-color: var(--crimson);
+  color: #ffb3b3;
+}
+
+.results-title {
+  margin: 10px 0 16px;
+  font-family: var(--font-pixel);
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--ink-cream);
+}
+
+.gameover-title {
+  margin: 12px 0 4px;
+  font-family: var(--font-display);
+  font-size: 1.35rem;
+  color: var(--gold);
+  text-shadow: 0 4px 0 #09080f;
+}
+
+.standings-row--centered,
+.round-end-actions--centered {
+  justify-content: center;
+}
+
+.standing-card--top {
+  border-color: var(--gold);
+  background: rgba(255, 190, 11, 0.14);
+  box-shadow: 0 4px 0 #09080f;
+}
+
+@keyframes stamp-drop {
+  0% {
+    opacity: 0;
+    transform: scale(2.1) rotate(-14deg);
+  }
+  70% {
+    opacity: 1;
+    transform: scale(0.94) rotate(-3deg);
+  }
+  100% {
+    transform: scale(1) rotate(-4deg);
+  }
 }
 
 .solutions-table {
@@ -2097,6 +2974,41 @@ onBeforeUnmount(() => {
   background: #241f30;
   border: 2px solid rgba(242, 201, 76, 0.4);
   padding: 12px 14px;
+}
+
+@media (max-width: 700px) {
+  .solution-row {
+    grid-template-columns: 1fr auto;
+    grid-template-areas:
+      'rank score'
+      'player player'
+      'eq eq';
+    row-gap: 8px;
+  }
+  .sol-rank {
+    grid-area: rank;
+    white-space: nowrap;
+    font-size: 0.76rem;
+  }
+  .sol-score {
+    grid-area: score;
+    justify-self: end;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 3px;
+  }
+  .sol-player {
+    grid-area: player;
+  }
+  .sol-equation {
+    grid-area: eq;
+    font-size: 0.92rem;
+    overflow-wrap: anywhere;
+  }
+  .round-end-actions .btn-arcade {
+    flex: 1 1 140px;
+  }
 }
 
 .solution-row--winner {
@@ -2185,16 +3097,11 @@ onBeforeUnmount(() => {
   margin-top: 18px;
 }
 
-.game-over-box {
-  text-align: center;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-}
-
 .gameover-joker {
-  width: 72px;
-  height: 96px;
+  width: 84px;
+  height: 112px;
+  margin-top: 16px;
+  animation: fan-bob 3s ease-in-out infinite;
 }
 
 .winner-callout {

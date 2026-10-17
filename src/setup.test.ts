@@ -362,6 +362,14 @@ describe('Make 24 Remastered — Deck Pool, 5 Workspaces & Undo/Redo', () => {
     expect(ws.groups.length).toBe(3)
     expect(ws.groups[0]!.id).toBe(id0)
     expect(ws.groups[1]!.id).toBe(id1)
+
+    // Regression: split halves must land on visibly different spots. Identical
+    // coordinates previously made ungrouped cards look like they had vanished.
+    const leftPos = getGroupPosition(ws, id0, 0)
+    const rightPos = getGroupPosition(ws, id1, 1)
+    expect(leftPos).not.toEqual(rightPos)
+    expect(rightPos.x - leftPos.x).toBeGreaterThan(80)
+    expect(Math.abs(rightPos.y - leftPos.y)).toBeGreaterThan(0)
   })
 })
 
