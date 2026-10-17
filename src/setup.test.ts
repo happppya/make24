@@ -1,6 +1,15 @@
-import { describe, expect, it, beforeEach } from 'vitest'
+import { describe, expect, it, beforeEach, vi } from 'vitest'
 import { nextTick } from 'vue'
 import { mount } from '@vue/test-utils'
+
+// jsdom's WebSocket shim cannot carry the table server's frames (its Event class
+// clashes with undici's), so the selector tests stay offline: the browser is
+// asserted from rendered state, and the socket paths are covered by the
+// node-environment transport tests.
+vi.mock('./multiplayer/session', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./multiplayer/session')>()
+  return { ...actual, openLobbyBrowser: vi.fn(async () => {}) }
+})
 import App from './App.vue'
 import {
   applyBinaryOperator,
@@ -37,6 +46,9 @@ import {
   ungroupInWorkspace,
 } from './engine/workspace'
 import type { Card, ExprNode } from './engine/types'
+import { createDefaultSettings } from './multiplayer/room'
+import { leaveRoom, multiplayer as multiplayerSession } from './multiplayer/session'
+import type { LobbyPlayer, RoomState } from './multiplayer/protocol'
 
 describe('Make 24 Remastered — Math & Operators Engine', () => {
   it('evaluates basic binary operators and respects selection order for non-commutative ops', () => {
@@ -851,6 +863,115 @@ describe('Make 24 Remastered — Playable UI Flow (App.vue)', () => {
     expect(document.activeElement).toBe(trigger.element)
 
     wrapper.unmount()
+  })
+
+  it('takes Multiplayer to the lobby selector, not straight into a room', async () => {
+    const wrapper = mount(App)
+    await wrapper.find('[data-testid="enter-multiplayer"]').trigger('click')
+    await nextTick()
+
+    // Name, create (public/private) and code entry all live on the selector.
+    expect(wrapper.find('[data-testid="mp-name-input"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="lobby-create-btn"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="mp-room-input"]').exists()).toBe(true)
+    // No seat yet: the table setup screen and its Deal button are not on screen.
+    expect(wrapper.find('[data-testid="start-round-btn"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="lobby-code"]').exists()).toBe(false)
+
+    await wrapper.find('[data-testid="lobby-private-btn"]').trigger('click')
+    expect(wrapper.find('[data-testid="lobby-private-btn"]').attributes('aria-pressed')).toBe('true')
+    expect(wrapper.find('[data-testid="lobby-public-btn"]').attributes('aria-pressed')).toBe('false')
+
+    wrapper.unmount()
+  })
+
+  it('shows the lobby code and locks the board for a mid-round joiner', async () => {
+    const host: LobbyPlayer = {
+      id: 'p-host',
+      name: 'Host',
+      isHost: true,
+      isReady: true,
+      points: 0,
+      bestRoundScore: null,
+      connected: true,
+      isWaiting: false,
+    }
+    const latecomer: LobbyPlayer = {
+      id: 'p-late',
+      name: 'Late',
+      isHost: false,
+      isReady: false,
+      points: 0,
+      bestRoundScore: null,
+      connected: true,
+      isWaiting: true,
+    }
+    const room = (overrides: Partial<RoomState> = {}): RoomState => ({
+      code: 'ABCD',
+      isPublic: false,
+      createdAt: 1,
+      revision: 1,
+      phase: 'lobby',
+      hostId: 'p-host',
+      players: [host, latecomer],
+      settings: createDefaultSettings(),
+      round: null,
+      matchWinnerIds: [],
+      ...overrides,
+    })
+
+    const wrapper = mount(App)
+    await wrapper.find('[data-testid="enter-multiplayer"]').trigger('click')
+    await nextTick()
+
+    multiplayerSession.status = 'connected'
+    multiplayerSession.selfId = 'p-late'
+    multiplayerSession.room = room()
+    await nextTick()
+    await nextTick()
+
+    // The table screen names the code and whether the room is listed.
+    expect(wrapper.find('[data-testid="lobby-code"]').text()).toBe('ABCD')
+    expect(wrapper.find('[data-testid="lobby-identity"]').text()).toContain('PRIVATE')
+
+    multiplayerSession.room = room({
+      phase: 'playing',
+      round: {
+        number: 1,
+        target: 24,
+        hand: dealHand(4, '1-deck'),
+        startedAt: Date.now(),
+        deadline: null,
+        solutions: [],
+        winnerIds: [],
+        endedReason: null,
+      },
+    })
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="waiting-banner"]').exists()).toBe(true)
+    expect(wrapper.find('.felt-table--waiting').exists()).toBe(true)
+
+    // The hand is a spectator's view: clicking a piece does not pick it up.
+    const pieces = wrapper.findAll('.expr-node--root')
+    expect(pieces.length).toBeGreaterThan(0)
+    await pieces[0]!.trigger('click')
+    await nextTick()
+    expect(wrapper.findAll('.expr-node--selected').length).toBe(0)
+
+    // The round-end standings explain why they have no board on the books.
+    multiplayerSession.room = room({
+      phase: 'round-end',
+      round: {
+        ...multiplayerSession.room!.round!,
+        endedReason: 'timer',
+      },
+    })
+    await nextTick()
+    expect(wrapper.find('.standing-tag').text()).toBe('NEXT DEAL')
+
+    wrapper.unmount()
+    leaveRoom()
   })
 })
 

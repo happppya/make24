@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { createMultiplayerServer, type MultiplayerServer } from '../../server/server'
 import { PROTOCOL_VERSION, type ServerMessage } from './protocol'
-import { connectToRoom, leaveRoom, multiplayer } from './session'
+import { createLobby, joinLobby, leaveRoom, multiplayer, openLobbyBrowser } from './session'
 import { createWebSocketTransport } from './transport'
 
 /**
@@ -29,7 +29,7 @@ async function waitUntil(predicate: () => boolean, timeoutMs = 3000): Promise<vo
 }
 
 describe('WebSocket transport', () => {
-  it('joins a live table through the transport interface', async () => {
+  it('opens a lobby through the transport interface', async () => {
     server = await createMultiplayerServer({ port: 0, tickMs: 20 })
     const messages: ServerMessage[] = []
 
@@ -38,9 +38,9 @@ describe('WebSocket transport', () => {
       {
         onOpen: () => {
           transport?.send({
-            t: 'join',
-            room: 'WS-TEST',
+            t: 'create-room',
             name: 'Wired',
+            isPublic: true,
             protocol: PROTOCOL_VERSION,
           })
         },
@@ -53,29 +53,42 @@ describe('WebSocket transport', () => {
     await waitUntil(() => messages.some((m) => m.t === 'welcome'))
     const welcome = messages.find((m) => m.t === 'welcome')
     if (!welcome || welcome.t !== 'welcome') throw new Error('no welcome')
-    expect(welcome.room.code).toBe('WS-TEST')
+    expect(welcome.room.code).toMatch(/^[A-HJ-NP-Z2-9]{4}$/)
+    expect(welcome.room.isPublic).toBe(true)
     expect(welcome.room.players[0]!.name).toBe('Wired')
 
     transport.close()
   })
 
-  it('drives the session store against the live server', async () => {
+  it('browses, creates and joins lobbies through the session store', async () => {
     server = await createMultiplayerServer({ port: 0, tickMs: 20 })
-    await connectToRoom({
-      roomCode: 'SESSION',
-      name: 'Store Tester',
-      createTransport: (handlers) => createWebSocketTransport(handlers, server!.url),
-    })
+    const createTransport = (handlers: Parameters<typeof createWebSocketTransport>[0]) =>
+      createWebSocketTransport(handlers, server!.url)
 
+    await openLobbyBrowser({ createTransport })
     expect(multiplayer.status).toBe('connected')
-    expect(multiplayer.room?.code).toBe('SESSION')
+    expect(multiplayer.browsing).toBe(true)
+    expect(multiplayer.room).toBeNull()
+
+    await createLobby({ name: 'Store Tester', isPublic: false })
+    await waitUntil(() => multiplayer.room !== null)
+    expect(multiplayer.browsing).toBe(false)
     expect(multiplayer.room?.players[0]!.name).toBe('Store Tester')
+    expect(multiplayer.room?.isPublic).toBe(false)
+    expect(multiplayer.room?.players[0]!.isHost).toBe(true)
+
+    // Same socket, unseated: the selector stays usable and reports missing codes.
+    leaveRoom()
+    await openLobbyBrowser({ createTransport })
+    expect(multiplayer.room).toBeNull()
+    await joinLobby('ZZZZ', 'Ghost')
+    await waitUntil(() => multiplayer.error !== null)
+    expect(multiplayer.error).toMatch(/no lobby/i)
+    expect(multiplayer.room).toBeNull()
   })
 
   it('surfaces a helpful error when no server is listening', async () => {
-    await connectToRoom({
-      roomCode: 'NONE',
-      name: 'Ghost',
+    await openLobbyBrowser({
       createTransport: (handlers) => createWebSocketTransport(handlers, 'ws://127.0.0.1:1/ws'),
     })
 

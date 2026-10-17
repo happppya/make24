@@ -4,15 +4,19 @@ import { WebSocketServer, type WebSocket } from 'ws'
 import {
   addRoomPlayer,
   createRoomState,
+  generateRoomCode,
   handleClientMessage,
   removeRoomPlayer,
   roomIsEmpty,
   tickRoom,
 } from '../src/multiplayer/room'
 import {
+  MAX_ROOM_PLAYERS,
   PROTOCOL_VERSION,
   normalizeRoomCode,
+  sanitizeName,
   type ClientMessage,
+  type LobbySummary,
   type RoomState,
   type ServerMessage,
 } from '../src/multiplayer/protocol'
@@ -54,8 +58,13 @@ export interface MultiplayerServer {
 interface Session {
   playerId: string
   roomCode: string | null
+  /** Wants the public lobby list pushed on every change. */
+  isBrowsing: boolean
   isAlive: boolean
 }
+
+/** Public rooms a browser may see, newest first, capped for a readable list. */
+const MAX_LISTED_ROOMS = 50
 
 export async function createMultiplayerServer(options: ServerOptions = {}): Promise<MultiplayerServer> {
   const port = options.port ?? 8787
@@ -132,6 +141,38 @@ export async function createMultiplayerServer(options: ServerOptions = {}): Prom
         ws.send(encoded)
       }
     }
+    // Every room change can move a row in the browser (players, phase, code gone).
+    broadcastLobbies()
+  }
+
+  /** Only public rooms are listed; private ones exist solely as a code you were told. */
+  function lobbySummaries(): LobbySummary[] {
+    const summaries: LobbySummary[] = []
+    for (const room of rooms.values()) {
+      if (!room.isPublic) continue
+      summaries.push({
+        code: room.code,
+        isPublic: true,
+        hostName: room.players.find((player) => player.isHost)?.name ?? 'Open table',
+        playerCount: room.players.length,
+        maxPlayers: MAX_ROOM_PLAYERS,
+        mode: room.settings.mode,
+        phase: room.phase,
+        createdAt: room.createdAt,
+      })
+    }
+    summaries.sort((a, b) => b.createdAt - a.createdAt)
+    return summaries.slice(0, MAX_LISTED_ROOMS)
+  }
+
+  function broadcastLobbies(): void {
+    const payload: ServerMessage = { t: 'lobbies', rooms: lobbySummaries(), serverTime: Date.now() }
+    const encoded = JSON.stringify(payload)
+    for (const [ws, session] of sessions) {
+      if (session.isBrowsing && !session.roomCode && ws.readyState === ws.OPEN) {
+        ws.send(encoded)
+      }
+    }
   }
 
   function getRoom(code: string): RoomState | undefined {
@@ -148,8 +189,63 @@ export async function createMultiplayerServer(options: ServerOptions = {}): Prom
     if (roomIsEmpty(room)) {
       rooms.delete(room.code)
       log(`room ${room.code} closed (empty)`)
+      // A listed room just vanished; browsers must hear about it.
+      broadcastLobbies()
       return
     }
+    broadcast(room)
+  }
+
+  function welcome(ws: WebSocket, session: Session, room: RoomState): void {
+    send(ws, {
+      t: 'welcome',
+      selfId: session.playerId,
+      room,
+      protocol: PROTOCOL_VERSION,
+      serverTime: Date.now(),
+    })
+  }
+
+  function handleCreateRoom(
+    ws: WebSocket,
+    message: Extract<ClientMessage, { t: 'create-room' }>
+  ): void {
+    const session = sessions.get(ws)
+    if (!session) return
+    if (message.protocol !== PROTOCOL_VERSION) {
+      send(ws, {
+        t: 'error',
+        code: 'protocol-mismatch',
+        message: `This table speaks protocol v${PROTOCOL_VERSION}; the client sent v${Number(message.protocol)}.`,
+      })
+      return
+    }
+    if (rooms.size >= maxRooms) {
+      send(ws, {
+        t: 'error',
+        code: 'room-full',
+        message: 'The server is at capacity. Try again shortly.',
+      })
+      return
+    }
+
+    if (session.roomCode) leaveCurrentRoom(ws)
+
+    const code = generateRoomCode((candidate) => rooms.has(candidate))
+    const room = createRoomState(code, {
+      isPublic: Boolean(message.isPublic),
+      createdAt: Date.now(),
+    })
+    const seat = addRoomPlayer(room, { id: session.playerId, name: sanitizeName(message.name) })
+    if (seat.error || !seat.player) {
+      send(ws, { t: 'error', ...(seat.error ?? { code: 'bad-message', message: 'Could not create the lobby.' }) })
+      return
+    }
+    rooms.set(room.code, room)
+    session.roomCode = room.code
+    session.isBrowsing = false
+    log(`room ${room.code} created (${room.isPublic ? 'public' : 'private'})`)
+    welcome(ws, session, room)
     broadcast(room)
   }
 
@@ -166,35 +262,28 @@ export async function createMultiplayerServer(options: ServerOptions = {}): Prom
       return
     }
 
-    const code = normalizeRoomCode(String(message.room ?? '')) || 'MAIN'
-    let room = getRoom(code)
+    const code = normalizeRoomCode(String(message.room ?? ''))
+    if (!code) {
+      send(ws, { t: 'error', code: 'bad-message', message: 'Enter a lobby code to join.' })
+      return
+    }
+    const room = getRoom(code)
 
     // Re-sending join while already seated (e.g. clicking "Rejoin") must not
     // duplicate the seat: just refresh the client's snapshot.
     const alreadySeated = room?.players.find((p) => p.id === session.playerId)
     if (room && alreadySeated && session.roomCode === code) {
-      send(ws, {
-        t: 'welcome',
-        selfId: session.playerId,
-        room,
-        protocol: PROTOCOL_VERSION,
-        serverTime: Date.now(),
-      })
+      welcome(ws, session, room)
       return
     }
 
     if (!room) {
-      if (rooms.size >= maxRooms) {
-        send(ws, {
-          t: 'error',
-          code: 'room-full',
-          message: 'The server is at capacity. Try again shortly.',
-        })
-        return
-      }
-      room = createRoomState(code)
-      rooms.set(code, room)
-      log(`room ${code} created`)
+      send(ws, {
+        t: 'error',
+        code: 'not-found',
+        message: `No lobby with the code ${code}. Check the code, or create a lobby.`,
+      })
+      return
     }
 
     if (session.roomCode && session.roomCode !== code) leaveCurrentRoom(ws)
@@ -204,14 +293,9 @@ export async function createMultiplayerServer(options: ServerOptions = {}): Prom
       send(ws, { t: 'error', ...(seat.error ?? { code: 'bad-message', message: 'Could not join.' }) })
       return
     }
-    session.roomCode = code
-    send(ws, {
-      t: 'welcome',
-      selfId: session.playerId,
-      room,
-      protocol: PROTOCOL_VERSION,
-      serverTime: Date.now(),
-    })
+    session.roomCode = room.code
+    session.isBrowsing = false
+    welcome(ws, session, room)
     broadcast(room)
   }
 
@@ -230,6 +314,17 @@ export async function createMultiplayerServer(options: ServerOptions = {}): Prom
       return
     }
     const message = parsed as ClientMessage
+
+    if (message.t === 'browse') {
+      session.isBrowsing = true
+      send(ws, { t: 'lobbies', rooms: lobbySummaries(), serverTime: Date.now() })
+      return
+    }
+
+    if (message.t === 'create-room') {
+      handleCreateRoom(ws, message)
+      return
+    }
 
     if (message.t === 'join') {
       handleJoin(ws, message)
@@ -254,7 +349,12 @@ export async function createMultiplayerServer(options: ServerOptions = {}): Prom
   }
 
   wss.on('connection', (ws) => {
-    sessions.set(ws, { playerId: `p-${randomUUID().slice(0, 8)}`, roomCode: null, isAlive: true })
+    sessions.set(ws, {
+      playerId: `p-${randomUUID().slice(0, 8)}`,
+      roomCode: null,
+      isBrowsing: false,
+      isAlive: true,
+    })
 
     ws.on('pong', () => {
       const session = sessions.get(ws)

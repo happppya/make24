@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   addRoomPlayer,
   createRoomState,
+  generateRoomCode,
   handleClientMessage,
   removeRoomPlayer,
   roomIsEmpty,
@@ -115,6 +116,57 @@ describe('multiplayer room — seating and lobby', () => {
 
     expect(handleClientMessage(room, 'p1', { t: 'set-ready', ready: false }).changed).toBe(false)
     expect(room.players[0]!.isReady).toBe(true)
+  })
+})
+
+describe('multiplayer room — lobby codes and mid-round joins', () => {
+  it('generates short readable codes and never repeats one already in use', () => {
+    const taken = new Set<string>()
+    for (let i = 0; i < 25; i++) {
+      const code = generateRoomCode((candidate) => taken.has(candidate))
+      expect(code).toMatch(/^[A-HJ-NP-Z2-9]{4}$/)
+      expect(taken.has(code)).toBe(false)
+      taken.add(code)
+    }
+  })
+
+  it('marks a mid-round joiner as waiting and deals them in on the next round', () => {
+    const room = createRoomState('test')
+    seat(room, 'p1', 'Host')
+    room.settings.mode = 'best-30s'
+    startMatch(room)
+
+    seat(room, 'p2', 'Late')
+    expect(room.players[1]!.isWaiting).toBe(true)
+
+    // Watching from the sidelines: a board sent now changes nothing.
+    expect(submit(room, 'p2', 10).error?.code).toBe('waiting')
+    expect(room.round!.solutions).toHaveLength(0)
+
+    tickRoom(room, room.round!.deadline!)
+    expect(handleClientMessage(room, 'p1', { t: 'next-round' }).error).toBeUndefined()
+    expect(room.round!.number).toBe(2)
+    expect(room.players[1]!.isWaiting).toBe(false)
+    expect(submit(room, 'p2', 10).error).toBeUndefined()
+  })
+
+  it('promotes the oldest remaining player when the host leaves mid-match', () => {
+    const room = createRoomState('test')
+    seat(room, 'p1', 'Host')
+    seat(room, 'p2', 'Oldest')
+    seat(room, 'p3', 'Newest')
+    room.settings.mode = 'best-30s'
+    startMatch(room)
+
+    expect(removeRoomPlayer(room, 'p1').changed).toBe(true)
+    expect(room.hostId).toBe('p2')
+    expect(room.players.map((p) => [p.name, p.isHost])).toEqual([
+      ['Oldest', true],
+      ['Newest', false],
+    ])
+    // The new host can steer the round that is already running.
+    expect(handleClientMessage(room, 'p2', { t: 'skip-round' }).error).toBeUndefined()
+    expect(room.phase).toBe('round-end')
   })
 })
 

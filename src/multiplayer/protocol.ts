@@ -23,6 +23,11 @@ export interface LobbyPlayer {
   points: number
   bestRoundScore: number | null
   connected: boolean
+  /**
+   * Seated while a round was already running. They see the table but cannot
+   * submit until the next deal, which clears the flag.
+   */
+  isWaiting: boolean
 }
 
 export interface RoundState {
@@ -41,6 +46,10 @@ export interface RoundState {
 
 export interface RoomState {
   code: string
+  /** Public rooms show up in the lobby browser; private ones are code-only. */
+  isPublic: boolean
+  /** Epoch ms the room was created, newest first in the browser. */
+  createdAt: number
   /** Bumped on every accepted change so clients can drop stale snapshots. */
   revision: number
   phase: RoomPhase
@@ -50,6 +59,18 @@ export interface RoomState {
   round: RoundState | null
   /** Everyone who reached the points target; two or more entries mean a drawn series. */
   matchWinnerIds: string[]
+}
+
+/** The browsing view of a room: enough to pick a table without seating you. */
+export interface LobbySummary {
+  code: string
+  isPublic: boolean
+  hostName: string
+  playerCount: number
+  maxPlayers: number
+  mode: GameSettings['mode']
+  phase: RoomPhase
+  createdAt: number
 }
 
 /** What a client may claim about its own solution; identity and timing are set by the server. */
@@ -63,6 +84,9 @@ export interface SubmittedSolutionPayload {
 }
 
 export type ClientMessage =
+  /** Subscribe this socket to the public lobby list. */
+  | { t: 'browse' }
+  | { t: 'create-room'; name: string; isPublic: boolean; protocol: number }
   | { t: 'join'; room: string; name: string; protocol: number }
   | { t: 'set-name'; name: string }
   | { t: 'set-ready'; ready: boolean }
@@ -80,6 +104,10 @@ export type ServerErrorCode =
   | 'not-host'
   | 'wrong-phase'
   | 'not-in-room'
+  /** No room holds that code any more. */
+  | 'not-found'
+  /** Seated mid-round; they play from the next deal. */
+  | 'waiting'
 
 export type ServerMessage =
   | {
@@ -90,6 +118,7 @@ export type ServerMessage =
       serverTime: number
     }
   | { t: 'state'; room: RoomState; serverTime: number }
+  | { t: 'lobbies'; rooms: LobbySummary[]; serverTime: number }
   | { t: 'error'; code: ServerErrorCode; message: string }
 
 export interface ServerError {
@@ -100,6 +129,8 @@ export interface ServerError {
 export const MAX_ROOM_PLAYERS = 8
 export const MAX_NAME_LENGTH = 18
 export const MAX_ROOM_CODE_LENGTH = 12
+/** New rooms get a short code from a 32-character alphabet. */
+export const ROOM_CODE_LENGTH = 4
 
 /** Timed modes are the only ones with a round clock. */
 export function modeDurationSeconds(mode: GameSettings['mode']): number | null {

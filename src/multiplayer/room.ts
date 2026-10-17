@@ -10,6 +10,7 @@ import type {
 } from '../engine/types'
 import {
   MAX_ROOM_PLAYERS,
+  ROOM_CODE_LENGTH,
   modeDurationSeconds,
   normalizeRoomCode,
   sanitizeName,
@@ -119,9 +120,14 @@ function fail(code: ServerError['code'], message: string): HandleResult {
   return { changed: false, error: { code, message } }
 }
 
-export function createRoomState(code: string): RoomState {
+export function createRoomState(
+  code: string,
+  options: { isPublic?: boolean; createdAt?: number } = {}
+): RoomState {
   return {
     code: normalizeRoomCode(code) || 'MAIN',
+    isPublic: options.isPublic ?? true,
+    createdAt: options.createdAt ?? Date.now(),
     revision: 0,
     phase: 'lobby',
     hostId: null,
@@ -130,6 +136,28 @@ export function createRoomState(code: string): RoomState {
     round: null,
     matchWinnerIds: [],
   }
+}
+
+/** No 0/O or 1/I, so a code read aloud or off a screen cannot be mistyped. */
+const ROOM_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+
+/**
+ * A short readable code, unique against whatever the caller already holds.
+ * The alphabet still leaves room for a longer code once short ones run out.
+ */
+export function generateRoomCode(
+  isTaken: (code: string) => boolean,
+  length = ROOM_CODE_LENGTH
+): string {
+  for (let attempt = 0; attempt < 240; attempt++) {
+    const size = attempt < 200 ? length : length + 1
+    let code = ''
+    for (let i = 0; i < size; i++) {
+      code += ROOM_CODE_ALPHABET[Math.floor(Math.random() * ROOM_CODE_ALPHABET.length)]
+    }
+    if (!isTaken(code)) return code
+  }
+  return `R${Date.now().toString(36).toUpperCase().slice(-5)}`
 }
 
 function uniqueName(room: RoomState, wanted: string): string {
@@ -164,6 +192,8 @@ export function addRoomPlayer(
     points: 0,
     bestRoundScore: null,
     connected: true,
+    // Joining mid-round means spectating until the next deal.
+    isWaiting: room.phase === 'playing',
   }
   if (isHost) room.hostId = playerEntry.id
   room.players.push(playerEntry)
@@ -171,7 +201,7 @@ export function addRoomPlayer(
   return { changed: true, player: playerEntry }
 }
 
-/** Removes a player and hands the host badge to the next seated player. */
+/** Removes a player and hands the host badge to the oldest player still seated. */
 export function removeRoomPlayer(room: RoomState, playerId: string): HandleResult {
   const index = room.players.findIndex((p) => p.id === playerId)
   if (index === -1) return ok(false)
@@ -232,6 +262,8 @@ function dealRound(room: RoomState, now: number): void {
   room.matchWinnerIds = []
   for (const player of room.players) {
     player.bestRoundScore = null
+    // Anyone who was watching from the sidelines is dealt in from here.
+    player.isWaiting = false
   }
   room.revision += 1
 }
@@ -293,6 +325,7 @@ function applySubmit(
   }
   const player = findPlayer(room, playerId)
   if (!player) return fail('not-in-room', 'Join a room before submitting.')
+  if (player.isWaiting) return fail('waiting', 'You are seated; you play from the next deal.')
 
   if (
     typeof payload !== 'object' ||

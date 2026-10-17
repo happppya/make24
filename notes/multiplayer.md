@@ -11,8 +11,11 @@ npm run dev:server   # node:http + ws table server on :8787
 npm run dev          # Vite frontend
 ```
 
-Open the app in two tabs (or two browsers), choose **Head to Head**, set the same
-room code (default `MAIN`) and name, and join. The first seat becomes host.
+Open the app in two tabs (or two browsers), choose **Multiplayer**, then either
+create a lobby (public or private) or pick a public one from the list. Each lobby
+gets a short server-assigned code (four characters, no `0/O` or `1/I` so it can be
+read aloud); a private lobby is reachable only by typing that code. Whoever opens
+a lobby is its host.
 
 - `npm run server` runs the table server without file watching.
 - `GET http://localhost:8787/health` reports `{ ok, rooms, players, uptime }`.
@@ -29,18 +32,37 @@ room code (default `MAIN`) and name, and join. The first seat becomes host.
 | Entry | `server/index.ts` | Env config, logging, graceful shutdown |
 | Transport seam | `src/multiplayer/transport.ts` | `MultiplayerTransport` interface + WebSocket implementation |
 | Alt transport | `src/multiplayer/loopback.ts` | In-process table for demos and tests |
-| Client store | `src/multiplayer/session.ts` | Reactive room/self/status, connect/reconnect, clock offset |
+| Client store | `src/multiplayer/session.ts` | Reactive room/self/status, lobby list, browse/create/join, clock offset |
 
 `room.ts` imports no DOM or Node APIs, so the identical rules run under Node
 (`server/`) and in the browser (`loopback.ts`).
 
+## Lobby selection
+
+The selector is one socket in an unseated state. It sends `browse`, which
+subscribes it to the public room list; the server pushes a fresh `lobbies` frame
+whenever a room appears, fills, changes phase or disappears. Private rooms never
+appear in that list, but `join` accepts their code exactly like a public one.
+
+The table screen shows the room's code and visibility, so the host can read the
+code out to a friend. Leaving the table frees the seat and returns to the list;
+the room keeps running for everyone else.
+
+Hosting passes down the seating order: when the host disconnects, the player who
+joined earliest among those left becomes host (and can drive the round already in
+flight). Someone who joins while a round is running is seated with `isWaiting`:
+they see the hand and the clock but their submissions are refused with `waiting`, and
+the next deal clears the flag and deals them in.
+
 ## Protocol
 
-Client → server: `join`, `set-name`, `set-ready`, `update-settings`, `start-match`,
-`next-round`, `skip-round`, `end-match`, `submit`.
+Client → server: `browse`, `create-room`, `join`, `set-name`, `set-ready`,
+`update-settings`, `start-match`, `next-round`, `skip-round`, `end-match`,
+`submit`.
 
 Server → client: `welcome` (self id + room snapshot + server time), `state`
-(full snapshot with `revision`), `error` (code + message).
+(full snapshot with `revision`), `lobbies` (public room summaries), `error`
+(code + message).
 
 The server never trusts the client: names are trimmed and de-duplicated, settings
 are clamped, solutions must be finite and land inside the round's acceptance band
@@ -90,19 +112,27 @@ Nothing above `transport.ts` knows about sockets, so deployment is a transport
 npm run test
 ```
 
-- `src/multiplayer/room.test.ts` — rules: seating, host powers, clamping, deal,
-  first-to-solve, timed expiry, host-ended rounds, match end.
+- `src/multiplayer/room.test.ts` — rules: seating, readable room codes, waiting
+seats, host handover to the oldest player, clamping, deal, first-to-solve, timed
+expiry, host-ended rounds, match end.
 - `src/multiplayer/server.test.ts` — boots the real server on an ephemeral port
-  and walks two socket clients through lobby → round → match.
+  and walks socket clients through lobby list → create → join by code → round →
+  match, including private-room visibility, host handover and a mid-round joiner.
 - `src/multiplayer/transport.ws.test.ts` — the actual `WebSocketTransport` and
-  the session store against a live server, plus the unreachable-server error.
+  the session store against a live server: browse, create, a rejected code, plus
+  the unreachable-server error.
 - `src/multiplayer/session.test.ts` — the same session driving the loopback
   transport, proving the seam.
+- `src/setup.test.ts` — the rendered selector (name, public/private, code entry)
+  and the waiting banner/locked board a mid-round joiner sees.
 
 ## Known gaps
 
 - No reconnect/resume: dropping the socket frees the seat; rejoin with the same
-  room code to sit back down.
+  room code to sit back down (the code is on the table screen, so a host who drops
+  cannot recover it unless someone reads it to them).
 - No auth or rate limiting yet — add before exposing the server publicly.
-- Host leaving mid-match promotes the next player, but the round in flight keeps
-  its existing submissions.
+- A host leaving mid-match promotes the oldest remaining player, but the round in
+  flight keeps its existing submissions.
+- The public list is capped at 50 rooms and rooms are never garbage-collected
+  until their last player leaves.

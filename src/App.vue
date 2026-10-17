@@ -14,10 +14,12 @@ import {
   isUnaryOperator,
 } from './engine/math'
 import {
-  connectToRoom,
+  createLobby,
   isRoomHost,
+  joinLobby,
   leaveRoom,
   multiplayer as multiplayerSession,
+  openLobbyBrowser,
   selfPlayer,
   sendToRoom,
   serverNow,
@@ -96,7 +98,12 @@ const localMatchWinner = ref<PlayerInfo | null>(null)
 /* ------------------------------ multiplayer room ------------------------------ */
 
 const playerName = ref('Player')
-const roomCodeInput = ref('MAIN')
+/** Code typed on the lobby selector. */
+const lobbyCodeInput = ref('')
+/** Create form: public lobbies are listed for everyone, private ones are code-only. */
+const newLobbyIsPublic = ref(true)
+const creatingLobby = ref(false)
+const joiningLobby = ref(false)
 /** Name plates shown only while the matching control is hovered. */
 const hoveredOperatorLabel = ref<string | null>(null)
 const hoveredActionLabel = ref<string | null>(null)
@@ -104,7 +111,11 @@ const multiplayerHost = computed(
   () => settings.isMultiplayer && multiplayerSession.room !== null && isRoomHost.value
 )
 const multiplayerSeated = computed(
-  () => settings.isMultiplayer && multiplayerSession.status === 'connected'
+  () => settings.isMultiplayer && multiplayerSession.status === 'connected' && multiplayerSession.room !== null
+)
+/** Seated while a round was already running: dealt in on the next one. */
+const awaitingNextDeal = computed(
+  () => settings.isMultiplayer && selfPlayer.value?.isWaiting === true
 )
 const multiplayerReady = computed(() =>
   players.value.every((player) => player.isHost || player.isReady)
@@ -117,13 +128,15 @@ const connectionLine = computed(() => {
     case 'connecting':
       return `Connecting to ${multiplayerSession.transportLabel || tableServerLabel()}…`
     case 'connected':
-      return `Seated in room ${multiplayerSession.room?.code ?? roomCodeInput.value} · ${multiplayerSession.transportLabel}`
+      return multiplayerSession.room
+        ? `Room ${multiplayerSession.room.code} · ${multiplayerSession.room.isPublic ? 'public' : 'private'} · ${multiplayerSession.transportLabel}`
+        : `Browsing lobbies at ${multiplayerSession.transportLabel}`
     case 'error':
       return multiplayerSession.error ?? 'Could not reach the table server.'
     case 'disconnected':
-      return 'Connection lost — rejoin to keep playing.'
+      return 'Connection lost — return to the lobby list to reconnect.'
     default:
-      return `Start the table server with npm run dev:server, then join ${roomCodeInput.value}.`
+      return `Start the table server with npm run dev:server to play online.`
   }
 })
 
@@ -378,24 +391,96 @@ function goToLobby(): void {
   playSfx('click')
   // Leaving the table is deliberate: the room keeps running for everyone else
   // and the seat is handed back when this player rejoins.
-  if (settings.isMultiplayer) leaveRoom()
+  if (settings.isMultiplayer) {
+    leaveRoom()
+    goToTableBrowser()
+    return
+  }
   phase.value = 'lobby'
 }
 
-/* --------------------------- multiplayer table --------------------------- */
+/* ------------------------ multiplayer lobby selector ------------------------ */
 
-async function joinTable(): Promise<void> {
-  playSfx('click')
-  await connectToRoom({
-    roomCode: roomCodeInput.value.trim() || 'MAIN',
-    name: playerName.value.trim() || 'Player',
-  })
-  if (multiplayerSession.status === 'connected') playSfx('select')
+/** Title screen → lobby list. Connects without taking a seat. */
+function goToTableBrowser(): void {
+  settings.isMultiplayer = true
+  phase.value = 'lobby-select'
+  // Coming back to the list (or onto a new table) must re-apply the next deal,
+  // even if the round number matches the one left behind.
+  appliedRoundNumber = 0
+  appliedRoomCode = null
+  stopDeadlineClock()
+  void openLobbyBrowser()
 }
 
+async function createTable(): Promise<void> {
+  playSfx('click')
+  creatingLobby.value = true
+  const isPublic = newLobbyIsPublic.value
+  await createLobby({
+    name: playerName.value.trim() || 'Player',
+    isPublic,
+  })
+  creatingLobby.value = false
+  if (multiplayerSession.room) {
+    playSfx('select')
+    phase.value = 'lobby'
+  }
+}
+
+async function joinTableByCode(code = lobbyCodeInput.value): Promise<void> {
+  playSfx('click')
+  joiningLobby.value = true
+  await joinLobby(code, playerName.value.trim() || 'Player')
+  joiningLobby.value = false
+  const joined = multiplayerSession.room
+  if (joined) {
+    playSfx('select')
+    // A table still in its lobby is shown as-is; a match in progress is mirrored
+    // by the room watcher, which also deals the current hand.
+    if (joined.phase === 'lobby') phase.value = 'lobby'
+  }
+}
+
+function lobbyModeLabel(mode: string): string {
+  switch (mode) {
+    case 'first-to-solve':
+      return 'FIRST TO SOLVE'
+    case 'best-30s':
+      return 'BEST 30s'
+    case 'best-1m':
+      return 'BEST 1m'
+    case 'best-3m':
+      return 'BEST 3m'
+    case 'best-5m':
+      return 'BEST 5m'
+    case 'best-10m':
+      return 'BEST 10m'
+    default:
+      return mode.toUpperCase()
+  }
+}
+
+function lobbyPhaseLabel(phaseName: string): string {
+  switch (phaseName) {
+    case 'lobby':
+      return 'IN LOBBY'
+    case 'playing':
+      return 'ROUND LIVE'
+    case 'round-end':
+      return 'BETWEEN ROUNDS'
+    case 'game-over':
+      return 'FINISHED'
+    default:
+      return phaseName.toUpperCase()
+  }
+}
+
+/** Back to the list, freeing the seat. The room runs on without you. */
 function leaveTable(): void {
   playSfx('click')
   leaveRoom()
+  goToTableBrowser()
 }
 
 function toggleReady(): void {
@@ -473,6 +558,7 @@ const remainingSeconds = ref<number | null>(null)
 let deadlineTimer: ReturnType<typeof setInterval> | null = null
 let roundStartTimestamp = 0
 let appliedRoundNumber = 0
+let appliedRoomCode: string | null = null
 /** Signature of the last board sent to the table, so repeats stay off the wire. */
 let lastReportedBoard: string | null = null
 
@@ -672,20 +758,22 @@ const sortedRoundSolutions = computed(() => {
 function enterLobby(multiplayer: boolean): void {
   settings.isMultiplayer = multiplayer
   if (multiplayer) {
-    void joinTable()
-  } else {
-    leaveRoom()
-    localPlayers.value = [
-      {
-        id: 'p-local',
-        name: 'You',
-        isHost: true,
-        isReady: true,
-        points: 0,
-        bestRoundScore: null,
-      },
-    ]
+    // Online play starts at the lobby list: pick a public table, take a code,
+    // or open one of your own.
+    goToTableBrowser()
+    return
   }
+  leaveRoom()
+  localPlayers.value = [
+    {
+      id: 'p-local',
+      name: 'You',
+      isHost: true,
+      isReady: true,
+      points: 0,
+      bestRoundScore: null,
+    },
+  ]
   phase.value = 'lobby'
 }
 
@@ -766,6 +854,13 @@ function startDeadlineClock(): void {
 function applyRoomSnapshot(room: RoomState): void {
   if (!settings.isMultiplayer) return
 
+  // A different table (leave → rejoin, or a new code) always starts fresh, even
+  // if the round number happens to match the last one seen.
+  if (appliedRoomCode !== room.code) {
+    appliedRoomCode = room.code
+    appliedRoundNumber = 0
+  }
+
   if (room.phase === 'playing' && room.round) {
     if (room.round.number !== appliedRoundNumber) {
       appliedRoundNumber = room.round.number
@@ -844,6 +939,8 @@ function recordPlayerSolutionFromWorkspace(): SubmittedSolution | null {
 
   // Multiplayer scores live on the server; this player only reports the board.
   if (settings.isMultiplayer) {
+    // Seated mid-round: watch the table, but nothing here counts until the next deal.
+    if (awaitingNextDeal.value) return null
     // The evaluation watcher fires on every board mutation, so only report when
     // the board itself changed — otherwise each nudge re-sends the same solution.
     const signature = `${activeWorkspaceIdx.value}|${evalRes.lhs}|${evalRes.score}`
@@ -898,7 +995,7 @@ function recordPlayerSolutionFromWorkspace(): SubmittedSolution | null {
 watch(
   currentEvaluation,
   (evalRes) => {
-    if (phase.value !== 'playing' || !evalRes) return
+    if (phase.value !== 'playing' || !evalRes || awaitingNextDeal.value) return
     const acceptableNow = evalRes.isSingleGroup && evalRes.acceptable
     if (acceptableNow && !sawAcceptable) {
       hitSignal.value += 1
@@ -929,6 +1026,7 @@ function handleSelectGroup(groupId: string): void {
     suppressNextSelectClick = false
     return
   }
+  if (awaitingNextDeal.value) return
   const ws = activeWorkspace.value
   if (!ws) return
   actionError.value = null
@@ -951,6 +1049,7 @@ function handleSelectGroup(groupId: string): void {
 }
 
 function handleUngroup(targetGroupId?: string): void {
+  if (awaitingNextDeal.value) return
   const ws = activeWorkspace.value
   if (!ws) return
   actionError.value = null
@@ -970,6 +1069,7 @@ function handleUngroup(targetGroupId?: string): void {
 }
 
 function handleApplyOperator(opId: OperatorId): void {
+  if (awaitingNextDeal.value) return
   const ws = activeWorkspace.value
   if (!ws) return
   actionError.value = null
@@ -1004,6 +1104,7 @@ function operatorCostLabel(opId: OperatorId): string {
 }
 
 function handleUndo(): void {
+  if (awaitingNextDeal.value) return
   const ws = activeWorkspace.value
   if (!ws) return
   actionError.value = null
@@ -1012,6 +1113,7 @@ function handleUndo(): void {
 }
 
 function handleRedo(): void {
+  if (awaitingNextDeal.value) return
   const ws = activeWorkspace.value
   if (!ws) return
   actionError.value = null
@@ -1020,6 +1122,7 @@ function handleRedo(): void {
 }
 
 function handleResetWorkspace(): void {
+  if (awaitingNextDeal.value) return
   const ws = activeWorkspace.value
   if (!ws) return
   actionError.value = null
@@ -1279,6 +1382,162 @@ onBeforeUnmount(() => {
       </div>
     </main>
 
+    <!-- ======================== LOBBY SELECTOR ======================== -->
+    <main v-else-if="phase === 'lobby-select'" class="screen-lobby" :inert="menuOpen || tutorialOpen">
+      <div class="lobby-marquee">
+        <div class="lobby-marquee__left">
+          <span class="lobby-marquee__badge">MULTIPLAYER</span>
+          <span class="lobby-marquee__name">Find a Table</span>
+        </div>
+        <button
+          type="button"
+          class="btn-arcade btn-arcade--tiny lobby-marquee__back"
+          data-testid="browser-back-btn"
+          @click="goToTitle"
+        >
+          ◂ Main Menu
+        </button>
+      </div>
+
+      <div class="browser-grid">
+        <section class="panel-box browser-card">
+          <h2>Your Player</h2>
+
+          <label class="mp-field browser-name">
+            <span>Display name</span>
+            <input
+              v-model="playerName"
+              type="text"
+              class="input-arcade"
+              maxlength="18"
+              data-testid="mp-name-input"
+            />
+          </label>
+
+          <div class="browser-create">
+            <h3>Open a new table</h3>
+            <div class="visibility-toggle" role="group" aria-label="Lobby visibility">
+              <button
+                type="button"
+                class="visibility-option"
+                :class="{ 'visibility-option--active': newLobbyIsPublic }"
+                :aria-pressed="newLobbyIsPublic"
+                data-testid="lobby-public-btn"
+                @click="newLobbyIsPublic = true"
+              >
+                <span class="visibility-option__title">PUBLIC</span>
+                <span class="visibility-option__copy">Listed for anyone to join</span>
+              </button>
+              <button
+                type="button"
+                class="visibility-option"
+                :class="{ 'visibility-option--active': !newLobbyIsPublic }"
+                :aria-pressed="!newLobbyIsPublic"
+                data-testid="lobby-private-btn"
+                @click="newLobbyIsPublic = false"
+              >
+                <span class="visibility-option__title">PRIVATE</span>
+                <span class="visibility-option__copy">Code only, hidden from the list</span>
+              </button>
+            </div>
+            <button
+              type="button"
+              class="btn-arcade btn-arcade--gold btn-arcade--block"
+              data-testid="lobby-create-btn"
+              :disabled="creatingLobby || multiplayerSession.status === 'connecting'"
+              @click="createTable"
+            >
+              {{ creatingLobby ? 'Opening…' : 'Create Lobby' }}
+            </button>
+            <p class="browser-hint">
+              You become the host. Every lobby gets its own short code other players can type in.
+            </p>
+          </div>
+
+          <div class="browser-join">
+            <h3>Join with a code</h3>
+            <div class="browser-join__row">
+              <input
+                v-model="lobbyCodeInput"
+                type="text"
+                class="input-arcade browser-code-input"
+                maxlength="12"
+                placeholder="ABCD"
+                aria-label="Lobby code"
+                data-testid="mp-room-input"
+                @keyup.enter="joinTableByCode()"
+              />
+              <button
+                type="button"
+                class="btn-arcade"
+                data-testid="mp-join-btn"
+                :disabled="joiningLobby || !lobbyCodeInput.trim()"
+                @click="joinTableByCode()"
+              >
+                Join
+              </button>
+            </div>
+          </div>
+
+          <p
+            class="mp-status"
+            :class="`mp-status--${multiplayerSession.status}`"
+            data-testid="mp-status"
+          >
+            {{ connectionLine }}
+          </p>
+          <p v-if="multiplayerSession.error" class="browser-error" role="alert">
+            ⚠ {{ multiplayerSession.error }}
+          </p>
+        </section>
+
+        <section class="panel-box browser-card browser-card--list">
+          <div class="browser-list-head">
+            <h2>Public Lobbies</h2>
+            <span class="browser-count">{{ multiplayerSession.lobbies.length }}</span>
+          </div>
+
+          <div v-if="multiplayerSession.lobbies.length > 0" class="lobby-list" data-testid="lobby-list">
+            <div
+              v-for="lobby in multiplayerSession.lobbies"
+              :key="lobby.code"
+              class="lobby-row"
+              :data-testid="`lobby-row-${lobby.code}`"
+            >
+              <span class="lobby-row__code">{{ lobby.code }}</span>
+              <div class="lobby-row__info">
+                <span class="lobby-row__host">{{ lobby.hostName }}</span>
+                <span class="lobby-row__meta">
+                  {{ lobbyPhaseLabel(lobby.phase) }} · {{ lobbyModeLabel(lobby.mode) }}
+                </span>
+              </div>
+              <span class="lobby-row__seats">
+                {{ lobby.playerCount }}/{{ lobby.maxPlayers }}
+              </span>
+              <button
+                type="button"
+                class="btn-arcade btn-arcade--tiny"
+                :disabled="lobby.playerCount >= lobby.maxPlayers"
+                @click="joinTableByCode(lobby.code)"
+              >
+                {{ lobby.playerCount >= lobby.maxPlayers ? 'Full' : 'Join' }}
+              </button>
+            </div>
+          </div>
+
+          <div v-else class="lobby-empty">
+            <p v-if="multiplayerSession.status === 'connecting'">Reading the lobby board…</p>
+            <p v-else-if="multiplayerSession.status === 'error'">
+              No table server answered. Start it with <code>npm run dev:server</code>.
+            </p>
+            <p v-else>
+              No public lobbies are open. Create one, or ask a friend for their private code.
+            </p>
+          </div>
+        </section>
+      </div>
+    </main>
+
     <!-- ======================== LOBBY & SETTINGS SCREEN ======================== -->
     <main v-else-if="phase === 'lobby'" class="screen-lobby" :inert="menuOpen || tutorialOpen">
       <div class="lobby-marquee">
@@ -1322,50 +1581,33 @@ onBeforeUnmount(() => {
             </div>
           </div>
 
-          <div v-if="settings.isMultiplayer" class="mp-connect">
-            <div class="mp-connect__fields">
-              <label class="mp-field">
-                <span>Name</span>
-                <input
-                  v-model="playerName"
-                  type="text"
-                  class="input-arcade"
-                  maxlength="18"
-                  data-testid="mp-name-input"
-                />
-              </label>
-              <label class="mp-field">
-                <span>Room</span>
-                <input
-                  v-model="roomCodeInput"
-                  type="text"
-                  class="input-arcade"
-                  maxlength="12"
-                  data-testid="mp-room-input"
-                  @keyup.enter="joinTable"
-                />
-              </label>
+          <div v-if="settings.isMultiplayer" class="mp-connect" data-testid="lobby-identity">
+            <div class="lobby-code-block">
+              <span class="lobby-code-block__label">Lobby code</span>
+              <span class="lobby-code-block__code" data-testid="lobby-code">
+                {{ multiplayerSession.room?.code ?? '——' }}
+              </span>
+              <span
+                class="lobby-code-block__visibility"
+                :class="{ 'lobby-code-block__visibility--private': !multiplayerSession.room?.isPublic }"
+              >
+                {{ multiplayerSession.room?.isPublic ? 'PUBLIC' : 'PRIVATE' }}
+              </span>
             </div>
-            <p class="mp-status" :class="`mp-status--${multiplayerSession.status}`" data-testid="mp-status">
+            <p class="browser-hint">
+              {{
+                multiplayerSession.room?.isPublic
+                  ? 'Listed in the public lobby browser.'
+                  : 'Hidden from the list — share the code to invite players.'
+              }}
+            </p>
+            <p class="mp-status" :class="`mp-status--${multiplayerSession.status}`">
               {{ connectionLine }}
             </p>
+            <p v-if="awaitingNextDeal" class="lobby-waiting-note" data-testid="lobby-waiting-note">
+              A round is already running. You're dealt in on the next one.
+            </p>
             <div class="mp-connect__actions">
-              <button
-                type="button"
-                class="btn-arcade btn-arcade--tiny"
-                data-testid="mp-join-btn"
-                @click="joinTable"
-              >
-                {{ multiplayerSeated ? 'Rejoin' : 'Join Table' }}
-              </button>
-              <button
-                v-if="multiplayerSeated"
-                type="button"
-                class="btn-arcade btn-arcade--tiny"
-                @click="leaveTable"
-              >
-                Leave
-              </button>
               <button
                 v-if="multiplayerSeated && !multiplayerHost"
                 type="button"
@@ -1374,6 +1616,14 @@ onBeforeUnmount(() => {
                 @click="toggleReady"
               >
                 {{ selfPlayer?.isReady ? 'Not Ready' : 'Ready Up' }}
+              </button>
+              <button
+                type="button"
+                class="btn-arcade btn-arcade--tiny"
+                data-testid="mp-leave-btn"
+                @click="leaveTable"
+              >
+                Leave Lobby
               </button>
             </div>
           </div>
@@ -1649,6 +1899,19 @@ onBeforeUnmount(() => {
         <!-- ============ Table ============ -->
         <div class="table-main">
           <div
+            v-if="awaitingNextDeal"
+            class="waiting-banner"
+            role="status"
+            data-testid="waiting-banner"
+          >
+            <span class="waiting-banner__badge">NEXT DEAL</span>
+            <span class="waiting-banner__copy">
+              You joined mid-round, so this hand is a spectator's view. You're dealt in when the
+              next round starts.
+            </span>
+          </div>
+
+          <div
             v-if="currentEvaluation && currentEvaluation.isSingleGroup"
             class="equation-ribbon"
             :class="currentEvaluation.acceptable ? 'equation-ribbon--good' : 'equation-ribbon--bad'"
@@ -1668,7 +1931,7 @@ onBeforeUnmount(() => {
           </div>
 
       <!-- Interactive Felt Board for Active Workspace -->
-      <section ref="feltRef" class="felt-table">
+      <section ref="feltRef" class="felt-table" :class="{ 'felt-table--waiting': awaitingNextDeal }">
         <div class="board-toasts">
           <span v-if="actionError" class="error-toast" role="alert">⚠ {{ actionError }}</span>
           <span
@@ -1980,7 +2243,10 @@ onBeforeUnmount(() => {
           <h3>Match standings · first to {{ settings.firstToPoints }} pts</h3>
           <div class="standings-row">
             <div v-for="p in players" :key="p.id" class="standing-card">
-              <span class="standing-name">{{ p.name }}</span>
+              <span class="standing-name">
+                {{ p.name }}
+                <span v-if="p.isWaiting" class="standing-tag">NEXT DEAL</span>
+              </span>
               <span class="standing-pts">{{ p.points }} / {{ settings.firstToPoints }} pts</span>
             </div>
           </div>
@@ -2607,6 +2873,302 @@ onBeforeUnmount(() => {
   }
 }
 
+/* ------------------------- lobby selector (multiplayer) ------------------------- */
+
+.browser-grid {
+  display: grid;
+  grid-template-columns: 0.95fr 1.05fr;
+  gap: 24px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .browser-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.browser-card {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  background: linear-gradient(180deg, #201a2e 0%, #15111f 100%);
+}
+
+.browser-card h2 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+  color: var(--gold);
+  text-shadow: 0 3px 0 #09080f;
+}
+
+.browser-card h3 {
+  margin: 0 0 10px;
+  font-family: var(--font-pixel);
+  font-size: 0.58rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(247, 240, 224, 0.6);
+}
+
+.browser-name {
+  max-width: none;
+}
+
+.browser-create,
+.browser-join {
+  border-top: 2px dashed rgba(242, 201, 76, 0.22);
+  padding-top: 14px;
+}
+
+.visibility-toggle {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.visibility-option {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  text-align: left;
+  background: #120f18;
+  border: 2px solid rgba(242, 201, 76, 0.3);
+  padding: 10px;
+  color: rgba(247, 240, 224, 0.65);
+  cursor: pointer;
+  transition: border-color 0.1s ease, background 0.1s ease;
+}
+
+.visibility-option:hover {
+  border-color: rgba(242, 201, 76, 0.7);
+}
+
+.visibility-option--active {
+  background: rgba(255, 190, 11, 0.14);
+  border-color: var(--gold);
+  box-shadow: inset 0 0 0 1px rgba(255, 190, 11, 0.35);
+}
+
+.visibility-option__title {
+  font-family: var(--font-pixel);
+  font-size: 0.62rem;
+  letter-spacing: 0.12em;
+  color: var(--gold-bright);
+}
+
+.visibility-option__copy {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  line-height: 1.2;
+}
+
+.browser-hint {
+  margin: 10px 0 0;
+  font-family: var(--font-mono);
+  font-size: 0.88rem;
+  line-height: 1.3;
+  color: rgba(247, 240, 224, 0.55);
+}
+
+.browser-join__row {
+  display: flex;
+  gap: 8px;
+}
+
+.browser-code-input {
+  font-family: var(--font-display);
+  font-size: 1.1rem;
+  letter-spacing: 0.32em;
+  text-transform: uppercase;
+  text-align: center;
+}
+
+.browser-code-input::placeholder {
+  color: rgba(247, 240, 224, 0.2);
+  letter-spacing: 0.32em;
+}
+
+.browser-error {
+  margin: 0;
+  padding: 8px 10px;
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  color: #ffb2b2;
+  background: rgba(254, 74, 73, 0.12);
+  border-left: 3px solid var(--crimson);
+}
+
+.browser-list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.browser-count {
+  font-family: var(--font-pixel);
+  font-size: 0.62rem;
+  color: #15111e;
+  background: var(--gold);
+  padding: 3px 8px;
+}
+
+.lobby-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 62vh;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.lobby-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  align-items: center;
+  gap: 12px;
+  background: #241f30;
+  border: 1px solid rgba(242, 201, 76, 0.35);
+  padding: 9px 12px;
+}
+
+.lobby-row__code {
+  font-family: var(--font-display);
+  font-size: 0.85rem;
+  letter-spacing: 0.12em;
+  color: var(--gold-bright);
+  background: #0b0912;
+  border: 2px solid rgba(242, 201, 76, 0.4);
+  padding: 5px 7px;
+}
+
+.lobby-row__info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.lobby-row__host {
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lobby-row__meta {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: rgba(247, 240, 224, 0.5);
+}
+
+.lobby-row__seats {
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  color: #72efdd;
+}
+
+.lobby-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 180px;
+  padding: 18px;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 0.95rem;
+  line-height: 1.4;
+  color: rgba(247, 240, 224, 0.5);
+  border: 2px dashed rgba(242, 201, 76, 0.22);
+}
+
+.lobby-code-block {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.lobby-code-block__label {
+  font-family: var(--font-pixel);
+  font-size: 0.55rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(247, 240, 224, 0.55);
+  width: 100%;
+}
+
+.lobby-code-block__code {
+  font-family: var(--font-display);
+  font-size: 1.5rem;
+  letter-spacing: 0.3em;
+  color: var(--gold-bright);
+  text-shadow: 0 3px 0 #09080f;
+  background: #0b0912;
+  border: 3px solid var(--gold);
+  padding: 8px 12px 8px 18px;
+}
+
+.lobby-code-block__visibility {
+  font-family: var(--font-pixel);
+  font-size: 0.55rem;
+  letter-spacing: 0.12em;
+  padding: 4px 8px;
+  color: #0b0f14;
+  background: #72efdd;
+}
+
+.lobby-code-block__visibility--private {
+  color: #f8f2e0;
+  background: #6b4b9b;
+}
+
+.lobby-waiting-note {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  color: var(--gold-bright);
+}
+
+/* ------------------------ seated mid-round (waiting) ------------------------ */
+
+.waiting-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding: 9px 12px;
+  background: rgba(255, 190, 11, 0.1);
+  border: 2px solid var(--gold);
+  border-left-width: 6px;
+  box-shadow: 0 4px 0 #09080f;
+}
+
+.waiting-banner__badge {
+  flex: none;
+  font-family: var(--font-pixel);
+  font-size: 0.55rem;
+  letter-spacing: 0.12em;
+  padding: 4px 8px;
+  color: #15111e;
+  background: var(--gold);
+}
+
+.waiting-banner__copy {
+  font-family: var(--font-mono);
+  font-size: 0.95rem;
+  line-height: 1.3;
+  color: rgba(247, 240, 224, 0.82);
+}
+
+.felt-table--waiting .workspace-viewport {
+  pointer-events: none;
+  filter: saturate(0.55) brightness(0.85);
+}
+
 .section-header {
   display: flex;
   align-items: center;
@@ -2698,11 +3260,6 @@ onBeforeUnmount(() => {
   padding: 12px;
   border: 2px dashed rgba(242, 201, 76, 0.28);
   background: rgba(8, 10, 16, 0.45);
-}
-
-.mp-connect__fields {
-  display: flex;
-  gap: 10px;
 }
 
 .mp-field {
@@ -3769,6 +4326,17 @@ fieldset.settings-form:disabled {
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+.standing-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 5px;
+  font-family: var(--font-pixel);
+  font-size: 0.48rem;
+  letter-spacing: 0.08em;
+  color: #15111e;
+  background: var(--gold);
 }
 
 .standing-name {

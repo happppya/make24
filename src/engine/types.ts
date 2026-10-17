@@ -157,6 +157,14 @@ export interface PlayerInfo {
   isReady: boolean
   points: number
   bestRoundScore: number | null
+  /** Multiplayer only: seated mid-round, so they are dealt in on the next one. */
+  isWaiting?: boolean
 }
 
-export type ScreenPhase = 'title' | 'lobby' | 'playing' | 'round-end' | 'game-over'
+export type ScreenPhase =
+  | 'title'
+  | 'lobby-select'
+  | 'lobby'
+  | 'playing'
+  | 'round-end'
+  | 'game-over'

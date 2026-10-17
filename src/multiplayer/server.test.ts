@@ -97,12 +97,19 @@ async function boot(): Promise<MultiplayerServer> {
   return server
 }
 
-async function seatTwo(roomCode = 'TEST') {
+/** Host creates a lobby, then the guest joins it by the code the server handed out. */
+async function seatTwo(options: { isPublic?: boolean } = {}) {
   const table = await boot()
   const host = await TestClient.connect(table.url)
   clients.push(host)
-  host.send({ t: 'join', room: roomCode, name: 'Ace', protocol: PROTOCOL_VERSION })
+  host.send({
+    t: 'create-room',
+    name: 'Ace',
+    isPublic: options.isPublic ?? true,
+    protocol: PROTOCOL_VERSION,
+  })
   const welcomeHost = await host.waitFor('welcome')
+  const roomCode = welcomeHost.room.code
 
   const guest = await TestClient.connect(table.url)
   clients.push(guest)
@@ -110,7 +117,12 @@ async function seatTwo(roomCode = 'TEST') {
   const welcomeGuest = await guest.waitFor('welcome')
 
   await host.waitFor('state', (m) => m.room.players.length === 2)
-  return { table, host, guest, welcomeHost, welcomeGuest }
+  return { table, host, guest, welcomeHost, welcomeGuest, roomCode }
+}
+
+async function latestSettings(client: TestClient) {
+  const welcome = await client.waitFor('welcome')
+  return welcome.room.settings
 }
 
 const solution = {
@@ -155,8 +167,8 @@ describe('multiplayer server — lobby over a real socket', () => {
   })
 
   it('does not double-seat a socket that joins twice', async () => {
-    const { host, guest } = await seatTwo()
-    host.send({ t: 'join', room: 'TEST', name: 'Ace', protocol: PROTOCOL_VERSION })
+    const { host, guest, roomCode } = await seatTwo()
+    host.send({ t: 'join', room: roomCode, name: 'Ace', protocol: PROTOCOL_VERSION })
     await host.waitFor('welcome')
     await guest.waitFor('state', (m) => m.room.players.length === 2)
     // Give any errant extra broadcast a moment to arrive, then confirm the seats.
@@ -173,6 +185,138 @@ describe('multiplayer server — lobby over a real socket', () => {
     expect(state.room.hostId).toBe(welcomeGuest.selfId)
     expect(state.room.players[0]!.name).toBe('Deuce')
     expect(state.room.players[0]!.isHost).toBe(true)
+  })
+
+  it('hands the host badge to the oldest remaining player, not the newest', async () => {
+    const { table, host, guest, welcomeGuest, roomCode } = await seatTwo()
+
+    const third = await TestClient.connect(table.url)
+    clients.push(third)
+    third.send({ t: 'join', room: roomCode, name: 'Trey', protocol: PROTOCOL_VERSION })
+    await third.waitFor('welcome')
+    await guest.waitFor('state', (m) => m.room.players.length === 3)
+
+    host.close()
+    const state = await guest.waitFor(
+      'state',
+      (m) => m.room.players.some((p) => p.name === 'Deuce') && m.room.hostId === welcomeGuest.selfId
+    )
+    expect(state.room.hostId).toBe(welcomeGuest.selfId)
+    expect(state.room.players.map((p) => p.name)).toEqual(['Deuce', 'Trey'])
+  })
+})
+
+describe('multiplayer server — lobby browser', () => {
+  it('lists public lobbies with a readable code and keeps private ones off the board', async () => {
+    const table = await boot()
+
+    const publicHost = await TestClient.connect(table.url)
+    clients.push(publicHost)
+    publicHost.send({ t: 'create-room', name: 'Ace', isPublic: true, protocol: PROTOCOL_VERSION })
+    const publicWelcome = await publicHost.waitFor('welcome')
+    expect(publicWelcome.room.isPublic).toBe(true)
+    // No 0/O or 1/I: a code that can be read aloud without ambiguity.
+    expect(publicWelcome.room.code).toMatch(/^[A-HJ-NP-Z2-9]{4}$/)
+
+    const privateHost = await TestClient.connect(table.url)
+    clients.push(privateHost)
+    privateHost.send({ t: 'create-room', name: 'Cipher', isPublic: false, protocol: PROTOCOL_VERSION })
+    const privateWelcome = await privateHost.waitFor('welcome')
+    expect(privateWelcome.room.code).not.toBe(publicWelcome.room.code)
+
+    const browser = await TestClient.connect(table.url)
+    clients.push(browser)
+    browser.send({ t: 'browse' })
+    const list = await browser.waitFor('lobbies')
+
+    expect(list.rooms.map((row) => row.code)).toEqual([publicWelcome.room.code])
+    expect(list.rooms[0]).toMatchObject({
+      hostName: 'Ace',
+      playerCount: 1,
+      isPublic: true,
+      phase: 'lobby',
+    })
+
+    // A private lobby still admits anyone holding its code.
+    const friend = await TestClient.connect(table.url)
+    clients.push(friend)
+    friend.send({
+      t: 'join',
+      room: privateWelcome.room.code,
+      name: 'Friend',
+      protocol: PROTOCOL_VERSION,
+    })
+    const friendWelcome = await friend.waitFor('welcome')
+    expect(friendWelcome.room.code).toBe(privateWelcome.room.code)
+    expect(friendWelcome.room.players.map((p) => p.name)).toEqual(['Cipher', 'Friend'])
+  })
+
+  it('pushes a fresh lobby board to browsers when a room appears', async () => {
+    const table = await boot()
+    const browser = await TestClient.connect(table.url)
+    clients.push(browser)
+    browser.send({ t: 'browse' })
+    const empty = await browser.waitFor('lobbies')
+    expect(empty.rooms).toHaveLength(0)
+
+    const host = await TestClient.connect(table.url)
+    clients.push(host)
+    host.send({ t: 'create-room', name: 'Opener', isPublic: true, protocol: PROTOCOL_VERSION })
+    const welcome = await host.waitFor('welcome')
+
+    const listed = await browser.waitFor('lobbies', (m) => m.rooms.length === 1)
+    expect(listed.rooms[0]!.code).toBe(welcome.room.code)
+  })
+
+  it('turns away a code that no lobby owns', async () => {
+    const table = await boot()
+    const client = await TestClient.connect(table.url)
+    clients.push(client)
+    client.send({ t: 'join', room: 'ZZZZ', name: 'Lost', protocol: PROTOCOL_VERSION })
+    const error = await client.waitFor('error')
+    expect(error.code).toBe('not-found')
+    expect(table.roomCount()).toBe(0)
+  })
+
+  it('seats a mid-round joiner as a spectator until the next deal', async () => {
+    const { table, host, roomCode } = await seatTwo()
+    host.send({
+      t: 'update-settings',
+      settings: { ...(await latestSettings(host)), mode: 'best-30s' },
+    })
+    await host.waitFor('state', (m) => m.room.settings.mode === 'best-30s')
+
+    host.send({ t: 'start-match' })
+    await host.waitFor('state', (m) => m.room.phase === 'playing')
+
+    const late = await TestClient.connect(table.url)
+    clients.push(late)
+    late.send({ t: 'join', room: roomCode, name: 'Late', protocol: PROTOCOL_VERSION })
+    const lateWelcome = await late.waitFor('welcome')
+    expect(lateWelcome.room.players.find((p) => p.name === 'Late')!.isWaiting).toBe(true)
+
+    late.send({ t: 'submit', solution })
+    const refused = await late.waitFor('error')
+    expect(refused.code).toBe('waiting')
+
+    host.send({ t: 'skip-round' })
+    await host.waitFor('state', (m) => m.room.phase === 'round-end')
+    host.send({ t: 'next-round' })
+
+    const nextDeal = await late.waitFor(
+      'state',
+      (m) => m.room.phase === 'playing' && m.room.round!.number === 2
+    )
+    expect(nextDeal.room.players.find((p) => p.name === 'Late')!.isWaiting).toBe(false)
+
+    late.send({ t: 'submit', solution })
+    await late.waitFor('state', (m) => m.room.round!.solutions.length === 1)
+    host.send({ t: 'skip-round' })
+    const paid = await late.waitFor(
+      'state',
+      (m) => m.room.phase === 'round-end' && m.room.round!.number === 2
+    )
+    expect(paid.room.round!.winnerIds).toEqual([lateWelcome.selfId])
   })
 })
 
