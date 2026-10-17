@@ -1906,7 +1906,7 @@ onBeforeUnmount(() => {
               :disabled="settings.isMultiplayer && !multiplayerHost"
               @click="finishRound('player-end')"
             >
-              {{ settings.isMultiplayer ? 'End Round' : 'Finish & Submit' }}
+              {{ settings.isMultiplayer ? 'End Round' : 'Submit' }}
             </button>
             <button
               type="button"
