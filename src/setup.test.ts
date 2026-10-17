@@ -768,5 +768,84 @@ describe('Make 24 Remastered — Playable UI Flow (App.vue)', () => {
 
     wrapper.unmount()
   })
+
+  it('opens the player guide from the title screen', async () => {
+    const wrapper = mount(App)
+    const trigger = wrapper.find('[data-testid="open-tutorial"]')
+    expect(trigger.exists()).toBe(true)
+    expect(trigger.text().toLowerCase()).toContain('tutorial')
+
+    await trigger.trigger('click')
+
+    const overlay = wrapper.find('[data-testid="tutorial-overlay"]')
+    expect(overlay.exists()).toBe(true)
+    expect(overlay.find('[role="dialog"]').exists()).toBe(true)
+    // The title screen is inert underneath, so focus cannot wander behind the guide.
+    expect(wrapper.find('.screen-title').attributes('inert')).toBeDefined()
+
+    // Every mechanic gets a section, and the index names them all.
+    const sections = wrapper.findAll('[data-testid="tutorial-scroll"] section')
+    expect(sections.map((s) => s.attributes('data-section'))).toEqual([
+      'target',
+      'expression',
+      'board',
+      'workspaces',
+      'cost',
+      'rules',
+      'keys',
+    ])
+    expect(wrapper.findAll('[data-testid="tutorial-scroll"] .rail-link')).toHaveLength(0)
+    expect(wrapper.findAll('.rail-link')).toHaveLength(7)
+
+    // Each screenshot carries alt text and one legend entry per numbered pin.
+    const figures = wrapper.findAll('[data-testid="tutorial-scroll"] figure')
+    expect(figures).toHaveLength(3)
+    for (const figure of figures) {
+      const img = figure.find('img')
+      expect(img.attributes('src')).toMatch(/^\/tutorial\/[a-z-]+\.png$/)
+      expect((img.attributes('alt') ?? '').length).toBeGreaterThan(40)
+      const pins = figure.findAll('.shot__pin')
+      expect(pins.length).toBeGreaterThan(0)
+      expect(figure.findAll('.shot__legend-item')).toHaveLength(pins.length)
+      // Pins are placed by percentage, so they survive any display width.
+      pins.forEach((pin) => {
+        expect(pin.attributes('style')).toMatch(/left: [\d.]+%; top: [\d.]+%/)
+      })
+    }
+
+    // The index jumps between sections without leaving the guide.
+    await wrapper.find('[data-testid="tutorial-nav-keys"]').trigger('click')
+    expect(wrapper.find('[data-testid="tutorial-nav-keys"]').attributes('aria-current')).toBe('true')
+    expect(wrapper.find('[data-testid="tutorial-overlay"]').exists()).toBe(true)
+
+    wrapper.unmount()
+  })
+
+  it('closes the guide with Esc or its close button and restores focus', async () => {
+    // Focus only moves inside a document, so this test needs a mounted tree.
+    const wrapper = mount(App, { attachTo: document.body })
+    const trigger = wrapper.find('[data-testid="open-tutorial"]')
+
+    await trigger.trigger('click')
+    await nextTick()
+    expect(document.activeElement).toBe(wrapper.find('[data-testid="tutorial-close"]').element)
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape' }))
+    await nextTick()
+    await nextTick()
+    expect(wrapper.find('[data-testid="tutorial-overlay"]').exists()).toBe(false)
+    // Focus only lands back on the trigger if the title screen is live again.
+    expect(document.activeElement).toBe(trigger.element)
+
+    // The close button does the same after reopening.
+    await trigger.trigger('click')
+    await wrapper.find('[data-testid="tutorial-close"]').trigger('click')
+    await nextTick()
+    await nextTick()
+    expect(wrapper.find('[data-testid="tutorial-overlay"]').exists()).toBe(false)
+    expect(document.activeElement).toBe(trigger.element)
+
+    wrapper.unmount()
+  })
 })
 

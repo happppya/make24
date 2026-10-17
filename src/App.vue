@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import CardGroupNode from './components/CardGroupNode.vue'
 import ScorePanel from './components/ScorePanel.vue'
+import TutorialOverlay from './components/TutorialOverlay.vue'
 import { isSfxEnabled, playSfx, toggleSfx } from './audio/sfx'
 import { dealHand, generateTargetNumber } from './engine/deck'
 import {
@@ -368,6 +369,26 @@ function toggleReady(): void {
   playSfx('click')
 }
 
+/* ------------------------------- Tutorial ------------------------------- */
+
+/** The guide is an overlay on the title screen, not a `phase`. */
+const tutorialOpen = ref(false)
+const tutorialTriggerRef = ref<HTMLButtonElement | null>(null)
+
+function openTutorial(): void {
+  tutorialOpen.value = true
+  playSfx('select')
+}
+
+async function closeTutorial(): Promise<void> {
+  tutorialOpen.value = false
+  playSfx('click')
+  // Wait for the overlay to go before moving focus: the dialog's close button
+  // is focused while it is open, and removing it would drop focus on <body>.
+  await nextTick()
+  tutorialTriggerRef.value?.focus()
+}
+
 /* ------------------------------- ESC menu ------------------------------- */
 
 const menuOpen = ref(false)
@@ -393,6 +414,10 @@ function menuGoToTitle(): void {
 }
 
 function handleEscape(): void {
+  if (tutorialOpen.value) {
+    closeTutorial()
+    return
+  }
   if (menuOpen.value) {
     closeMenu()
     return
@@ -1082,7 +1107,7 @@ function handleKeyDown(e: KeyboardEvent): void {
     return
   }
 
-  if (menuOpen.value || phase.value !== 'playing') return
+  if (menuOpen.value || tutorialOpen.value || phase.value !== 'playing') return
 
   if (key === 'z') {
     e.preventDefault()
@@ -1143,7 +1168,7 @@ onBeforeUnmount(() => {
 <template>
   <div ref="shellRef" class="app-shell" :class="impactKind ? `impact--${impactKind}` : ''">
     <!-- ======================== TITLE SCREEN ======================== -->
-    <main v-if="phase === 'title'" class="screen-title" :inert="menuOpen">
+    <main v-if="phase === 'title'" class="screen-title" :inert="menuOpen || tutorialOpen">
       <span class="title-suits" aria-hidden="true">♠ ♥ ♣ ♦</span>
       <div class="title-stack">
         <div class="hero-card-fan" aria-hidden="true">
@@ -1203,11 +1228,23 @@ onBeforeUnmount(() => {
             <span class="mode-btn__arrow" aria-hidden="true">▸</span>
           </button>
         </div>
+
+        <button
+          ref="tutorialTriggerRef"
+          type="button"
+          class="title-guide"
+          data-testid="open-tutorial"
+          @click="openTutorial"
+        >
+          <span class="title-guide__icon" aria-hidden="true">?</span>
+          <span class="title-guide__label">Tutorial</span>
+          <span class="title-guide__hint">Every rule, on one page</span>
+        </button>
       </div>
     </main>
 
     <!-- ======================== LOBBY & SETTINGS SCREEN ======================== -->
-    <main v-else-if="phase === 'lobby'" class="screen-lobby" :inert="menuOpen">
+    <main v-else-if="phase === 'lobby'" class="screen-lobby" :inert="menuOpen || tutorialOpen">
       <div class="lobby-marquee">
         <div class="lobby-marquee__left">
           <span class="lobby-marquee__badge">
@@ -1499,7 +1536,7 @@ onBeforeUnmount(() => {
     </main>
 
     <!-- ======================== LIVE GAMEPLAY SCREEN ======================== -->
-    <main v-else-if="phase === 'playing'" class="screen-playing" :inert="menuOpen">
+    <main v-else-if="phase === 'playing'" class="screen-playing" :inert="menuOpen || tutorialOpen">
       <div class="table-layout">
         <!-- ============ Left blind / score sidebar (Balatro HUD) ============ -->
         <aside ref="sidebarRef" class="table-sidebar">
@@ -1828,7 +1865,7 @@ onBeforeUnmount(() => {
     </main>
 
     <!-- ======================== ROUND END SCREEN ======================== -->
-    <main v-else-if="phase === 'round-end'" class="screen-round-end" :inert="menuOpen">
+    <main v-else-if="phase === 'round-end'" class="screen-round-end" :inert="menuOpen || tutorialOpen">
       <div class="results-cabinet" :class="roundWinnerId ? 'results-cabinet--win' : 'results-cabinet--bust'">
         <div class="results-marquee">
           <span class="results-marquee__round">ROUND {{ roundNumber }}</span>
@@ -1923,7 +1960,7 @@ onBeforeUnmount(() => {
     </main>
 
     <!-- ======================== GAME OVER SCREEN ======================== -->
-    <main v-else-if="phase === 'game-over'" class="screen-game-over" :inert="menuOpen">
+    <main v-else-if="phase === 'game-over'" class="screen-game-over" :inert="menuOpen || tutorialOpen">
       <div class="results-cabinet results-cabinet--final">
         <div class="results-marquee">
           <span class="results-marquee__round">FINAL BELL</span>
@@ -2035,6 +2072,9 @@ onBeforeUnmount(() => {
         <div class="pause-card__hint">Esc to resume</div>
       </div>
     </div>
+
+    <!-- ======================== PLAYER'S GUIDE ======================== -->
+    <TutorialOverlay v-if="tutorialOpen" @close="closeTutorial" />
   </div>
 </template>
 
@@ -2335,6 +2375,73 @@ onBeforeUnmount(() => {
   font-size: 0.9rem;
   color: var(--accent);
   transition: translate 0.16s ease;
+}
+
+/* Tutorial entry: a slim manual tab under the two mode slabs */
+.title-guide {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: clamp(10px, 1.8vh, 18px);
+  padding: 9px 16px 9px 12px;
+  background: rgba(19, 16, 32, 0.72);
+  border: 2px solid rgba(255, 190, 11, 0.5);
+  outline: 2px solid #09080f;
+  color: var(--ink-cream);
+  cursor: pointer;
+  box-shadow: 0 5px 0 #09080f;
+  transition:
+    transform 0.14s cubic-bezier(0.22, 1, 0.36, 1),
+    border-color 0.16s ease,
+    background 0.16s ease;
+}
+
+.title-guide:hover,
+.title-guide:focus-visible {
+  transform: translateY(-3px);
+  border-color: var(--gold);
+  background: rgba(38, 30, 56, 0.92);
+}
+
+.title-guide:active {
+  transform: translateY(2px);
+  box-shadow: 0 2px 0 #09080f;
+}
+
+.title-guide__icon {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  background: var(--gold);
+  color: #15111e;
+  font-family: var(--font-display);
+  font-size: 0.68rem;
+  line-height: 1;
+  border: 2px solid #09080f;
+}
+
+.title-guide__label {
+  font-family: var(--font-pixel);
+  font-weight: 700;
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--gold-bright);
+}
+
+.title-guide__hint {
+  padding-left: 10px;
+  border-left: 2px solid rgba(255, 190, 11, 0.3);
+  font-family: var(--font-mono);
+  font-size: 0.94rem;
+  color: var(--ink-muted);
+}
+
+@media (max-width: 620px) {
+  .title-guide__hint {
+    display: none;
+  }
 }
 
 .mode-btn:hover .mode-btn__arrow,
