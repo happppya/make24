@@ -25,6 +25,7 @@ interface Shot {
 type Block =
   | { t: 'p'; text: string }
   | { t: 'keys'; rows: Array<{ keys: string[]; does: string }> }
+  | { t: 'ops'; rows: Array<{ sym: string; name: string; note: string }> }
   | { t: 'shot'; shot: keyof typeof shots }
 
 interface Section {
@@ -187,8 +188,33 @@ const sections: Section[] = [
     ],
   },
   {
-    id: 'keys',
+    id: 'operators',
     n: '07',
+    title: 'Operators',
+    blocks: [
+      {
+        t: 'p',
+        text: 'The host switches these on in sets; whatever is enabled shows up on the rails. {1}–{0} pick a binary operator and {⇧1}–{⇧0} a unary one, counting down the rail.',
+      },
+      {
+        t: 'ops',
+        rows: [
+          { sym: '+ − × ÷', name: 'Basic', note: 'The first pick is the left operand, so 3 − 5 is −2.' },
+          { sym: 'xʸ', name: 'Power', note: 'a to the power of b.' },
+          { sym: 'ʸ√x', name: 'Root', note: 'a to the 1/b; odd roots accept negative cards.' },
+          { sym: 'x!', name: 'Factorial', note: 'Γ(x + 1), so it also works off the integers.' },
+          { sym: 'Γ(x)', name: 'Gamma', note: 'The continuous factorial: Γ(n) = (n − 1)!' },
+          { sym: 'Γ⁻¹(x)', name: 'Inverse gamma', note: 'Principal branch; undefined at or below ≈0.8856.' },
+          { sym: 'sin° cos° tan°', name: 'Trig', note: 'Angles are in degrees.' },
+          { sym: '1/x', name: 'Inverse', note: 'One divided by x.' },
+          { sym: '<< >>', name: 'Bit shift', note: 'Integers only, shifted by 0 to 52.' },
+        ],
+      },
+    ],
+  },
+  {
+    id: 'keys',
+    n: '08',
     title: 'Keys',
     blocks: [
       {
@@ -323,6 +349,16 @@ onBeforeUnmount(() => observer?.disconnect())
                     <kbd v-for="key in row.keys" :key="key">{{ key }}</kbd>
                   </dt>
                   <dd class="key-table__does">{{ row.does }}</dd>
+                </template>
+              </dl>
+
+              <dl v-else-if="block.t === 'ops'" class="op-table">
+                <template v-for="row in block.rows" :key="row.name">
+                  <dt class="op-table__row">
+                    <span class="op-table__sym">{{ row.sym }}</span>
+                    <span class="op-table__name">{{ row.name }}</span>
+                  </dt>
+                  <dd class="op-table__note">{{ row.note }}</dd>
                 </template>
               </dl>
 
@@ -601,6 +637,56 @@ kbd {
   font-size: 1.12rem;
   line-height: 1.3;
   color: #ece5d2;
+}
+
+.op-table {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 9px 16px;
+  margin: 14px 0 0;
+  max-width: 70ch;
+  align-items: baseline;
+}
+
+.op-table__row {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  align-items: baseline;
+  gap: 10px;
+}
+
+.op-table__sym {
+  font-family: var(--font-mono);
+  font-size: 1.16rem;
+  color: var(--gold-bright);
+  white-space: nowrap;
+}
+
+.op-table__name {
+  font-family: var(--font-pixel);
+  font-size: 0.68rem;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--ink-cream);
+}
+
+.op-table__note {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 1.08rem;
+  line-height: 1.3;
+  color: var(--ink-muted);
+}
+
+@media (max-width: 620px) {
+  .op-table {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px 0;
+  }
+
+  .op-table__note {
+    padding: 0 0 8px 12px;
+  }
 }
 
 .manual__foot {

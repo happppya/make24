@@ -792,10 +792,15 @@ describe('Make 24 Remastered — Playable UI Flow (App.vue)', () => {
       'workspaces',
       'cost',
       'rules',
+      'operators',
       'keys',
     ])
     expect(wrapper.findAll('[data-testid="tutorial-scroll"] .rail-link')).toHaveLength(0)
-    expect(wrapper.findAll('.rail-link')).toHaveLength(7)
+    expect(wrapper.findAll('.rail-link')).toHaveLength(8)
+
+    // The operator reference covers each operator family the host can enable.
+    expect(wrapper.findAll('.op-table__row')).toHaveLength(9)
+    expect(wrapper.findAll('.op-table__note')).toHaveLength(9)
 
     // Each screenshot carries alt text and one legend entry per numbered pin.
     const figures = wrapper.findAll('[data-testid="tutorial-scroll"] figure')
