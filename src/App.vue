@@ -5,11 +5,19 @@ import ScorePanel from './components/ScorePanel.vue'
 import { isSfxEnabled, playSfx, toggleSfx } from './audio/sfx'
 import { dealHand, generateTargetNumber } from './engine/deck'
 import { OPERATOR_CATALOG, formatNumber, getEnabledOperators } from './engine/math'
-import { findSampleSolutions } from './engine/solver'
+import {
+  connectToRoom,
+  isRoomHost,
+  leaveRoom,
+  multiplayer as multiplayerSession,
+  selfPlayer,
+  sendToRoom,
+  serverNow,
+  tableServerLabel,
+} from './multiplayer/session'
+import type { RoomState } from './multiplayer/protocol'
 import type {
-  BinaryOperator,
   Card,
-  GameMode,
   GameSettings,
   OperatorId,
   PlayerInfo,
@@ -55,10 +63,12 @@ const settings = reactive<GameSettings>({
   firstToPoints: 3,
 })
 
-const players = ref<PlayerInfo[]>([
+/* --------------- singleplayer seats (multiplayer comes from the server) --------------- */
+
+const localPlayers = ref<PlayerInfo[]>([
   {
     id: 'p-local',
-    name: 'You (Host)',
+    name: 'You',
     isHost: true,
     isReady: true,
     points: 0,
@@ -66,16 +76,80 @@ const players = ref<PlayerInfo[]>([
   },
 ])
 
-const newPlayerName = ref('')
-const roundNumber = ref(1)
+const localRoundNumber = ref(1)
+const localRoundSolutions = ref<SubmittedSolution[]>([])
+const localRoundWinnerId = ref<string | null>(null)
+const localMatchWinner = ref<PlayerInfo | null>(null)
+
+/* ------------------------------ multiplayer room ------------------------------ */
+
+const playerName = ref('Player')
+const roomCodeInput = ref('MAIN')
+const multiplayerHost = computed(
+  () => settings.isMultiplayer && multiplayerSession.room !== null && isRoomHost.value
+)
+const multiplayerSeated = computed(
+  () => settings.isMultiplayer && multiplayerSession.status === 'connected'
+)
+const multiplayerReady = computed(() =>
+  players.value.every((player) => player.isHost || player.isReady)
+)
+const canEditSettings = computed(
+  () => !settings.isMultiplayer || (multiplayerSeated.value && multiplayerHost.value)
+)
+const connectionLine = computed(() => {
+  switch (multiplayerSession.status) {
+    case 'connecting':
+      return `Connecting to ${multiplayerSession.transportLabel || tableServerLabel()}…`
+    case 'connected':
+      return `Seated in room ${multiplayerSession.room?.code ?? roomCodeInput.value} · ${multiplayerSession.transportLabel}`
+    case 'error':
+      return multiplayerSession.error ?? 'Could not reach the table server.'
+    case 'disconnected':
+      return 'Connection lost — rejoin to keep playing.'
+    default:
+      return `Start the table server with npm run dev:server, then join ${roomCodeInput.value}.`
+  }
+})
+
+/** Multiplayer view model: live room seats when connected, local seats otherwise. */
+const players = computed<PlayerInfo[]>(() => {
+  if (settings.isMultiplayer && multiplayerSession.room) {
+    return multiplayerSession.room.players
+  }
+  return localPlayers.value
+})
+
+const roundNumber = computed(() => {
+  if (settings.isMultiplayer && multiplayerSession.room?.round) {
+    return multiplayerSession.room.round.number
+  }
+  return localRoundNumber.value
+})
+
+const roundSolutions = computed<SubmittedSolution[]>(() => {
+  if (settings.isMultiplayer) return multiplayerSession.room?.round?.solutions ?? []
+  return localRoundSolutions.value
+})
+
+const roundWinnerId = computed<string | null>(() => {
+  if (settings.isMultiplayer) return multiplayerSession.room?.round?.winnerId ?? null
+  return localRoundWinnerId.value
+})
+
+const matchWinner = computed<PlayerInfo | null>(() => {
+  if (settings.isMultiplayer) {
+    const winnerId = multiplayerSession.room?.matchWinnerId
+    return winnerId ? (players.value.find((p) => p.id === winnerId) ?? null) : null
+  }
+  return localMatchWinner.value
+})
+
 const currentTarget = ref(24)
 const currentHand = ref<Card[]>([])
 const workspaces = ref<WorkspaceState[]>([])
 const activeWorkspaceIdx = ref(0)
 const actionError = ref<string | null>(null)
-const roundSolutions = ref<SubmittedSolution[]>([])
-const roundWinnerId = ref<string | null>(null)
-const matchWinner = ref<PlayerInfo | null>(null)
 
 /* ------------------------- juice: SFX, impact, cues ------------------------- */
 
@@ -235,12 +309,42 @@ function onToggleSfx(): void {
 
 function goToTitle(): void {
   playSfx('click')
+  // Walking away from the title screen must free the seat, or the room would
+  // keep a ghost player around.
+  if (settings.isMultiplayer) leaveRoom()
+  stopDeadlineClock()
   phase.value = 'title'
 }
 
 function goToLobby(): void {
   playSfx('click')
+  // Leaving the table is deliberate: the room keeps running for everyone else
+  // and the seat is handed back when this player rejoins.
+  if (settings.isMultiplayer) leaveRoom()
   phase.value = 'lobby'
+}
+
+/* --------------------------- multiplayer table --------------------------- */
+
+async function joinTable(): Promise<void> {
+  playSfx('click')
+  await connectToRoom({
+    roomCode: roomCodeInput.value.trim() || 'MAIN',
+    name: playerName.value.trim() || 'Player',
+  })
+  if (multiplayerSession.status === 'connected') playSfx('select')
+}
+
+function leaveTable(): void {
+  playSfx('click')
+  leaveRoom()
+}
+
+function toggleReady(): void {
+  const me = selfPlayer.value
+  if (!me || me.isHost) return
+  sendToRoom({ t: 'set-ready', ready: !me.isReady })
+  playSfx('click')
 }
 
 /* ------------------------------- ESC menu ------------------------------- */
@@ -282,10 +386,11 @@ function handleEscape(): void {
   openMenu()
 }
 
-// Timer for timed multiplayer modes
+// Countdown mirrors the server's round deadline; the server is the one that ends the round.
 const remainingSeconds = ref<number | null>(null)
-let timerHandle: ReturnType<typeof setInterval> | null = null
+let deadlineTimer: ReturnType<typeof setInterval> | null = null
 let roundStartTimestamp = 0
+let appliedRoundNumber = 0
 
 const activeWorkspace = computed<WorkspaceState | undefined>(
   () => workspaces.value[activeWorkspaceIdx.value]
@@ -422,36 +527,10 @@ const sortedRoundSolutions = computed(() => {
 function enterLobby(multiplayer: boolean): void {
   settings.isMultiplayer = multiplayer
   if (multiplayer) {
-    if (players.value.length === 1) {
-      players.value = [
-        {
-          id: 'p-local',
-          name: 'You (Host)',
-          isHost: true,
-          isReady: true,
-          points: 0,
-          bestRoundScore: null,
-        },
-        {
-          id: 'p-bot-1',
-          name: 'Jester_99',
-          isHost: false,
-          isReady: true,
-          points: 0,
-          bestRoundScore: null,
-        },
-        {
-          id: 'p-bot-2',
-          name: 'EulerFan',
-          isHost: false,
-          isReady: true,
-          points: 0,
-          bestRoundScore: null,
-        },
-      ]
-    }
+    void joinTable()
   } else {
-    players.value = [
+    leaveRoom()
+    localPlayers.value = [
       {
         id: 'p-local',
         name: 'You',
@@ -465,57 +544,23 @@ function enterLobby(multiplayer: boolean): void {
   phase.value = 'lobby'
 }
 
-function addLobbyPlayer(): void {
-  const trimmed = newPlayerName.value.trim()
-  if (!trimmed) return
-  players.value.push({
-    id: `p-${Date.now()}`,
-    name: trimmed,
-    isHost: false,
-    isReady: true,
-    points: 0,
-    bestRoundScore: null,
-  })
-  newPlayerName.value = ''
-}
-
-function removeLobbyPlayer(id: string): void {
-  players.value = players.value.filter((p) => p.id !== id || p.isHost)
-}
-
-function getModeDurationSeconds(mode: GameMode): number | null {
-  switch (mode) {
-    case 'first-to-solve':
-      return null
-    case 'best-30s':
-      return 30
-    case 'best-1m':
-      return 60
-    case 'best-3m':
-      return 180
-    case 'best-5m':
-      return 300
-    case 'best-10m':
-      return 600
-  }
-}
-
-function clearRoundTimer(): void {
-  if (timerHandle) {
-    clearInterval(timerHandle)
-    timerHandle = null
-  }
-}
-
 function startMatchFromLobby(): void {
   // Ensure at least one operator category is enabled
   const anyEnabled = Object.values(settings.allowedOperators).some(Boolean)
   if (!anyEnabled) {
     settings.allowedOperators.basic = true
   }
-  roundNumber.value = 1
-  matchWinner.value = null
-  for (const p of players.value) {
+
+  if (settings.isMultiplayer) {
+    if (multiplayerHost.value && multiplayerSession.room?.phase !== 'playing') {
+      sendToRoom({ t: 'start-match' })
+    }
+    return
+  }
+
+  localRoundNumber.value = 1
+  localMatchWinner.value = null
+  for (const p of localPlayers.value) {
     p.points = 0
     p.bestRoundScore = null
   }
@@ -523,10 +568,10 @@ function startMatchFromLobby(): void {
 }
 
 function startNewRound(): void {
-  clearRoundTimer()
+  stopDeadlineClock()
   actionError.value = null
-  roundSolutions.value = []
-  roundWinnerId.value = null
+  localRoundSolutions.value = []
+  localRoundWinnerId.value = null
   sawAcceptable = false
   playSfx('deal')
 
@@ -534,41 +579,140 @@ function startNewRound(): void {
   currentHand.value = dealHand(settings.numCards, settings.cardPool)
   workspaces.value = createAllWorkspaces(currentHand.value)
   activeWorkspaceIdx.value = 0
-  for (const p of players.value) {
+  for (const p of localPlayers.value) {
     p.bestRoundScore = null
   }
 
+  remainingSeconds.value = null
   roundStartTimestamp = Date.now()
   phase.value = 'playing'
+}
 
-  if (settings.isMultiplayer) {
-    const duration = getModeDurationSeconds(settings.mode)
-    if (duration !== null) {
-      remainingSeconds.value = duration
-      timerHandle = setInterval(() => {
-        if (remainingSeconds.value !== null && remainingSeconds.value > 0) {
-          remainingSeconds.value--
-          if (remainingSeconds.value <= 5) playSfx('tick')
-          if (remainingSeconds.value <= 0) {
-            finishRound('timer')
-          }
-        }
-      }, 1000)
-    } else {
-      remainingSeconds.value = null
-    }
-  } else {
-    remainingSeconds.value = null
+/* ------------------- server room → local view model bridge ------------------- */
+
+function stopDeadlineClock(): void {
+  if (deadlineTimer) {
+    clearInterval(deadlineTimer)
+    deadlineTimer = null
   }
 }
+
+function refreshRemainingSeconds(): void {
+  const deadline = multiplayerSession.room?.round?.deadline ?? null
+  if (!settings.isMultiplayer || deadline === null) {
+    remainingSeconds.value = null
+    return
+  }
+  const seconds = Math.max(0, Math.ceil((deadline - serverNow()) / 1000))
+  if (seconds !== remainingSeconds.value && seconds > 0 && seconds <= 5) playSfx('tick')
+  remainingSeconds.value = seconds
+}
+
+function startDeadlineClock(): void {
+  stopDeadlineClock()
+  refreshRemainingSeconds()
+  if (multiplayerSession.room?.round?.deadline != null) {
+    deadlineTimer = setInterval(refreshRemainingSeconds, 250)
+  }
+}
+
+/** Mirrors the authoritative room into the screens the game already renders. */
+function applyRoomSnapshot(room: RoomState): void {
+  if (!settings.isMultiplayer) return
+
+  if (room.phase === 'playing' && room.round) {
+    if (room.round.number !== appliedRoundNumber) {
+      appliedRoundNumber = room.round.number
+      actionError.value = null
+      sawAcceptable = false
+      currentTarget.value = room.round.target
+      currentHand.value = room.round.hand
+      workspaces.value = createAllWorkspaces(room.round.hand)
+      activeWorkspaceIdx.value = 0
+      phase.value = 'playing'
+      playSfx('deal')
+      startDeadlineClock()
+    }
+    return
+  }
+
+  if (room.phase === 'round-end') {
+    stopDeadlineClock()
+    phase.value = 'round-end'
+    return
+  }
+
+  if (room.phase === 'game-over') {
+    stopDeadlineClock()
+    // A rematch deals round 1 again; reset so the new deal is always applied.
+    appliedRoundNumber = 0
+    phase.value = 'game-over'
+    return
+  }
+
+  if (room.phase === 'lobby') {
+    appliedRoundNumber = 0
+    stopDeadlineClock()
+    remainingSeconds.value = null
+    phase.value = 'lobby'
+  }
+}
+
+watch(
+  () => multiplayerSession.room,
+  (room) => {
+    if (room) applyRoomSnapshot(room)
+  }
+)
+
+// Non-hosts mirror the host's rules; the host is the source of truth and pushes edits.
+watch(
+  () => multiplayerSession.room?.settings,
+  (remote) => {
+    if (!settings.isMultiplayer || !remote || multiplayerHost.value) return
+    Object.assign(settings, JSON.parse(JSON.stringify(remote))) as GameSettings
+  },
+  { deep: true }
+)
+
+let settingsPushTimer: ReturnType<typeof setTimeout> | null = null
+watch(
+  settings,
+  () => {
+    if (!settings.isMultiplayer || !multiplayerHost.value) return
+    if (multiplayerSession.room?.phase !== 'lobby') return
+    if (settingsPushTimer) clearTimeout(settingsPushTimer)
+    settingsPushTimer = setTimeout(() => {
+      sendToRoom({ t: 'update-settings', settings: JSON.parse(JSON.stringify(settings)) })
+    }, 150)
+  },
+  { deep: true }
+)
 
 function recordPlayerSolutionFromWorkspace(): SubmittedSolution | null {
   const evalRes = currentEvaluation.value
   if (!evalRes || !evalRes.isSingleGroup || !evalRes.acceptable || evalRes.score === null) {
     return null
   }
-  const localPlayer = players.value[0]!
-  const existingIdx = roundSolutions.value.findIndex(
+
+  // Multiplayer scores live on the server; this player only reports the board.
+  if (settings.isMultiplayer) {
+    sendToRoom({
+      t: 'submit',
+      solution: {
+        equation: evalRes.equation,
+        lhs: evalRes.lhs,
+        finalValue: evalRes.finalValue ?? 0,
+        score: evalRes.score,
+        errorPercent: evalRes.errorPercent ?? 0,
+        workspaceIndex: activeWorkspaceIdx.value + 1,
+      },
+    })
+    return null
+  }
+
+  const localPlayer = localPlayers.value[0]!
+  const existingIdx = localRoundSolutions.value.findIndex(
     (s) => s.playerId === localPlayer.id && s.lhs === evalRes.lhs
   )
 
@@ -586,9 +730,9 @@ function recordPlayerSolutionFromWorkspace(): SubmittedSolution | null {
   }
 
   if (existingIdx === -1) {
-    roundSolutions.value.push(entry)
+    localRoundSolutions.value.push(entry)
   } else {
-    roundSolutions.value[existingIdx] = entry
+    localRoundSolutions.value[existingIdx] = entry
   }
 
   if (localPlayer.bestRoundScore === null || entry.score < localPlayer.bestRoundScore) {
@@ -612,10 +756,9 @@ watch(
     }
     sawAcceptable = acceptableNow
     if (acceptableNow) {
+      // Solo keeps a local leaderboard; multiplayer reports the board and lets
+      // the server decide when the round is over.
       recordPlayerSolutionFromWorkspace()
-      if (settings.isMultiplayer && settings.mode === 'first-to-solve') {
-        finishRound('first-to-solve')
-      }
     }
   },
   { deep: true }
@@ -732,83 +875,60 @@ function switchWorkspace(index: number): void {
 }
 
 function finishRound(reason: 'first-to-solve' | 'timer' | 'skip' | 'player-end'): void {
-  clearRoundTimer()
-  recordPlayerSolutionFromWorkspace()
-
-  // In timed multiplayer modes, if other lobby players exist and round wasn't skipped,
-  // check if any sample solutions exist so the round-end screen showcases competitive solutions
-  if (
-    settings.isMultiplayer &&
-    reason !== 'skip' &&
-    reason !== 'first-to-solve' &&
-    players.value.length > 1
-  ) {
-    const enabledBin: BinaryOperator[] = ['add', 'sub', 'mult', 'div']
-    if (settings.allowedOperators.powers) {
-      enabledBin.push('pow', 'root')
+  if (settings.isMultiplayer) {
+    // The server owns round transitions. Hosts can close the round early; the
+    // host-side skip also awards the best submitted board if there is one.
+    if (multiplayerHost.value && multiplayerSession.room?.phase === 'playing') {
+      sendToRoom({ t: 'skip-round' })
     }
-    const samples = findSampleSolutions(
-      currentHand.value,
-      currentTarget.value,
-      settings.approximationPercent,
-      enabledBin,
-      2
-    )
-    const bots = players.value.slice(1)
-    samples.forEach((sample, idx) => {
-      const bot = bots[idx % bots.length]
-      if (!bot) return
-      const alreadyHas = roundSolutions.value.some((s) => s.playerId === bot.id)
-      if (!alreadyHas) {
-        roundSolutions.value.push({
-          id: `bot-sol-${idx}`,
-          playerId: bot.id,
-          playerName: bot.name,
-          equation: sample.equation,
-          lhs: sample.lhs,
-          finalValue: sample.finalValue,
-          score: sample.score,
-          errorPercent: sample.errorPercent,
-          timestampMs: 4500 + idx * 1200,
-          workspaceIndex: 1,
-        })
-        bot.bestRoundScore = sample.score
-      }
-    })
+    return
   }
+
+  stopDeadlineClock()
+  recordPlayerSolutionFromWorkspace()
 
   // Award point to winning player if not skipped and at least one acceptable solution exists
   if (reason !== 'skip' && sortedRoundSolutions.value.length > 0) {
     const bestSol = sortedRoundSolutions.value[0]!
-    roundWinnerId.value = bestSol.playerId
-    const winner = players.value.find((p) => p.id === bestSol.playerId)
+    localRoundWinnerId.value = bestSol.playerId
+    const winner = localPlayers.value.find((p) => p.id === bestSol.playerId)
     if (winner) {
       winner.points += 1
       if (winner.points >= settings.firstToPoints) {
-        matchWinner.value = winner
+        localMatchWinner.value = winner
       }
     }
   } else {
-    roundWinnerId.value = null
+    localRoundWinnerId.value = null
   }
 
   phase.value = 'round-end'
 }
 
 function advanceAfterRoundEnd(): void {
-  if (matchWinner.value) {
+  if (settings.isMultiplayer) {
+    if (multiplayerHost.value && multiplayerSession.room?.phase === 'round-end') {
+      sendToRoom({ t: 'next-round' })
+    }
+    return
+  }
+  if (localMatchWinner.value) {
     phase.value = 'game-over'
     return
   }
-  roundNumber.value += 1
+  localRoundNumber.value += 1
   startNewRound()
 }
 
 function endEntireGameNow(): void {
-  clearRoundTimer()
+  if (settings.isMultiplayer) {
+    if (multiplayerHost.value) sendToRoom({ t: 'end-match' })
+    return
+  }
+  stopDeadlineClock()
   // Determine top scorer if any
-  const sortedPlayers = [...players.value].sort((a, b) => b.points - a.points)
-  matchWinner.value = sortedPlayers[0] && sortedPlayers[0].points > 0 ? sortedPlayers[0] : null
+  const standings = [...localPlayers.value].sort((a, b) => b.points - a.points)
+  localMatchWinner.value = standings[0] && standings[0].points > 0 ? standings[0] : null
   phase.value = 'game-over'
 }
 
@@ -825,6 +945,19 @@ function formatTimer(seconds: number | null): string {
 
 function spriteUrl(name: string): string {
   return `/card-sprites/${name}`
+}
+
+/** 1–9 for the first nine operator slots, 0 for the tenth. */
+function opKeyLabel(index: number): string {
+  return index === 9 ? '0' : String(index + 1)
+}
+
+/** Physical digit key -> operator slot index (Digit1..Digit9, Digit0 last). */
+function opSlotFromCode(code: string): number | null {
+  const match = /^(?:Digit|Numpad)([0-9])$/.exec(code)
+  if (!match) return null
+  const digit = Number(match[1])
+  return digit === 0 ? 9 : digit - 1
 }
 
 function handleKeyDown(e: KeyboardEvent): void {
@@ -864,9 +997,24 @@ function handleKeyDown(e: KeyboardEvent): void {
     handleUngroup()
     return
   }
-  if (key >= '1' && key <= '5' && e.altKey) {
+  // Digit keys: 1–0 applies a binary operator, Shift+1–0 a unary one.
+  const slot = opSlotFromCode(e.code)
+  if (slot !== null) {
+    if (e.altKey) {
+      if (slot < WORKSPACE_COUNT) {
+        e.preventDefault()
+        switchWorkspace(slot)
+      }
+      return
+    }
+    if (e.ctrlKey || e.metaKey) return
+    const ws = activeWorkspace.value
+    if (!ws?.selectedGroupId) return
+    const operators = e.shiftKey ? unaryOperators.value : binaryOperators.value
+    const operator = operators[slot]
+    if (!operator) return
     e.preventDefault()
-    switchWorkspace(Number(key) - 1)
+    handleApplyOperator(operator.id)
   }
 }
 
@@ -882,7 +1030,8 @@ onBeforeUnmount(() => {
   window.removeEventListener('pointermove', handleWindowPointerMove)
   window.removeEventListener('pointerup', handleWindowPointerUp)
   window.removeEventListener('pointercancel', handleWindowPointerUp)
-  clearRoundTimer()
+  stopDeadlineClock()
+  leaveRoom()
   if (impactTimer) clearTimeout(impactTimer)
   cueTimers.forEach((timer) => clearTimeout(timer))
   cueTimers.clear()
@@ -893,76 +1042,63 @@ onBeforeUnmount(() => {
   <div ref="shellRef" class="app-shell" :class="impactKind ? `impact--${impactKind}` : ''">
     <!-- ======================== TITLE SCREEN ======================== -->
     <main v-if="phase === 'title'" class="screen-title" :inert="menuOpen">
-      <div class="title-cabinet">
-        <!-- marquee bulbs -->
-        <div class="marquee-bulbs" aria-hidden="true">
-          <span v-for="n in 22" :key="n" :style="{ animationDelay: `${(n % 6) * 0.12}s` }"></span>
+      <div class="title-stack">
+        <div class="hero-card-fan" aria-hidden="true">
+          <img
+            :src="spriteUrl('ace-of-spades-large.png')"
+            alt="Ace of Spades"
+            class="fan-card fan-card--1 pixel-sprite"
+          />
+          <img
+            :src="spriteUrl('8-of-hearts.png')"
+            alt="8 of Hearts"
+            class="fan-card fan-card--2 pixel-sprite"
+          />
+          <img
+            :src="spriteUrl('3-of-clubs.png')"
+            alt="3 of Clubs"
+            class="fan-card fan-card--3 pixel-sprite"
+          />
+          <img
+            :src="spriteUrl('queen-of-diamonds.png')"
+            alt="Queen of Diamonds"
+            class="fan-card fan-card--4 pixel-sprite"
+          />
         </div>
 
-        <div class="title-cabinet__inner">
-          <div class="hero-card-fan" aria-hidden="true">
-            <img
-              :src="spriteUrl('ace-of-spades-large.png')"
-              alt="Ace of Spades"
-              class="fan-card fan-card--1 pixel-sprite"
-            />
-            <img
-              :src="spriteUrl('8-of-hearts.png')"
-              alt="8 of Hearts"
-              class="fan-card fan-card--2 pixel-sprite"
-            />
-            <img
-              :src="spriteUrl('3-of-clubs.png')"
-              alt="3 of Clubs"
-              class="fan-card fan-card--3 pixel-sprite"
-            />
-            <img
-              :src="spriteUrl('queen-of-diamonds.png')"
-              alt="Queen of Diamonds"
-              class="fan-card fan-card--4 pixel-sprite"
-            />
-          </div>
+        <h1 class="hero-heading">
+          <span class="hero-heading__make">MAKE</span>
+          <span class="hero-heading__num">24</span>
+        </h1>
 
-          <h1 class="hero-heading">
-            <span class="hero-heading__make">MAKE</span>
-            <span class="hero-heading__num">24</span>
-          </h1>
-          <div class="mode-cards">
-            <button
-              type="button"
-              class="mode-card mode-card--solo"
-              data-testid="enter-singleplayer"
-              @click="enterLobby(false)"
-            >
-              <span class="mode-card__icon" aria-hidden="true">♠</span>
-              <span class="mode-card__title">SOLO RUN</span>
-              <span class="mode-card__copy">
-                5 auto-saved workspaces. Tinker, refine, submit whenever you like.
-              </span>
-              <span class="mode-card__cta">Enter singleplayer ▸</span>
-            </button>
+        <div class="mode-cards">
+          <button
+            type="button"
+            class="mode-btn mode-btn--solo"
+            data-testid="enter-singleplayer"
+            @click="enterLobby(false)"
+          >
+            <span class="mode-btn__sigil" aria-hidden="true">♠</span>
+            <span class="mode-btn__body">
+              <span class="mode-btn__title">SOLO RUN</span>
+              <span class="mode-btn__copy">Five workspaces, no clock. Finish when you like.</span>
+            </span>
+            <span class="mode-btn__arrow" aria-hidden="true">▸</span>
+          </button>
 
-            <button
-              type="button"
-              class="mode-card mode-card--versus"
-              data-testid="enter-multiplayer"
-              @click="enterLobby(true)"
-            >
-              <span class="mode-card__icon" aria-hidden="true">♥</span>
-              <span class="mode-card__title">HEAD TO HEAD</span>
-              <span class="mode-card__copy">
-                Race to the first valid solution, or post the cheapest one before the clock
-                dies.
-              </span>
-              <span class="mode-card__cta">Enter multiplayer ▸</span>
-            </button>
-          </div>
-
-          <div class="title-foot">
-            <span class="title-foot__blink">▮</span> INSERT A LITTLE ARITHMETIC
-            <span class="title-foot__sep">·</span>
-            <span class="title-foot__key">ESC</span> MENU
-          </div>
+          <button
+            type="button"
+            class="mode-btn mode-btn--versus"
+            data-testid="enter-multiplayer"
+            @click="enterLobby(true)"
+          >
+            <span class="mode-btn__sigil" aria-hidden="true">♥</span>
+            <span class="mode-btn__body">
+              <span class="mode-btn__title">HEAD TO HEAD</span>
+              <span class="mode-btn__copy">Same hand, one table. First clean solve takes it.</span>
+            </span>
+            <span class="mode-btn__arrow" aria-hidden="true">▸</span>
+          </button>
         </div>
       </div>
     </main>
@@ -1000,30 +1136,74 @@ onBeforeUnmount(() => {
                 <span class="player-name">{{ player.name }}</span>
               </div>
               <div class="player-meta">
-                <span class="player-pts">{{ player.points }} / {{ settings.firstToPoints }} pts</span>
-                <button
-                  v-if="settings.isMultiplayer && !player.isHost"
-                  type="button"
-                  class="btn-kick"
-                  @click="removeLobbyPlayer(player.id)"
+                <span
+                  class="player-ready"
+                  :class="{ 'player-ready--on': player.isHost || player.isReady }"
                 >
-                  ×
-                </button>
+                  {{ player.isHost ? 'HOST' : player.isReady ? 'READY' : 'WAITING' }}
+                </span>
+                <span class="player-pts">{{ player.points }} / {{ settings.firstToPoints }} pts</span>
               </div>
             </div>
           </div>
 
-          <div v-if="settings.isMultiplayer" class="add-player-bar">
-            <input
-              v-model="newPlayerName"
-              type="text"
-              placeholder="Add contender name..."
-              class="input-arcade"
-              @keyup.enter="addLobbyPlayer"
-            />
-            <button type="button" class="btn-arcade" @click="addLobbyPlayer">
-              Add Player
-            </button>
+          <div v-if="settings.isMultiplayer" class="mp-connect">
+            <div class="mp-connect__fields">
+              <label class="mp-field">
+                <span>Name</span>
+                <input
+                  v-model="playerName"
+                  type="text"
+                  class="input-arcade"
+                  maxlength="18"
+                  data-testid="mp-name-input"
+                />
+              </label>
+              <label class="mp-field">
+                <span>Room</span>
+                <input
+                  v-model="roomCodeInput"
+                  type="text"
+                  class="input-arcade"
+                  maxlength="12"
+                  data-testid="mp-room-input"
+                  @keyup.enter="joinTable"
+                />
+              </label>
+            </div>
+            <p class="mp-status" :class="`mp-status--${multiplayerSession.status}`" data-testid="mp-status">
+              {{ connectionLine }}
+            </p>
+            <div class="mp-connect__actions">
+              <button
+                type="button"
+                class="btn-arcade btn-arcade--tiny"
+                data-testid="mp-join-btn"
+                @click="joinTable"
+              >
+                {{ multiplayerSeated ? 'Rejoin' : 'Join Table' }}
+              </button>
+              <button
+                v-if="multiplayerSeated"
+                type="button"
+                class="btn-arcade btn-arcade--tiny"
+                @click="leaveTable"
+              >
+                Leave
+              </button>
+              <button
+                v-if="multiplayerSeated && !multiplayerHost"
+                type="button"
+                class="btn-arcade btn-arcade--tiny btn-arcade--gold"
+                data-testid="mp-ready-btn"
+                @click="toggleReady"
+              >
+                {{ selfPlayer?.isReady ? 'Not Ready' : 'Ready Up' }}
+              </button>
+            </div>
+            <p v-if="multiplayerSeated && !multiplayerReady" class="mp-hint">
+              Everyone has to ready up before the host can deal.
+            </p>
           </div>
 
           <div class="scoring-summary-box">
@@ -1036,7 +1216,7 @@ onBeforeUnmount(() => {
               </li>
               <li>
                 <strong>+200 pts</strong> penalty each time <code>!</code> and
-                <code>Γ</code> are nested directly together
+                <code>Γ⁻¹</code> are nested directly together
               </li>
             </ul>
           </div>
@@ -1046,10 +1226,17 @@ onBeforeUnmount(() => {
               type="button"
               class="btn-arcade btn-arcade--gold btn-start-game"
               data-testid="start-round-btn"
+              :disabled="
+                settings.isMultiplayer &&
+                (!multiplayerHost || !multiplayerSeated || !multiplayerReady)
+              "
               @click="startMatchFromLobby"
             >
-              Deal Cards &amp; Start Match
+              {{ settings.isMultiplayer && !multiplayerHost ? 'Waiting for Host' : 'Deal Cards & Start Match' }}
             </button>
+            <p v-if="settings.isMultiplayer && !multiplayerSeated" class="mp-hint">
+              Join a table to deal a multiplayer match.
+            </p>
           </div>
         </section>
 
@@ -1057,7 +1244,10 @@ onBeforeUnmount(() => {
         <section class="panel-box lobby-settings">
           <h2>Table Settings</h2>
 
-          <div class="settings-form">
+          <div v-if="settings.isMultiplayer && !canEditSettings" class="static-setting-note">
+            Only the host can change the table rules.
+          </div>
+          <fieldset class="settings-form" :disabled="!canEditSettings">
             <!-- Mode (multiplayer only dropdown) -->
             <div class="field-row">
               <label for="setting-mode">Mode</label>
@@ -1202,7 +1392,7 @@ onBeforeUnmount(() => {
                 </label>
                 <label class="toggle-chip">
                   <input v-model="settings.allowedOperators.factorial" type="checkbox" />
-                  <span>Factorials &amp; gamma (x!, Γ(x))</span>
+                  <span>Factorials &amp; gamma (x!, Γ(x), Γ⁻¹(x))</span>
                 </label>
                 <label class="toggle-chip">
                   <input v-model="settings.allowedOperators.trig" type="checkbox" />
@@ -1218,7 +1408,7 @@ onBeforeUnmount(() => {
                 </label>
               </div>
             </div>
-          </div>
+          </fieldset>
         </section>
       </div>
     </main>
@@ -1275,6 +1465,7 @@ onBeforeUnmount(() => {
               type="button"
               class="btn-arcade btn-arcade--gold btn-arcade--block"
               data-testid="finish-round-btn"
+              :disabled="settings.isMultiplayer && !multiplayerHost"
               @click="finishRound('player-end')"
             >
               {{ settings.isMultiplayer ? 'End Round' : 'Finish & Submit' }}
@@ -1283,6 +1474,7 @@ onBeforeUnmount(() => {
               type="button"
               class="btn-arcade btn-arcade--block"
               data-testid="skip-round-btn"
+              :disabled="settings.isMultiplayer && !multiplayerHost"
               @click="finishRound('skip')"
             >
               Skip Round
@@ -1290,6 +1482,7 @@ onBeforeUnmount(() => {
             <button
               type="button"
               class="btn-arcade btn-arcade--crimson btn-arcade--block"
+              :disabled="settings.isMultiplayer && !multiplayerHost"
               @click="endEntireGameNow"
             >
               End Match
@@ -1439,10 +1632,13 @@ onBeforeUnmount(() => {
         <div class="dock-groups">
           <!-- Binary Operators -->
           <div class="op-section">
-            <div class="op-section-title">Binary Operators (+10 pts, 1st selected = left, 2nd = right)</div>
+            <div class="op-section-title">
+              Binary Operators (+10 pts, 1st selected = left, 2nd = right) · keys
+              {{ opKeyLabel(0) }}–{{ opKeyLabel(binaryOperators.length - 1) }}
+            </div>
             <div class="op-buttons">
               <button
-                v-for="op in binaryOperators"
+                v-for="(op, idx) in binaryOperators"
                 :key="op.id"
                 type="button"
                 class="btn-arcade btn-op"
@@ -1453,6 +1649,7 @@ onBeforeUnmount(() => {
                 :data-testid="`op-${op.id}`"
                 @click="handleApplyOperator(op.id)"
               >
+                <span class="op-key">{{ opKeyLabel(idx) }}</span>
                 <span class="op-sym">{{ op.shortSymbol }}</span>
                 <span class="op-lbl">{{ op.label }}</span>
               </button>
@@ -1462,11 +1659,12 @@ onBeforeUnmount(() => {
           <!-- Unary Operators -->
           <div v-if="unaryOperators.length > 0" class="op-section">
             <div class="op-section-title">
-              Unary Operators (+10, +20, +30… stacked; ! &amp; Γ nested = +200)
+              Unary Operators (+10, +20, +30… stacked; ! &amp; Γ⁻¹ nested = +200) · shift +
+              {{ opKeyLabel(0) }}–{{ opKeyLabel(unaryOperators.length - 1) }}
             </div>
             <div class="op-buttons">
               <button
-                v-for="op in unaryOperators"
+                v-for="(op, idx) in unaryOperators"
                 :key="op.id"
                 type="button"
                 class="btn-arcade btn-op btn-op--unary"
@@ -1474,6 +1672,7 @@ onBeforeUnmount(() => {
                 :data-testid="`op-${op.id}`"
                 @click="handleApplyOperator(op.id)"
               >
+                <span class="op-key">⇧{{ opKeyLabel(idx) }}</span>
                 <span class="op-sym">{{ op.shortSymbol }}</span>
                 <span class="op-lbl">{{ op.label }}</span>
               </button>
@@ -1602,6 +1801,7 @@ onBeforeUnmount(() => {
             type="button"
             class="btn-arcade btn-arcade--gold"
             data-testid="next-round-btn"
+            :disabled="settings.isMultiplayer && !multiplayerHost"
             @click="advanceAfterRoundEnd"
           >
             {{ matchWinner ? 'View Match Winner' : 'Deal Next Round' }}
@@ -1612,6 +1812,7 @@ onBeforeUnmount(() => {
           <button
             type="button"
             class="btn-arcade btn-arcade--crimson"
+            :disabled="settings.isMultiplayer && !multiplayerHost"
             @click="endEntireGameNow"
           >
             End Game
@@ -1656,6 +1857,7 @@ onBeforeUnmount(() => {
           <button
             type="button"
             class="btn-arcade btn-arcade--gold"
+            :disabled="settings.isMultiplayer && !multiplayerHost"
             @click="startMatchFromLobby"
           >
             Play Again
@@ -1823,48 +2025,50 @@ onBeforeUnmount(() => {
   animation: menu-fade 0.14s ease-out;
 }
 
-/* Title screen: an arcade cabinet marquee */
+/* Title screen: full-bleed splash, no cabinet frame */
 .screen-title {
   flex: 1;
+  position: relative;
   display: grid;
   place-items: center;
-  padding: 28px 20px 42px;
+  padding: clamp(30px, 6vh, 70px) 24px clamp(40px, 7vh, 80px);
+  overflow: hidden;
 }
 
-.title-cabinet {
-  position: relative;
-  width: min(900px, 100%);
+/* Warm spotlight behind the logo so the artwork sits on something */
+.screen-title::before {
+  content: '';
+  position: absolute;
+  inset: -10% -5%;
   background:
-    radial-gradient(circle at 50% 0%, rgba(254, 74, 73, 0.16) 0%, transparent 55%),
-    linear-gradient(180deg, #241a34 0%, #130f1e 58%, #0b0912 100%);
-  border: 5px solid var(--gold);
-  outline: 4px solid #09080f;
-  box-shadow:
-    inset 0 0 70px rgba(255, 190, 11, 0.1),
-    0 14px 0 #09080f,
-    0 0 0 9px rgba(254, 74, 73, 0.32);
-  padding: 18px 22px 22px;
+    radial-gradient(ellipse 46% 40% at 50% 30%, rgba(255, 190, 11, 0.18), transparent 70%),
+    radial-gradient(ellipse 60% 34% at 50% 88%, rgba(254, 74, 73, 0.14), transparent 72%);
+  pointer-events: none;
 }
 
-.marquee-bulbs {
-  display: flex;
-  justify-content: space-between;
-  padding: 0 4px 12px;
+/* Faint oversized suits, pixel-dithered into the felt */
+.screen-title::after {
+  content: '♠ ♥ ♣ ♦';
+  position: absolute;
+  inset: auto 0 -2vh;
+  font-family: var(--font-display);
+  font-size: clamp(9rem, 26vw, 22rem);
+  letter-spacing: -0.02em;
+  text-align: center;
+  color: rgba(247, 240, 224, 0.035);
+  pointer-events: none;
+  user-select: none;
 }
 
-.marquee-bulbs span {
-  width: 9px;
-  height: 9px;
-  background: var(--gold);
-  border: 2px solid #09080f;
-  box-shadow: 0 0 9px var(--gold);
-  animation: bulb-flash 1.5s steps(2, end) infinite;
-}
-
-.title-cabinet__inner {
+.title-stack {
+  position: relative;
+  z-index: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
+  gap: clamp(14px, 2.4vh, 28px);
+  width: min(960px, 100%);
+  max-width: 100%;
   text-align: center;
 }
 
@@ -1872,20 +2076,21 @@ onBeforeUnmount(() => {
   display: flex;
   justify-content: center;
   align-items: center;
-  margin: 6px 0 16px;
+  max-width: 100%;
 }
 
+/* Cards scale with the shorter axis so the fan never spills off narrow phones */
 .fan-card {
   display: block;
   width: auto;
-  height: 118px;
-  margin: 0 -9px;
-  filter: drop-shadow(0 5px 0 rgba(12, 9, 16, 0.85));
+  height: clamp(104px, min(26vh, 26vw), 240px);
+  margin: 0 clamp(-20px, -1.4vw, -6px);
+  filter: drop-shadow(0 8px 0 rgba(12, 9, 16, 0.85));
   animation: fan-bob 3.4s ease-in-out infinite;
 }
 
 .fan-card--1 {
-  transform: rotate(-11deg) translateY(7px);
+  transform: rotate(-12deg) translateY(10px);
   animation-delay: 0s;
 }
 .fan-card--2 {
@@ -1897,7 +2102,7 @@ onBeforeUnmount(() => {
   animation-delay: 0.5s;
 }
 .fan-card--4 {
-  transform: rotate(11deg) translateY(7px);
+  transform: rotate(12deg) translateY(10px);
   animation-delay: 0.75s;
 }
 
@@ -1905,154 +2110,136 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: baseline;
   justify-content: center;
-  gap: 16px;
-  margin: 0 0 22px;
-  line-height: 0.9;
+  gap: clamp(10px, 1.8vw, 26px);
+  margin: 0;
+  line-height: 0.82;
 }
 
 .hero-heading__make {
   font-family: var(--font-display);
-  font-size: 2.2rem;
+  font-size: clamp(1.5rem, min(3.8vw, 5vh), 3.2rem);
   color: var(--ink-cream);
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
   text-shadow:
-    0 4px 0 var(--crimson-dark),
-    0 8px 0 #09080f;
+    0 5px 0 var(--crimson-dark),
+    0 10px 0 #09080f,
+    0 14px 26px rgba(9, 8, 15, 0.65);
 }
 
 .hero-heading__num {
   font-family: var(--font-display);
-  font-size: 4.6rem;
+  font-size: clamp(3.4rem, min(13.5vw, 22vh), 10.5rem);
   color: var(--gold-bright);
   text-shadow:
-    0 4px 0 #b06b00,
-    0 9px 0 #09080f,
-    0 0 30px rgba(255, 190, 11, 0.45);
+    0 6px 0 #b06b00,
+    0 13px 0 #09080f,
+    0 0 42px rgba(255, 190, 11, 0.5);
   animation: title-pulse 2.6s ease-in-out infinite;
 }
 
 .mode-cards {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 18px;
-  width: 100%;
-  margin-top: 0;
-  text-align: left;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: clamp(12px, 1.6vw, 20px);
+  width: min(860px, 100%);
+  margin-top: clamp(4px, 1.6vh, 16px);
 }
 
-.mode-card {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 8px;
-  padding: 16px 16px 14px;
-  background: linear-gradient(180deg, #251e37 0%, #171226 100%);
-  border: 3px solid #4a4166;
-  outline: 3px solid #09080f;
-  box-shadow: 0 7px 0 #09080f;
+/* Chunky arcade slab buttons: sigil, label, arrow */
+.mode-btn {
+  --accent: #72efdd;
+  --accent-glow: rgba(114, 239, 221, 0.35);
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding: 18px 20px 17px;
+  text-align: left;
   font-family: inherit;
   color: inherit;
+  background: linear-gradient(180deg, #2b2239 0%, #151021 100%);
+  border: 3px solid #3c3357;
+  outline: 3px solid #09080f;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.09),
+    0 8px 0 #09080f;
   cursor: pointer;
-  transition: transform 0.12s cubic-bezier(0.22, 1, 0.36, 1), border-color 0.14s ease,
-    box-shadow 0.12s ease;
+  transition:
+    transform 0.14s cubic-bezier(0.22, 1, 0.36, 1),
+    border-color 0.16s ease,
+    box-shadow 0.16s ease;
 }
 
-.mode-card:hover,
-.mode-card:focus-visible {
-  transform: translateY(-5px) rotate(-0.4deg);
-  box-shadow: 0 12px 0 #09080f;
+/* Coloured lip across the top, like a lit cabinet button */
+.mode-btn::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto;
+  height: 4px;
+  background: var(--accent);
+  opacity: 0.75;
 }
 
-.mode-card:active {
+.mode-btn--versus {
+  --accent: #ff8fa3;
+  --accent-glow: rgba(254, 74, 73, 0.4);
+}
+
+.mode-btn:hover,
+.mode-btn:focus-visible {
+  transform: translateY(-6px);
+  border-color: var(--accent);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 14px 0 #09080f,
+    0 0 26px var(--accent-glow);
+}
+
+.mode-btn:active {
   transform: translateY(3px);
-  box-shadow: 0 3px 0 #09080f;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 3px 0 #09080f;
 }
 
-.mode-card--solo:hover,
-.mode-card--solo:focus-visible {
-  border-color: var(--emerald);
-}
-
-.mode-card--versus:hover,
-.mode-card--versus:focus-visible {
-  border-color: var(--crimson);
-}
-
-.mode-card__icon {
-  font-size: 1.9rem;
+.mode-btn__sigil {
+  font-size: 2rem;
   line-height: 1;
-  color: var(--gold);
+  color: var(--accent);
   text-shadow: 0 3px 0 #09080f;
 }
 
-.mode-card--solo .mode-card__icon {
-  color: #72efdd;
+.mode-btn__body {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
 }
 
-.mode-card--versus .mode-card__icon {
-  color: #ff8fa3;
-}
-
-.mode-card__title {
+.mode-btn__title {
   font-family: var(--font-display);
-  font-size: 0.95rem;
-  color: var(--gold);
+  font-size: clamp(0.9rem, 1.5vw, 1.05rem);
   letter-spacing: 0.06em;
+  color: var(--gold);
 }
 
-.mode-card__copy {
-  font-size: 0.84rem;
-  line-height: 1.45;
+.mode-btn__copy {
+  font-size: 0.82rem;
+  line-height: 1.4;
   color: var(--ink-muted);
 }
 
-.mode-card__cta {
-  margin-top: 6px;
+.mode-btn__arrow {
   font-family: var(--font-pixel);
-  font-size: 0.66rem;
-  letter-spacing: 0.1em;
-  padding: 5px 9px;
-  background: var(--gold);
-  color: #15111e;
-  border: 2px solid #fff9db;
+  font-size: 0.9rem;
+  color: var(--accent);
+  transition: translate 0.16s ease;
 }
 
-.mode-card--versus .mode-card__cta {
-  background: var(--crimson);
-  color: #fff;
-  border-color: #fff3e6;
-}
-
-.title-foot {
-  margin-top: 20px;
-  font-family: var(--font-pixel);
-  font-size: 0.58rem;
-  letter-spacing: 0.22em;
-  color: var(--ink-muted);
-}
-
-.title-foot__blink {
-  color: var(--emerald);
-  animation: cursor-blink 1s steps(2, end) infinite;
-}
-
-.title-foot__sep {
-  opacity: 0.45;
-  margin: 0 8px;
-}
-
-.title-foot__key {
-  border: 1px solid currentColor;
-  color: var(--ink-cream);
-  padding: 0 4px;
-  margin-right: 4px;
-}
-
-@keyframes bulb-flash {
-  50% {
-    background: var(--crimson);
-    box-shadow: 0 0 11px var(--crimson);
-  }
+.mode-btn:hover .mode-btn__arrow,
+.mode-btn:focus-visible .mode-btn__arrow {
+  translate: 4px 0;
 }
 
 @keyframes fan-bob {
@@ -2075,24 +2262,25 @@ onBeforeUnmount(() => {
   }
 }
 
-@keyframes cursor-blink {
-  50% {
-    opacity: 0;
-  }
-}
-
 @media (max-width: 760px) {
+  .screen-title {
+    padding: 24px 18px 32px;
+  }
   .mode-cards {
     grid-template-columns: 1fr;
+    width: min(420px, 100%);
+  }
+  .mode-btn {
+    padding: 14px 16px;
   }
   .hero-heading {
     flex-direction: column;
     align-items: center;
-    gap: 4px;
+    gap: 2px;
   }
   .hero-heading__num {
-    font-size: 3.6rem;
-    margin-top: 8px;
+    font-size: clamp(4rem, 26vw, 6rem);
+    margin-top: 6px;
   }
 }
 
@@ -2230,20 +2418,87 @@ onBeforeUnmount(() => {
   color: var(--gold);
 }
 
-.btn-kick {
-  background: var(--crimson);
-  color: #fff;
-  border: none;
-  width: 24px;
-  height: 24px;
-  cursor: pointer;
-  font-weight: 900;
+.player-ready {
+  font-family: var(--font-pixel);
+  font-size: 0.5rem;
+  letter-spacing: 0.06em;
+  padding: 3px 6px;
+  border: 1px solid rgba(242, 201, 76, 0.28);
+  color: rgba(247, 240, 224, 0.5);
 }
 
-.add-player-bar {
+.player-ready--on {
+  color: #0b0f14;
+  background: #72efdd;
+  border-color: #72efdd;
+}
+
+.mp-connect {
   display: flex;
-  gap: 8px;
+  flex-direction: column;
+  gap: 10px;
   margin-bottom: 18px;
+  padding: 12px;
+  border: 2px dashed rgba(242, 201, 76, 0.28);
+  background: rgba(8, 10, 16, 0.45);
+}
+
+.mp-connect__fields {
+  display: flex;
+  gap: 10px;
+}
+
+.mp-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  font-family: var(--font-pixel);
+  font-size: 0.55rem;
+  letter-spacing: 0.08em;
+  color: rgba(247, 240, 224, 0.65);
+}
+
+.mp-connect__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.mp-status {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  line-height: 1.35;
+  color: rgba(247, 240, 224, 0.72);
+  word-break: break-word;
+}
+
+.mp-status--connected {
+  color: #72efdd;
+}
+
+.mp-status--error,
+.mp-status--disconnected {
+  color: #ff8f8f;
+}
+
+.mp-hint {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: rgba(247, 240, 224, 0.55);
+}
+
+fieldset.settings-form {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+
+fieldset.settings-form:disabled {
+  opacity: 0.55;
 }
 
 .input-arcade {
@@ -2789,10 +3044,32 @@ onBeforeUnmount(() => {
 }
 
 .btn-op {
+  position: relative;
   min-width: 68px;
   flex-direction: column;
   gap: 1px;
   padding: 5px 10px;
+}
+
+.op-key {
+  position: absolute;
+  top: 1px;
+  right: 3px;
+  font-family: var(--font-pixel);
+  font-size: 0.5rem;
+  line-height: 1;
+  letter-spacing: 0.04em;
+  color: var(--gold-bright);
+  opacity: 0.75;
+  pointer-events: none;
+}
+
+.btn-op--unary .op-key {
+  color: #72efdd;
+}
+
+.btn-op:disabled .op-key {
+  opacity: 0.4;
 }
 
 .btn-op--active {

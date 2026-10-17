@@ -32,6 +32,7 @@ export type BinaryOperator =
 export type UnaryOperator =
   | 'fact'
   | 'gamma'
+  | 'invgamma'
   | 'sin'
   | 'cos'
   | 'tan'

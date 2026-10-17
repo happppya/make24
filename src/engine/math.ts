@@ -83,6 +83,15 @@ export const OPERATOR_CATALOG: OperatorMeta[] = [
     description: 'Γ(x)',
     hotkey: 'g',
   },
+  {
+    id: 'invgamma',
+    arity: 'unary',
+    category: 'factorial',
+    label: 'Inv. Gamma',
+    shortSymbol: 'Γ⁻¹(x)',
+    description: 'x where Γ(x) = a',
+    hotkey: 'G',
+  },
   // Basic trig (degrees)
   {
     id: 'sin',
@@ -150,6 +159,7 @@ export function isUnaryOperator(op: OperatorId): op is UnaryOperator {
   return (
     op === 'fact' ||
     op === 'gamma' ||
+    op === 'invgamma' ||
     op === 'sin' ||
     op === 'cos' ||
     op === 'tan' ||
@@ -246,6 +256,56 @@ export function realFactorial(x: number): number | null {
   return realGamma(x + 1)
 }
 
+/** Where Γ bottoms out on the positive axis: Γ(1.46163214…) ≈ 0.88560319. */
+export const GAMMA_MIN_X = 1.4616321449683623
+export const GAMMA_MIN_VALUE = 0.8856031944108887
+
+/**
+ * Inverse gamma: the x with Γ(x) = y.
+ *
+ * On the positive axis Γ is U-shaped — it falls from +∞ to its minimum near
+ * x ≈ 1.4616, then climbs again — so most inputs have two solutions. We expose
+ * the principal (increasing) branch, the one that round-trips ordinary values:
+ * Γ⁻¹(24) = 5, Γ⁻¹(120) = 6. Inputs at or below the minimum, and non-positive
+ * inputs, have no solution on that branch.
+ */
+export function realInverseGamma(y: number): number | null {
+  if (!Number.isFinite(y) || y <= 0) return null
+  if (y < GAMMA_MIN_VALUE - 1e-12) return null
+  if (y <= GAMMA_MIN_VALUE + 1e-12) return cleanFloat(GAMMA_MIN_X)
+
+  // Bracket the root on the increasing half, widening until Γ overtakes y.
+  let lo = GAMMA_MIN_X
+  let hi = GAMMA_MIN_X + 1
+  for (let i = 0; i < 64; i++) {
+    const val = realGamma(hi)
+    // A null here means Γ already overflowed double precision, so it is above y.
+    if (val === null || val >= y) break
+    lo = hi
+    hi = GAMMA_MIN_X + (hi - GAMMA_MIN_X) * 2
+  }
+
+  // Bisection is slower than Newton but needs no derivative and cannot diverge.
+  for (let i = 0; i < 200; i++) {
+    const mid = (lo + hi) / 2
+    const val = realGamma(mid)
+    if (val === null || val >= y) hi = mid
+    else lo = mid
+    if (hi - lo < 1e-13) break
+  }
+
+  // realGamma snaps arguments within 1e-9 of an integer to the exact value, which
+  // leaves a thin flat band around roots like Γ⁻¹(24) = 5. Prefer the integer
+  // whenever it really solves the equation.
+  const root = (lo + hi) / 2
+  const nearestInt = Math.round(root)
+  if (Math.abs(root - nearestInt) < 1e-6) {
+    const check = realGamma(nearestInt)
+    if (check !== null && Math.abs(check - y) <= Math.abs(y) * 1e-9) return nearestInt
+  }
+  return cleanFloat(root)
+}
+
 export interface EvalResult {
   ok: boolean
   value: number
@@ -286,6 +346,22 @@ export function applyUnaryOperator(op: UnaryOperator, x: number): EvalResult {
         ok: true,
         value: val,
         headerText: `Γ(${xStr}) = ${formatNumber(val)}`,
+      }
+    }
+    case 'invgamma': {
+      const val = realInverseGamma(x)
+      if (val === null) {
+        return {
+          ok: false,
+          value: NaN,
+          headerText: '',
+          error: `Γ⁻¹(${xStr}) is undefined.`,
+        }
+      }
+      return {
+        ok: true,
+        value: val,
+        headerText: `Γ⁻¹(${xStr}) = ${formatNumber(val)}`,
       }
     }
     case 'sin': {
@@ -561,8 +637,9 @@ export function checkTargetAcceptance(
  *   So, using o(o(x)) incurs 30 points while o(o(o(x))) incurs 60 points.
  * - Nested unary operators on the same group count as a consecutive unary,
  *   and a binary operation resets the chain.
- * - Factorial and gamma nested together incur 200 points each time when nested:
- *   e.g. factorial(gamma(x)) or gamma(factorial(x)).
+ * - Factorial and inverse gamma nested together incur 200 points each time when
+ *   nested: e.g. factorial(Γ⁻¹(x)) or Γ⁻¹(factorial(x)). Factorial and plain
+ *   gamma together carry no extra penalty.
  */
 export function calculateScore(node: ExprNode): number {
   function walk(curr: ExprNode, unaryDepthAbove: number): number {
@@ -577,13 +654,13 @@ export function calculateScore(node: ExprNode): number {
     const currentLayer = unaryDepthAbove + 1
     let layerCost = currentLayer * 10
 
-    // Check if factorial and gamma are nested together directly
+    // Check if factorial and inverse gamma are nested together directly
     if (curr.operand.kind === 'unary') {
       const outerOp = curr.operator
       const innerOp = curr.operand.operator
       if (
-        (outerOp === 'fact' && innerOp === 'gamma') ||
-        (outerOp === 'gamma' && innerOp === 'fact')
+        (outerOp === 'fact' && innerOp === 'invgamma') ||
+        (outerOp === 'invgamma' && innerOp === 'fact')
       ) {
         layerCost += 200
       }
@@ -628,6 +705,8 @@ export function formatExpressionLhs(node: ExprNode): string {
         return needsParens ? `(${inner})!` : `${inner}!`
       case 'gamma':
         return `Γ(${inner})`
+      case 'invgamma':
+        return `Γ⁻¹(${inner})`
       case 'sin':
         return `sin(${inner}°)`
       case 'cos':

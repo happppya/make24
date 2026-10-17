@@ -35,7 +35,7 @@ Both singleplayer and multiplayer modes can enter a lobby screen (where players 
 - ****Allowed operators:****
 - ****"Basic"**** (add, sub, mult, divide) are all binary operators.
 - ****"Powers and roots"**** are binary operators: for example, 5 root 3 consumes a 5 and a 3 and produces 5 ^ (1/3), or 5 power 3 produces 5^3.
-- ****"Factorials and gamma"**** are unary operators. They are not banned when used together, but factorial and gamma nested together incur 200 points each time, for example factorial(gamma(x)) or gamma(factorial(x)). Factorials and gammas can be used on all real numbers (using the gamma definition for factorial), except for when the result would be undefined.
+- ****"Factorials and gamma"**** are unary operators: factorial (x!), gamma (Γ(x)), and inverse gamma (Γ⁻¹(x), the value whose gamma is x). They are not banned when used together, but factorial and inverse gamma nested together incur 200 points each time, for example factorial(inverseGamma(x)) or inverseGamma(factorial(x)). Factorials and gammas can be used on all real numbers (using the gamma definition for factorial), except for when the result would be undefined. Inverse gamma uses the principal branch (the solution at or above the gamma minimum of ≈0.8856), so it is undefined for inputs at or below that minimum and for non-positive inputs.
 - ****"Basic trig"**** allows unary operators sin, cos, and tan in degrees.
 - ****"Inverse"**** allows the usage of a unary operator that gives a number's inverse.
 - ****"Bit shifting"**** allows the usage of bit shifting operators like RSHIFT and LSHIFT, for example LSHIFT(5,3) shifts the bits of 5 = 101 to the left by 3 slots.
@@ -65,7 +65,7 @@ To work with cards:
 
 ### Score
 
-Lower score is better. 10 score is added for each binary operator used. The unary penalty increases per layer: the first unary operator is 10, then the second is 20, then the third is 30, and so on with 40, 50, 60... So, using o(o(x)) would incur 30 points while o(o(o(x))) would incur 60 points. Nested unary operators on the same group count as a consecutive unary, and a binary operation resets the chain. Factorial and gamma nested together incur 200 points each time when nested.
+Lower score is better. 10 score is added for each binary operator used. The unary penalty increases per layer: the first unary operator is 10, then the second is 20, then the third is 30, and so on with 40, 50, 60... So, using o(o(x)) would incur 30 points while o(o(o(x))) would incur 60 points. Nested unary operators on the same group count as a consecutive unary, and a binary operation resets the chain. Factorial and inverse gamma nested together incur 200 points each time when nested; factorial and gamma together carry no extra penalty.
 
 ### Undo / Redo
 

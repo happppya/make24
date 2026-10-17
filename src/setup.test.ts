@@ -1,4 +1,5 @@
 import { describe, expect, it, beforeEach } from 'vitest'
+import { nextTick } from 'vue'
 import { mount } from '@vue/test-utils'
 import App from './App.vue'
 import {
@@ -10,9 +11,12 @@ import {
   formatFullEquation,
   realFactorial,
   realGamma,
+  realInverseGamma,
 } from './engine/math'
 import { buildDeckPool, createCard, dealHand, generateTargetNumber } from './engine/deck'
 import {
+  DEFAULT_CARDS_PER_ROW,
+  DEFAULT_CARD_SPACING_X,
   WORKSPACE_COUNT,
   applyOperatorInWorkspace,
   createAllWorkspaces,
@@ -79,6 +83,28 @@ describe('Make 24 Remastered — Math & Operators Engine', () => {
       value: 24,
       headerText: '4! = 24',
     })
+  })
+
+  it('inverts gamma on its principal branch and rejects values below its minimum', () => {
+    // Γ(5) = 24, Γ(6) = 120, Γ(4) = 6, Γ(2) = Γ(1) = 1 (principal branch picks 2)
+    expect(realInverseGamma(24)).toBe(5)
+    expect(realInverseGamma(120)).toBe(6)
+    expect(realInverseGamma(6)).toBe(4)
+    expect(realInverseGamma(1)).toBe(2)
+    expect(realGamma(realInverseGamma(20)!)).toBeCloseTo(20, 5)
+
+    // Γ bottoms out at ≈0.8856, so anything at or below it — and any
+    // non-positive input — has no solution on that branch
+    expect(realInverseGamma(0.5)).toBeNull()
+    expect(realInverseGamma(0)).toBeNull()
+    expect(realInverseGamma(-2)).toBeNull()
+
+    expect(applyUnaryOperator('invgamma', 24)).toEqual({
+      ok: true,
+      value: 5,
+      headerText: 'Γ⁻¹(24) = 5',
+    })
+    expect(applyUnaryOperator('invgamma', 0.5).ok).toBe(false)
   })
 
   it('evaluates trig operators in degrees', () => {
@@ -164,21 +190,28 @@ describe('Make 24 Remastered — Scoring & Equation Formatting', () => {
     expect(calculateScore(ws.groups[0]!)).toBe(60)
   })
 
-  it('adds 200-point penalty each time factorial and gamma are nested together', () => {
+  it('adds 200-point penalty each time factorial and inverse gamma are nested together', () => {
     const ws = createWorkspace(0, [sampleCards[1]!]) // card 3
     selectGroupInWorkspace(ws, ws.groups[0]!.id)
 
-    // gamma(3) = 2 -> 1st unary = 10
-    applyOperatorInWorkspace(ws, 'gamma')
+    // Γ⁻¹(3) -> 1st unary = 10
+    applyOperatorInWorkspace(ws, 'invgamma')
     expect(calculateScore(ws.groups[0]!)).toBe(10)
 
-    // factorial(gamma(3)) -> 2nd unary (20) + 200 nested penalty + 10 = 230
+    // factorial(Γ⁻¹(3)) -> 2nd unary (20) + 200 nested penalty + 10 = 230
     applyOperatorInWorkspace(ws, 'fact')
     expect(calculateScore(ws.groups[0]!)).toBe(230)
 
-    // gamma(factorial(gamma(3))) -> 3rd unary (30) + 200 nested penalty + 230 = 460
-    applyOperatorInWorkspace(ws, 'gamma')
+    // Γ⁻¹(factorial(Γ⁻¹(3))) -> 3rd unary (30) + 200 nested penalty + 230 = 460
+    applyOperatorInWorkspace(ws, 'invgamma')
     expect(calculateScore(ws.groups[0]!)).toBe(460)
+
+    // Factorial and plain gamma together are merely consecutive unaries: 10 + 20
+    const plain = createWorkspace(0, [sampleCards[1]!])
+    selectGroupInWorkspace(plain, plain.groups[0]!.id)
+    applyOperatorInWorkspace(plain, 'gamma')
+    applyOperatorInWorkspace(plain, 'fact')
+    expect(calculateScore(plain.groups[0]!)).toBe(30)
   })
 
   it('resets consecutive unary chain when combined with a binary operator', () => {
@@ -371,6 +404,35 @@ describe('Make 24 Remastered — Deck Pool, 5 Workspaces & Undo/Redo', () => {
     expect(rightPos.x - leftPos.x).toBeGreaterThan(80)
     expect(Math.abs(rightPos.y - leftPos.y)).toBeGreaterThan(0)
   })
+
+  it('deals six cards per row and wraps the rest onto a centred second row', () => {
+    const hand = Array.from({ length: 10 }, (_, i) => createCard(2, 'spades', `wrap-${i}`))
+    const ws = createWorkspace(0, hand)
+    const spots = ws.groups.map((group) => getGroupPosition(ws, group.id))
+    const firstRow = spots.slice(0, DEFAULT_CARDS_PER_ROW)
+    const secondRow = spots.slice(DEFAULT_CARDS_PER_ROW)
+
+    // Row one holds exactly six cards on one baseline, at the usual spacing
+    expect(firstRow).toHaveLength(6)
+    expect(new Set(firstRow.map((p) => p.y)).size).toBe(1)
+    expect(firstRow[5]!.x - firstRow[0]!.x).toBe(DEFAULT_CARD_SPACING_X * 5)
+
+    // The overflow forms a shorter second row below it
+    expect(secondRow).toHaveLength(4)
+    expect(new Set(secondRow.map((p) => p.y)).size).toBe(1)
+    expect(secondRow[0]!.y).toBeGreaterThan(firstRow[0]!.y)
+
+    // Both rows are horizontally centred on the same axis
+    const firstCentre = (firstRow[0]!.x + firstRow[5]!.x) / 2
+    const secondCentre = (secondRow[0]!.x + secondRow[3]!.x) / 2
+    expect(Math.abs(firstCentre - secondCentre)).toBeLessThan(1)
+
+    // A single overflow card sits on that centre line too, not pushed to the left
+    const seven = createWorkspace(0, hand.slice(0, 7))
+    const overflow = getGroupPosition(seven, seven.groups[6]!.id)
+    expect(Math.abs(overflow.x - firstCentre)).toBeLessThan(1)
+    expect(overflow.y).toBe(secondRow[0]!.y)
+  })
 })
 
 describe('Make 24 Remastered — Playable UI Flow (App.vue)', () => {
@@ -438,6 +500,38 @@ describe('Make 24 Remastered — Playable UI Flow (App.vue)', () => {
     // Finish round and verify transition to Round End screen
     await wrapper.find('[data-testid="finish-round-btn"]').trigger('click')
     expect(wrapper.find('[data-testid="next-round-btn"]').exists()).toBe(true)
+  })
+
+  it('applies operators from the digit hotkeys (1–0 binary, Shift+1–0 unary)', async () => {
+    const wrapper = mount(App)
+    await wrapper.find('[data-testid="enter-singleplayer"]').trigger('click')
+    await wrapper.find('[data-testid="start-round-btn"]').trigger('click')
+
+    await wrapper.findAll('.expr-node--root')[0]!.trigger('click')
+
+    // Shift+1 -> first unary operator (factorial) wraps the selected card
+    window.dispatchEvent(
+      new KeyboardEvent('keydown', { key: '!', code: 'Digit1', shiftKey: true })
+    )
+    await nextTick()
+    expect(wrapper.find('.group-header-eq').exists()).toBe(true)
+
+    // Undo, then plain 1 -> first binary operator (add) waits for a right operand
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', code: 'KeyZ' }))
+    await nextTick()
+    expect(wrapper.find('.group-header-eq').exists()).toBe(false)
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: '1', code: 'Digit1' }))
+    await nextTick()
+    expect(wrapper.find('[data-testid="pending-operator-banner"]').exists()).toBe(true)
+
+    // Buttons advertise the same bindings: 1–6 binary, ⇧1–2 unary by default
+    const binaryKeys = wrapper.findAll('.btn-op:not(.btn-op--unary) .op-key').map((n) => n.text())
+    const unaryKeys = wrapper.findAll('.btn-op--unary .op-key').map((n) => n.text())
+    expect(binaryKeys).toEqual(['1', '2', '3', '4', '5', '6'])
+    expect(unaryKeys).toEqual(['⇧1', '⇧2', '⇧3'])
+
+    wrapper.unmount()
   })
 })
 

@@ -18,7 +18,12 @@ combine dealt cards with operators to hit a target number; lower score wins.
   using the Preview/browser to check changes — it is slow and rarely needed.
   Only open it when the user asks, or when a behaviour genuinely cannot be
   checked any other way (say why in that case).
-- Serverside (not started): will run on Oracle Cloud Infrastructure free tier.
+- Serverside: `server/` is a `node:http` + `ws` table server sharing the room
+  reducer in `src/multiplayer/` (protocol, rules, transports). Run it locally
+  with `npm run dev:server` (port 8787) alongside `npm run dev`; `npm run server`
+  runs it once. See `notes/multiplayer.md` for the architecture, the wire
+  protocol and the cloud swap path (target host: Oracle Cloud Infrastructure
+  free tier).
 - Card art: 64 pixel-art sprites in `public/card-sprites/` with descriptive
   names (`queen-of-hearts.png`, `10-of-clubs.png`, `joker-red.png`,
   `card-back-red.png`, …). Served as static files; all 64 ship in `dist/`.

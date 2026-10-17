@@ -21,6 +21,9 @@ import type {
 
 export const WORKSPACE_COUNT = 5
 export const DEFAULT_CARD_SPACING_X = 148
+export const DEFAULT_CARD_SPACING_Y = 168
+/** Dealt cards wrap onto a new row after this many, instead of one endless row. */
+export const DEFAULT_CARDS_PER_ROW = 6
 export const DEFAULT_CANVAS_CENTER_X = 480
 export const DEFAULT_CANVAS_CENTER_Y = 130
 
@@ -119,15 +122,25 @@ export function clonePositions(
 
 export function createInitialPositions(groups: ExprNode[]): Record<string, GroupPosition> {
   const positions: Record<string, GroupPosition> = {}
-  const count = groups.length
-  const totalWidth = Math.max(0, (count - 1) * DEFAULT_CARD_SPACING_X)
-  const startX = Math.round(DEFAULT_CANVAS_CENTER_X - totalWidth / 2)
+  const rows: ExprNode[][] = []
+  for (let i = 0; i < groups.length; i += DEFAULT_CARDS_PER_ROW) {
+    rows.push(groups.slice(i, i + DEFAULT_CARDS_PER_ROW))
+  }
 
-  groups.forEach((g, idx) => {
-    positions[g.id] = {
-      x: startX + idx * DEFAULT_CARD_SPACING_X,
-      y: DEFAULT_CANVAS_CENTER_Y,
-    }
+  // Rows are stacked downward and centred on the same resting point a single
+  // row used, so small hands look unchanged while big ones stay inside the viewport.
+  const blockHeight = Math.max(0, (rows.length - 1) * DEFAULT_CARD_SPACING_Y)
+  const startY = Math.round(DEFAULT_CANVAS_CENTER_Y - blockHeight / 2)
+
+  rows.forEach((row, rowIdx) => {
+    const totalWidth = Math.max(0, (row.length - 1) * DEFAULT_CARD_SPACING_X)
+    const startX = Math.round(DEFAULT_CANVAS_CENTER_X - totalWidth / 2)
+    row.forEach((g, colIdx) => {
+      positions[g.id] = {
+        x: startX + colIdx * DEFAULT_CARD_SPACING_X,
+        y: startY + rowIdx * DEFAULT_CARD_SPACING_Y,
+      }
+    })
   })
   return positions
 }
@@ -187,9 +200,12 @@ function pushUndoSnapshot(ws: WorkspaceState, snapshot: WorkspaceSnapshot): void
 export function getGroupPosition(ws: WorkspaceState, groupId: string, fallbackIndex = 0): GroupPosition {
   const existing = ws.positions[groupId]
   if (existing) return existing
+  // Unknown groups fall back to the same wrapped grid the deal uses.
+  const row = Math.floor(fallbackIndex / DEFAULT_CARDS_PER_ROW)
+  const col = fallbackIndex % DEFAULT_CARDS_PER_ROW
   return {
-    x: 120 + fallbackIndex * DEFAULT_CARD_SPACING_X,
-    y: DEFAULT_CANVAS_CENTER_Y,
+    x: 120 + col * DEFAULT_CARD_SPACING_X,
+    y: DEFAULT_CANVAS_CENTER_Y + row * DEFAULT_CARD_SPACING_Y,
   }
 }
 
