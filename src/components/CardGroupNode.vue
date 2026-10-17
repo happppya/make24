@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { assetUrl } from '../assetUrl'
 import type { ExprNode } from '../engine/types'
 import { formatNumber } from '../engine/math'
 
@@ -101,7 +102,7 @@ function onUngroupClick(event: MouseEvent): void {
         :title="`${node.card.label} of ${node.card.suit} (Value: ${node.card.value})`"
       >
         <img
-          :src="node.card.spritePath"
+          :src="assetUrl(node.card.spritePath)"
           :alt="`${node.card.label} of ${node.card.suit}`"
           class="playing-card-sprite"
           draggable="false"

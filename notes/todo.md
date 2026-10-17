@@ -14,5 +14,6 @@ Remove todos that are already completed. Remove documents from current status on
 
 ## Todos
 
+- [ ] Turn on GitHub Pages (Settings → Pages → Source: GitHub Actions) so pushes to `master` publish the frontend (see notes/deploy.md)
 - [ ] Deploy the table server to Oracle Cloud Infrastructure (TLS termination, `ALLOWED_ORIGIN`, `VITE_MULTIPLAYER_URL`) and add auth/rate limiting before it is public
 - [ ] Add reconnect/resume so a dropped socket keeps its seat and any board in progress

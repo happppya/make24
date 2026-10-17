@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { assetUrl } from '../assetUrl'
 import TutorialShot from './TutorialShot.vue'
 
 /**
@@ -37,7 +38,7 @@ interface Section {
 
 const shots = {
   board: {
-    src: '/tutorial/board.png',
+    src: assetUrl('tutorial/board.png'),
     alt: 'Gameplay screenshot: four dealt cards with two merged into one group, a multiply operator armed, the operator rail on the right and the score sidebar on the left.',
     caption: 'A round in progress: two cards merged, another operator armed.',
     width: 'wide',
@@ -51,7 +52,7 @@ const shots = {
     ],
   },
   hud: {
-    src: '/tutorial/hud.png',
+    src: assetUrl('tutorial/hud.png'),
     alt: 'Close-up of the score sidebar: round target 24, an accuracy chip at 71 percent, and a cost of 30 points split across three binary operators.',
     caption: 'The sidebar once every card is in one group.',
     width: 'narrow',
@@ -62,7 +63,7 @@ const shots = {
     ],
   },
   settings: {
-    src: '/tutorial/settings.png',
+    src: assetUrl('tutorial/settings.png'),
     alt: 'Multiplayer lobby settings panel listing mode, cards dealt, target number, approximations, card pool, first-to points and the operator toggles.',
     caption: 'Table settings, as the host sees them.',
     width: 'medium',

@@ -1,0 +1,70 @@
+name: Deploy to GitHub Pages
+
+# One-time setup: in the repository, open Settings → Pages → Build and
+# deployment and set Source to "GitHub Actions". That needs a repository admin
+# token, which the workflow's own GITHUB_TOKEN cannot grant, so it is a manual
+# switch rather than something this file can do.
+#
+# Multiplayer needs a reachable table server. If one is hosted, add a repository
+# variable named VITE_MULTIPLAYER_URL (Settings → Secrets and variables →
+# Actions → Variables) such as wss://table.example.com/ws; the build below picks
+# it up. Without it the game deploys as a working single-player site.
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+# Least privilege for Pages: read the code, publish an artifact, mint the OIDC
+# token deploy-pages exchanges for a deployment.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never let two Pages deployments race; queue them instead of cancelling, so a
+# push that lands during a deploy still reaches the site.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # `npm run build` typechecks first, so a type error stops the deploy.
+      - name: Build
+        run: npm run build
+        env:
+          VITE_MULTIPLAYER_URL: ${{ vars.VITE_MULTIPLAYER_URL }}
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v6
+
+      - name: Upload the built site
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to Pages
+        id: deployment
+        uses: actions/deploy-pages@v5

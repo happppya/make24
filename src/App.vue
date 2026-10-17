@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { assetUrl } from './assetUrl'
 import CardGroupNode from './components/CardGroupNode.vue'
 import ScorePanel from './components/ScorePanel.vue'
 import TutorialOverlay from './components/TutorialOverlay.vue'
@@ -1242,7 +1243,7 @@ function formatTimer(seconds: number | null): string {
 }
 
 function spriteUrl(name: string): string {
-  return `/card-sprites/${name}`
+  return assetUrl(`card-sprites/${name}`)
 }
 
 /** 1–9 for the first nine operator slots, 0 for the tenth. */
