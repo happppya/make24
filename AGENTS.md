@@ -12,7 +12,11 @@ combine dealt cards with operators to hit a target number; lower score wins.
 ## Stack
 
 - Frontend: Vue 3 + Vite + TypeScript (`src/`). Commands: `npm run dev`,
-  `npm run build` (typechecks via `vue-tsc -b`, then builds), `npm run typecheck`.
+  `npm run build` (typechecks, then builds), `npm run typecheck`,
+  `npm run test` (Vitest + jsdom, see `vite.config.ts`).
+- Prefer unit tests over browser preview evaluation when possible — they run
+  in seconds without a browser round-trip. Reserve the Preview tab for visual
+  checks that genuinely need eyes on the UI.
 - Serverside (not started): will run on Oracle Cloud Infrastructure free tier.
 - Card art: 64 pixel-art sprites in `public/card-sprites/` with descriptive
   names (`queen-of-hearts.png`, `10-of-clubs.png`, `joker-red.png`,
