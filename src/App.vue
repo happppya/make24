@@ -4,7 +4,14 @@ import CardGroupNode from './components/CardGroupNode.vue'
 import ScorePanel from './components/ScorePanel.vue'
 import { isSfxEnabled, playSfx, toggleSfx } from './audio/sfx'
 import { dealHand, generateTargetNumber } from './engine/deck'
-import { OPERATOR_CATALOG, formatNumber, getEnabledOperators } from './engine/math'
+import {
+  OPERATOR_CATALOG,
+  calculateScoreBreakdown,
+  costOfUnaryOn,
+  formatNumber,
+  getEnabledOperators,
+  isUnaryOperator,
+} from './engine/math'
 import {
   connectToRoom,
   isRoomHost,
@@ -26,6 +33,9 @@ import type {
   WorkspaceState,
 } from './engine/types'
 import {
+  DEFAULT_CARDS_PER_ROW,
+  DEFAULT_CARD_SPACING_X,
+  DEFAULT_CARD_SPACING_Y,
   WORKSPACE_COUNT,
   applyOperatorInWorkspace,
   createAllWorkspaces,
@@ -36,6 +46,7 @@ import {
   selectGroupInWorkspace,
   setGroupPosition,
   setWorkspacePan,
+  tidyWorkspaceGroups,
   undoWorkspace,
   ungroupInWorkspace,
 } from './engine/workspace'
@@ -85,6 +96,9 @@ const localMatchWinner = ref<PlayerInfo | null>(null)
 
 const playerName = ref('Player')
 const roomCodeInput = ref('MAIN')
+/** Name plates shown only while the matching control is hovered. */
+const hoveredOperatorLabel = ref<string | null>(null)
+const hoveredActionLabel = ref<string | null>(null)
 const multiplayerHost = computed(
   () => settings.isMultiplayer && multiplayerSession.room !== null && isRoomHost.value
 )
@@ -161,6 +175,9 @@ const feltRef = ref<HTMLElement | null>(null)
 const sidebarRef = ref<HTMLElement | null>(null)
 const viewportRef = ref<HTMLElement | null>(null)
 const panGlide = ref(false)
+/** While true the slots ease into a freshly tidied layout instead of teleporting. */
+const tidyingBoard = ref(false)
+const hoveredPanLabel = ref<string | null>(null)
 
 /**
  * Ease the felt so a freshly merged group (which can be a tall nested stack)
@@ -175,22 +192,26 @@ async function glideToGroups(groupIds: string[]): Promise<void> {
   const ws = activeWorkspace.value
   if (!viewport || !ws) return
 
-  const slots = groupIds
-    .map((id) => viewport.querySelector<HTMLElement>(`[data-testid="group-slot-${id}"]`))
-    .filter((slot): slot is HTMLElement => slot !== null)
-  if (slots.length === 0) return
-
-  // Union of every slot's layout box (ignores selected/pop transforms).
+  // Union of every slot's box: sizes come from the DOM (pop transforms ignored),
+  // but positions come from the workspace state. Reading `offsetLeft` here would
+  // pick up a still-running tidy transition and frame a layout that no longer
+  // exists, leaving the board visibly off-centre.
   let minX = Infinity
   let minY = Infinity
   let maxX = -Infinity
   let maxY = -Infinity
-  for (const slot of slots) {
-    minX = Math.min(minX, slot.offsetLeft)
-    minY = Math.min(minY, slot.offsetTop)
-    maxX = Math.max(maxX, slot.offsetLeft + slot.offsetWidth)
-    maxY = Math.max(maxY, slot.offsetTop + slot.offsetHeight)
-  }
+  let measured = 0
+  groupIds.forEach((id, index) => {
+    const slot = viewport.querySelector<HTMLElement>(`[data-testid="group-slot-${id}"]`)
+    if (!slot) return
+    measured++
+    const { x, y } = getGroupPosition(ws, id, index)
+    minX = Math.min(minX, x)
+    minY = Math.min(minY, y)
+    maxX = Math.max(maxX, x + slot.offsetWidth)
+    maxY = Math.max(maxY, y + slot.offsetHeight)
+  })
+  if (measured === 0) return
 
   const boxW = maxX - minX
   const boxH = maxY - minY
@@ -391,6 +412,8 @@ const remainingSeconds = ref<number | null>(null)
 let deadlineTimer: ReturnType<typeof setInterval> | null = null
 let roundStartTimestamp = 0
 let appliedRoundNumber = 0
+/** Signature of the last board sent to the table, so repeats stay off the wire. */
+let lastReportedBoard: string | null = null
 
 const activeWorkspace = computed<WorkspaceState | undefined>(
   () => workspaces.value[activeWorkspaceIdx.value]
@@ -509,12 +532,73 @@ function handleRecenterView(): void {
   setWorkspacePan(ws, 0, 0)
 }
 
+/** Gaps the tidy grid leaves between pieces, matching the dealt layout's pitch. */
+const TIDY_GAP_X = 52
+const TIDY_GAP_Y = 23
+
+/**
+ * Squares the scattered cards away into a grid centred on the workspace origin,
+ * then frames that grid — the camera is centred on the cards, not on the old
+ * pan position, so a board panned far off-screen comes back into view.
+ */
+function handleTidyBoard(): void {
+  const ws = activeWorkspace.value
+  const viewport = viewportRef.value
+  if (!ws || !viewport) return
+  actionError.value = null
+
+  // Measure the pieces on screen: a merged stack is taller and wider than a bare
+  // card, so the pitch has to grow with it or a second row would sit on top of it.
+  const slots = [...viewport.querySelectorAll<HTMLElement>('[data-testid^="group-slot-"]')]
+  const widest = Math.max(
+    ...slots.map((slot) => slot.offsetWidth + TIDY_GAP_X),
+    DEFAULT_CARD_SPACING_X
+  )
+  const tallest = Math.max(
+    ...slots.map((slot) => slot.offsetHeight + TIDY_GAP_Y),
+    DEFAULT_CARD_SPACING_Y
+  )
+  const widestSlot = Math.max(...slots.map((slot) => slot.offsetWidth), DEFAULT_CARD_SPACING_X)
+
+  // Fit as many whole pieces as the felt is wide, plus a little breathing room.
+  const usableWidth = viewport.clientWidth - 32
+  const columns = Math.max(
+    1,
+    Math.min(
+      ws.groups.length,
+      DEFAULT_CARDS_PER_ROW,
+      Math.floor((usableWidth - widestSlot) / widest) + 1
+    )
+  )
+  const changed = tidyWorkspaceGroups(ws, { columns, spacingX: widest, spacingY: tallest })
+
+  if (changed) {
+    tidyingBoard.value = true
+    playSfx('place')
+    pushCue('TIDY', 'neutral')
+    const timer = setTimeout(() => {
+      tidyingBoard.value = false
+      cueTimers.delete(timer)
+    }, 320)
+    cueTimers.add(timer)
+  }
+
+  void glideToGroups(ws.groups.map((group) => group.id))
+}
+
 const currentEvaluation = computed(() => {
   const ws = activeWorkspace.value
   if (!ws) {
     return null
   }
   return evaluateWorkspaceSolution(ws, currentTarget.value, settings.approximationPercent)
+})
+
+/** Where the current solution's cost comes from, once the cards are in one group. */
+const costBreakdown = computed(() => {
+  const evaluation = currentEvaluation.value
+  if (!evaluation?.isSingleGroup || !evaluation.rootNode) return null
+  return calculateScoreBreakdown(evaluation.rootNode)
 })
 
 const sortedRoundSolutions = computed(() => {
@@ -585,6 +669,7 @@ function startNewRound(): void {
 
   remainingSeconds.value = null
   roundStartTimestamp = Date.now()
+  lastReportedBoard = null
   phase.value = 'playing'
 }
 
@@ -625,6 +710,7 @@ function applyRoomSnapshot(room: RoomState): void {
       appliedRoundNumber = room.round.number
       actionError.value = null
       sawAcceptable = false
+      lastReportedBoard = null
       currentTarget.value = room.round.target
       currentHand.value = room.round.hand
       workspaces.value = createAllWorkspaces(room.round.hand)
@@ -697,6 +783,11 @@ function recordPlayerSolutionFromWorkspace(): SubmittedSolution | null {
 
   // Multiplayer scores live on the server; this player only reports the board.
   if (settings.isMultiplayer) {
+    // The evaluation watcher fires on every board mutation, so only report when
+    // the board itself changed — otherwise each nudge re-sends the same solution.
+    const signature = `${activeWorkspaceIdx.value}|${evalRes.lhs}|${evalRes.score}`
+    if (signature === lastReportedBoard) return null
+    lastReportedBoard = signature
     sendToRoom({
       t: 'submit',
       solution: {
@@ -821,12 +912,15 @@ function handleApplyOperator(opId: OperatorId): void {
   const ws = activeWorkspace.value
   if (!ws) return
   actionError.value = null
+  // Read the cost before the board changes: the selection afterwards is the
+  // group this press just produced, not the one it landed on.
+  const costLabel = operatorCostLabel(opId)
   const res = applyOperatorInWorkspace(ws, opId)
   if (res.changed) {
     const meta = OPERATOR_CATALOG.find((op) => op.id === opId)
     playSfx('place')
     triggerImpact('op')
-    pushCue(`${meta?.shortSymbol ?? '?'} ${operationCueSuffix()}`, 'neutral')
+    pushCue(`${meta?.shortSymbol ?? '?'} ${costLabel}`, 'neutral')
   } else {
     if (res.error) actionError.value = res.error
     playSfx('error')
@@ -835,9 +929,17 @@ function handleApplyOperator(opId: OperatorId): void {
   }
 }
 
-function operationCueSuffix(): string {
-  // Binary merges always cost a flat 10 pts; unary stacks ramp up.
-  return '+10'
+/**
+ * What this press costs. A binary operator is a flat 10 (arming it or merging
+ * with it costs the same); a unary one ramps with the chain it lands on, and
+ * includes the 200-point factorial/inverse-gamma pairing.
+ */
+function operatorCostLabel(opId: OperatorId): string {
+  if (!isUnaryOperator(opId)) return '+10'
+  const ws = activeWorkspace.value
+  const node = ws?.groups.find((group) => group.id === ws.selectedGroupId)
+  if (!node) return '+10'
+  return `+${costOfUnaryOn(opId, node)}`
 }
 
 function handleUndo(): void {
@@ -1042,6 +1144,7 @@ onBeforeUnmount(() => {
   <div ref="shellRef" class="app-shell" :class="impactKind ? `impact--${impactKind}` : ''">
     <!-- ======================== TITLE SCREEN ======================== -->
     <main v-if="phase === 'title'" class="screen-title" :inert="menuOpen">
+      <span class="title-suits" aria-hidden="true">♠ ♥ ♣ ♦</span>
       <div class="title-stack">
         <div class="hero-card-fan" aria-hidden="true">
           <img
@@ -1112,7 +1215,6 @@ onBeforeUnmount(() => {
           </span>
           <span class="lobby-marquee__name">Table Setup</span>
         </div>
-        <span class="lobby-marquee__hint">Pick your table rules, then deal the cards</span>
         <button
           type="button"
           class="btn-arcade btn-arcade--tiny lobby-marquee__back"
@@ -1201,9 +1303,6 @@ onBeforeUnmount(() => {
                 {{ selfPlayer?.isReady ? 'Not Ready' : 'Ready Up' }}
               </button>
             </div>
-            <p v-if="multiplayerSeated && !multiplayerReady" class="mp-hint">
-              Everyone has to ready up before the host can deal.
-            </p>
           </div>
 
           <div class="scoring-summary-box">
@@ -1234,9 +1333,6 @@ onBeforeUnmount(() => {
             >
               {{ settings.isMultiplayer && !multiplayerHost ? 'Waiting for Host' : 'Deal Cards & Start Match' }}
             </button>
-            <p v-if="settings.isMultiplayer && !multiplayerSeated" class="mp-hint">
-              Join a table to deal a multiplayer match.
-            </p>
           </div>
         </section>
 
@@ -1244,29 +1340,18 @@ onBeforeUnmount(() => {
         <section class="panel-box lobby-settings">
           <h2>Table Settings</h2>
 
-          <div v-if="settings.isMultiplayer && !canEditSettings" class="static-setting-note">
-            Only the host can change the table rules.
-          </div>
           <fieldset class="settings-form" :disabled="!canEditSettings">
             <!-- Mode (multiplayer only dropdown) -->
-            <div class="field-row">
+            <div v-if="settings.isMultiplayer" class="field-row">
               <label for="setting-mode">Mode</label>
-              <template v-if="settings.isMultiplayer">
-                <select id="setting-mode" v-model="settings.mode" class="input-arcade">
-                  <option value="first-to-solve">
-                    First to solve (ends immediately on valid solution)
-                  </option>
-                  <option value="best-30s">Best solution in 30 sec</option>
-                  <option value="best-1m">Best solution in 1 min</option>
-                  <option value="best-3m">Best solution in 3 min</option>
-                  <option value="best-5m">Best solution in 5 min</option>
-                  <option value="best-10m">Best solution in 10 min</option>
-                </select>
-              </template>
-              <div v-else class="static-setting-note">
-                Singleplayer: Improve your solution as much as possible and end the round at
-                any time.
-              </div>
+              <select id="setting-mode" v-model="settings.mode" class="input-arcade">
+                <option value="first-to-solve">First to solve</option>
+                <option value="best-30s">Best in 30s</option>
+                <option value="best-1m">Best in 1m</option>
+                <option value="best-3m">Best in 3m</option>
+                <option value="best-5m">Best in 5m</option>
+                <option value="best-10m">Best in 10m</option>
+              </select>
             </div>
 
             <!-- Number of cards -->
@@ -1426,8 +1511,7 @@ onBeforeUnmount(() => {
             :error-percent="currentEvaluation?.errorPercent ?? null"
             :score="currentEvaluation?.score ?? null"
             :acceptable="!!(currentEvaluation?.isSingleGroup && currentEvaluation.acceptable)"
-            :groups-left="activeWorkspace?.groups.length ?? currentHand.length"
-            :groups-total="currentHand.length"
+            :cost-breakdown="costBreakdown"
             :hit-signal="hitSignal"
           />
 
@@ -1444,7 +1528,6 @@ onBeforeUnmount(() => {
                 @click="switchWorkspace(ws.index)"
               >
                 <span class="ws-tab-num">W{{ ws.index + 1 }}</span>
-                <span class="ws-tab-meta">{{ ws.groups.length }} grp</span>
                 <span class="ws-tab-key">⌥{{ ws.index + 1 }}</span>
               </button>
             </div>
@@ -1507,62 +1590,24 @@ onBeforeUnmount(() => {
           <div v-else class="equation-ribbon equation-ribbon--idle" data-testid="solution-status-incomplete">
             <span class="equation-ribbon__tag">MERGING</span>
             <span class="equation-ribbon__eq">
-              {{ activeWorkspace?.groups.length ?? 0 }} group(s) left · combine all
-              {{ currentHand.length }} cards into one
+              {{ activeWorkspace?.groups.length ?? 0 }} / {{ currentHand.length }} groups
             </span>
           </div>
 
       <!-- Interactive Felt Board for Active Workspace -->
       <section ref="feltRef" class="felt-table">
-        <div class="board-instructions">
-          <div class="instruction-text">
-            <template v-if="!activeWorkspace?.selectedGroupId">
-              <span>
-                Click a card or merged group to select it. Drag cards to arrange them, or drag empty
-                felt to pan.
-              </span>
-            </template>
-            <template v-else-if="!activeWorkspace?.pendingOperator">
-              <span>
-                Selected group (value
-                <strong>
-                  {{ formatNumber(selectedGroupNode?.value ?? 0) }}
-                </strong>
-                ) — choose a <strong>unary operator</strong>, a
-                <strong>binary operator</strong>, or
-                <strong>ungroup</strong> if merged.
-              </span>
-            </template>
-            <template v-else>
-              <span class="pending-banner" data-testid="pending-operator-banner">
-                Pending binary operator:
-                <strong>
-                  {{ pendingOperatorMeta?.label }} ({{ pendingOperatorMeta?.shortSymbol }})
-                </strong>
-                — now select the second card/group (right operand) to stack them!
-              </span>
-            </template>
-          </div>
-
-          <div class="board-toolbar">
-            <span v-if="actionError" class="error-toast" role="alert">
-              ⚠ {{ actionError }}
-            </span>
-            <span class="pan-coords" data-testid="pan-coords">
-              Pan: {{ activeWorkspace?.panX ?? 0 }}, {{ activeWorkspace?.panY ?? 0 }}
-            </span>
-            <button
-              type="button"
-              class="btn-arcade btn-arcade--tiny"
-              data-testid="recenter-view-btn"
-              @click="handleRecenterView"
-            >
-              ⌖ Center View
-            </button>
-          </div>
+        <div class="board-toasts">
+          <span v-if="actionError" class="error-toast" role="alert">⚠ {{ actionError }}</span>
+          <span
+            v-if="activeWorkspace?.pendingOperator && pendingOperatorMeta"
+            class="pending-chip"
+            data-testid="pending-operator-banner"
+          >
+            {{ pendingOperatorMeta.shortSymbol }} → pick the 2nd card
+          </span>
         </div>
 
-        <!-- Fixed-Size Panner Viewport & Draggable Card Groups -->
+        <!-- Pannable workspace plane -->
         <div
           v-if="activeWorkspace"
           ref="viewportRef"
@@ -1581,6 +1626,7 @@ onBeforeUnmount(() => {
                 ? 'transform 0.28s cubic-bezier(0.22, 1, 0.36, 1)'
                 : 'none',
             }"
+            :class="{ 'workspace-plane--tidying': tidyingBoard }"
           >
             <div
               v-for="(group, idx) in activeWorkspace.groups"
@@ -1615,6 +1661,157 @@ onBeforeUnmount(() => {
             </div>
           </div>
         </div>
+
+        <!-- Operators: vertical rail, top right -->
+        <div class="op-rail" role="group" aria-label="Operators">
+          <div class="op-rail__group">
+            <span class="op-rail__tag" aria-hidden="true">B</span>
+            <button
+              v-for="(op, idx) in binaryOperators"
+              :key="op.id"
+              type="button"
+              class="op-square btn-op"
+              :class="{ 'btn-op--active': activeWorkspace?.pendingOperator === op.id }"
+              :disabled="!activeWorkspace?.selectedGroupId"
+              :data-testid="`op-${op.id}`"
+              :aria-label="`${op.label} (${op.shortSymbol}), key ${opKeyLabel(idx)}`"
+              @mouseenter="hoveredOperatorLabel = op.label"
+              @mouseleave="hoveredOperatorLabel = null"
+              @focus="hoveredOperatorLabel = op.label"
+              @blur="hoveredOperatorLabel = null"
+              @click="handleApplyOperator(op.id)"
+            >
+              <span class="op-square__sym">{{ op.shortSymbol }}</span>
+              <span class="op-key">{{ opKeyLabel(idx) }}</span>
+            </button>
+          </div>
+
+          <div v-if="unaryOperators.length > 0" class="op-rail__group">
+            <span class="op-rail__tag op-rail__tag--unary" aria-hidden="true">U</span>
+            <button
+              v-for="(op, idx) in unaryOperators"
+              :key="op.id"
+              type="button"
+              class="op-square btn-op btn-op--unary"
+              :disabled="!activeWorkspace?.selectedGroupId"
+              :data-testid="`op-${op.id}`"
+              :aria-label="`${op.label} (${op.shortSymbol}), key shift+${opKeyLabel(idx)}`"
+              @mouseenter="hoveredOperatorLabel = op.label"
+              @mouseleave="hoveredOperatorLabel = null"
+              @focus="hoveredOperatorLabel = op.label"
+              @blur="hoveredOperatorLabel = null"
+              @click="handleApplyOperator(op.id)"
+            >
+              <span class="op-square__sym">{{ op.shortSymbol }}</span>
+              <span class="op-key">⇧{{ opKeyLabel(idx) }}</span>
+            </button>
+          </div>
+        </div>
+
+        <span v-if="hoveredOperatorLabel" class="rail-hint" aria-hidden="true">
+          {{ hoveredOperatorLabel }}
+        </span>
+
+        <!-- Group & history actions: horizontal, bottom right -->
+        <div class="board-actions">
+          <button
+            type="button"
+            class="board-action"
+            :disabled="!canUngroupSelected"
+            data-testid="ungroup-btn"
+            aria-label="Ungroup selected group (U)"
+            @mouseenter="hoveredActionLabel = 'Ungroup · U'"
+            @mouseleave="hoveredActionLabel = null"
+            @focus="hoveredActionLabel = 'Ungroup · U'"
+            @blur="hoveredActionLabel = null"
+            @click="handleUngroup()"
+          >
+            <span class="board-action__icon" aria-hidden="true">✂</span>
+          </button>
+          <button
+            type="button"
+            class="board-action"
+            :disabled="!activeWorkspace || activeWorkspace.undoStack.length === 0"
+            data-testid="undo-btn"
+            aria-label="Undo (Z)"
+            @mouseenter="hoveredActionLabel = 'Undo · Z'"
+            @mouseleave="hoveredActionLabel = null"
+            @focus="hoveredActionLabel = 'Undo · Z'"
+            @blur="hoveredActionLabel = null"
+            @click="handleUndo"
+          >
+            <span class="board-action__icon" aria-hidden="true">↶</span>
+          </button>
+          <button
+            type="button"
+            class="board-action"
+            :disabled="!activeWorkspace || activeWorkspace.redoStack.length === 0"
+            data-testid="redo-btn"
+            aria-label="Redo (Y)"
+            @mouseenter="hoveredActionLabel = 'Redo · Y'"
+            @mouseleave="hoveredActionLabel = null"
+            @focus="hoveredActionLabel = 'Redo · Y'"
+            @blur="hoveredActionLabel = null"
+            @click="handleRedo"
+          >
+            <span class="board-action__icon" aria-hidden="true">↷</span>
+          </button>
+          <button
+            type="button"
+            class="board-action"
+            data-testid="reset-workspace-btn"
+            aria-label="Reset workspace to the dealt hand"
+            @mouseenter="hoveredActionLabel = 'Reset workspace'"
+            @mouseleave="hoveredActionLabel = null"
+            @focus="hoveredActionLabel = 'Reset workspace'"
+            @blur="hoveredActionLabel = null"
+            @click="handleResetWorkspace"
+          >
+            <span class="board-action__icon" aria-hidden="true">⟲</span>
+          </button>
+        </div>
+        <span v-if="hoveredActionLabel" class="actions-hint" aria-hidden="true">
+          {{ hoveredActionLabel }}
+        </span>
+
+        <!-- Pan readout + recenter + tidy: bottom left -->
+        <div class="board-pan">
+          <span class="pan-coords" data-testid="pan-coords">
+            {{ activeWorkspace?.panX ?? 0 }}, {{ activeWorkspace?.panY ?? 0 }}
+          </span>
+          <button
+            type="button"
+            class="board-icon-btn"
+            data-testid="recenter-view-btn"
+            aria-label="Center view"
+            title="Center view"
+            @mouseenter="hoveredPanLabel = 'Center view'"
+            @mouseleave="hoveredPanLabel = null"
+            @focus="hoveredPanLabel = 'Center view'"
+            @blur="hoveredPanLabel = null"
+            @click="handleRecenterView"
+          >
+            <span aria-hidden="true">⌖</span>
+          </button>
+          <button
+            type="button"
+            class="board-icon-btn"
+            data-testid="tidy-board-btn"
+            aria-label="Tidy cards into a grid"
+            title="Tidy cards"
+            @mouseenter="hoveredPanLabel = 'Tidy cards'"
+            @mouseleave="hoveredPanLabel = null"
+            @focus="hoveredPanLabel = 'Tidy cards'"
+            @blur="hoveredPanLabel = null"
+            @click="handleTidyBoard"
+          >
+            <span aria-hidden="true">▦</span>
+          </button>
+        </div>
+        <span v-if="hoveredPanLabel" class="pan-hint" aria-hidden="true">
+          {{ hoveredPanLabel }}
+        </span>
+
         <div class="cue-layer" aria-hidden="true">
           <span
             v-for="cue in floatingCues"
@@ -1624,102 +1821,6 @@ onBeforeUnmount(() => {
           >
             {{ cue.text }}
           </span>
-        </div>
-      </section>
-
-      <!-- Operator & Undo/Redo Dock -->
-      <section class="operator-dock panel-box">
-        <div class="dock-groups">
-          <!-- Binary Operators -->
-          <div class="op-section">
-            <div class="op-section-title">
-              Binary Operators (+10 pts, 1st selected = left, 2nd = right) · keys
-              {{ opKeyLabel(0) }}–{{ opKeyLabel(binaryOperators.length - 1) }}
-            </div>
-            <div class="op-buttons">
-              <button
-                v-for="(op, idx) in binaryOperators"
-                :key="op.id"
-                type="button"
-                class="btn-arcade btn-op"
-                :class="{
-                  'btn-op--active': activeWorkspace?.pendingOperator === op.id,
-                }"
-                :disabled="!activeWorkspace?.selectedGroupId"
-                :data-testid="`op-${op.id}`"
-                @click="handleApplyOperator(op.id)"
-              >
-                <span class="op-key">{{ opKeyLabel(idx) }}</span>
-                <span class="op-sym">{{ op.shortSymbol }}</span>
-                <span class="op-lbl">{{ op.label }}</span>
-              </button>
-            </div>
-          </div>
-
-          <!-- Unary Operators -->
-          <div v-if="unaryOperators.length > 0" class="op-section">
-            <div class="op-section-title">
-              Unary Operators (+10, +20, +30… stacked; ! &amp; Γ⁻¹ nested = +200) · shift +
-              {{ opKeyLabel(0) }}–{{ opKeyLabel(unaryOperators.length - 1) }}
-            </div>
-            <div class="op-buttons">
-              <button
-                v-for="(op, idx) in unaryOperators"
-                :key="op.id"
-                type="button"
-                class="btn-arcade btn-op btn-op--unary"
-                :disabled="!activeWorkspace?.selectedGroupId"
-                :data-testid="`op-${op.id}`"
-                @click="handleApplyOperator(op.id)"
-              >
-                <span class="op-key">⇧{{ opKeyLabel(idx) }}</span>
-                <span class="op-sym">{{ op.shortSymbol }}</span>
-                <span class="op-lbl">{{ op.label }}</span>
-              </button>
-            </div>
-          </div>
-
-          <!-- Group & History Controls -->
-          <div class="op-section op-section--history">
-            <div class="op-section-title">Group &amp; History Actions (U / Z / Y)</div>
-            <div class="op-buttons">
-              <button
-                type="button"
-                class="btn-arcade btn-arcade--crimson"
-                :disabled="!canUngroupSelected"
-                data-testid="ungroup-btn"
-                @click="handleUngroup()"
-              >
-                ✂ Ungroup (U)
-              </button>
-              <button
-                type="button"
-                class="btn-arcade"
-                :disabled="!activeWorkspace || activeWorkspace.undoStack.length === 0"
-                data-testid="undo-btn"
-                @click="handleUndo"
-              >
-                ↶ Undo (Z)
-              </button>
-              <button
-                type="button"
-                class="btn-arcade"
-                :disabled="!activeWorkspace || activeWorkspace.redoStack.length === 0"
-                data-testid="redo-btn"
-                @click="handleRedo"
-              >
-                ↷ Redo (Y)
-              </button>
-              <button
-                type="button"
-                class="btn-arcade"
-                data-testid="reset-workspace-btn"
-                @click="handleResetWorkspace"
-              >
-                ⟲ Reset Workspace
-              </button>
-            </div>
-          </div>
         </div>
       </section>
         </div>
@@ -2047,8 +2148,7 @@ onBeforeUnmount(() => {
 }
 
 /* Faint oversized suits, pixel-dithered into the felt */
-.screen-title::after {
-  content: '♠ ♥ ♣ ♦';
+.title-suits {
   position: absolute;
   inset: auto 0 -2vh;
   font-family: var(--font-display);
@@ -2332,12 +2432,6 @@ onBeforeUnmount(() => {
   text-shadow: 0 3px 0 #09080f;
 }
 
-.lobby-marquee__hint {
-  font-family: var(--font-pixel);
-  font-size: 0.66rem;
-  color: var(--ink-muted);
-}
-
 .lobby-grid {
   display: grid;
   grid-template-columns: 1fr 1.25fr;
@@ -2483,13 +2577,6 @@ onBeforeUnmount(() => {
   color: #ff8f8f;
 }
 
-.mp-hint {
-  margin: 0;
-  font-family: var(--font-mono);
-  font-size: 0.8rem;
-  color: rgba(247, 240, 224, 0.55);
-}
-
 fieldset.settings-form {
   border: 0;
   padding: 0;
@@ -2571,14 +2658,6 @@ fieldset.settings-form:disabled {
   gap: 8px;
 }
 
-.static-setting-note {
-  background: #241f30;
-  padding: 8px 12px;
-  border: 1px dashed rgba(242, 201, 76, 0.45);
-  font-size: 0.86rem;
-  color: var(--ink-muted);
-}
-
 .operator-toggles {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
@@ -2596,11 +2675,13 @@ fieldset.settings-form:disabled {
   cursor: pointer;
 }
 
-/* Playing Screen: Balatro-ish table with left HUD rail */
+/* Playing Screen: Balatro-ish table with left HUD rail, filling the viewport */
 .screen-playing {
   flex: 1;
-  padding: 14px 20px 26px;
-  max-width: 1460px;
+  display: flex;
+  min-height: 0;
+  padding: 14px 20px 18px;
+  max-width: 1520px;
   width: 100%;
   margin: 0 auto;
 }
@@ -2609,7 +2690,9 @@ fieldset.settings-form:disabled {
   display: grid;
   grid-template-columns: 262px minmax(0, 1fr);
   gap: 16px;
-  align-items: start;
+  align-items: stretch;
+  flex: 1;
+  min-height: 0;
 }
 
 .table-sidebar {
@@ -2624,13 +2707,15 @@ fieldset.settings-form:disabled {
 .table-main {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
   min-width: 0;
+  min-height: 0;
 }
 
 @media (max-width: 1000px) {
   .table-layout {
     grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
   }
   .table-sidebar {
     position: static;
@@ -2716,13 +2801,8 @@ fieldset.settings-form:disabled {
   font-size: 0.82rem;
 }
 
-.ws-tab-meta {
-  font-size: 0.66rem;
-  opacity: 0.82;
-  margin-left: auto;
-}
-
 .ws-tab-key {
+  margin-left: auto;
   font-size: 0.56rem;
   opacity: 0.55;
   border: 1px solid currentColor;
@@ -2912,42 +2992,61 @@ fieldset.settings-form:disabled {
   }
 }
 
-/* Felt Board */
+/* Felt Board — fills whatever height the screen has left */
 .felt-table {
   position: relative;
+  flex: 1;
+  min-height: 380px;
+  display: flex;
+  flex-direction: column;
   background: radial-gradient(circle at 50% 50%, #1f4737 0%, #122b21 85%);
   border: 4px solid #2d5a46;
   box-shadow:
     inset 0 0 40px rgba(0, 0, 0, 0.55),
     0 8px 0 #0b0910;
-  padding: 10px 14px 12px;
+  overflow: hidden;
+}
+
+/* Top-left status: errors and the waiting-for-operand chip */
+.board-toasts {
+  position: absolute;
+  top: 10px;
+  left: 12px;
+  z-index: 30;
   display: flex;
   flex-direction: column;
-  gap: 9px;
+  align-items: flex-start;
+  gap: 6px;
+  pointer-events: none;
 }
 
-.board-instructions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 8px;
-  background: rgba(14, 20, 24, 0.72);
-  border: 1px solid rgba(242, 201, 76, 0.4);
-  padding: 6px 12px;
-  font-size: 0.84rem;
+.error-toast {
+  background: var(--crimson);
+  color: #fff;
+  padding: 4px 10px;
+  font-weight: 800;
+  font-size: 0.82rem;
+  border: 2px solid #09080f;
 }
 
-.board-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
+.pending-chip {
+  background: rgba(12, 15, 22, 0.92);
+  border: 2px solid var(--gold);
+  color: var(--gold);
+  padding: 4px 10px;
+  font-family: var(--font-pixel);
+  font-size: 0.56rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .pan-coords {
   font-family: var(--font-mono);
-  font-size: 0.76rem;
-  color: var(--ink-muted);
+  font-size: 0.72rem;
+  color: rgba(247, 240, 224, 0.5);
+  background: rgba(10, 13, 18, 0.62);
+  border: 1px solid rgba(242, 201, 76, 0.22);
+  padding: 3px 7px;
 }
 
 .btn-arcade--tiny {
@@ -2955,31 +3054,17 @@ fieldset.settings-form:disabled {
   font-size: 0.76rem;
 }
 
-.pending-banner {
-  color: var(--gold);
-}
-
-.error-toast {
-  background: var(--crimson);
-  color: #fff;
-  padding: 3px 10px;
-  font-weight: 800;
-  font-size: 0.82rem;
-}
-
-/* Fixed-size workspace viewport with infinite pan plane */
+/* Workspace viewport with infinite pan plane — grows to the felt's bottom */
 .workspace-viewport {
   position: relative;
+  flex: 1;
   width: 100%;
-  height: 404px;
-  min-height: 404px;
-  max-height: 404px;
+  min-height: 0;
   overflow: hidden;
   cursor: grab;
   touch-action: none;
   background-image: radial-gradient(rgba(242, 201, 76, 0.14) 1px, transparent 1px);
   background-size: 28px 28px;
-  border: 2px dashed rgba(242, 201, 76, 0.25);
 }
 
 .workspace-viewport--panning {
@@ -3011,44 +3096,95 @@ fieldset.settings-form:disabled {
   filter: drop-shadow(0 12px 18px rgba(0, 0, 0, 0.65));
 }
 
-/* Operator Dock */
-.operator-dock {
-  padding: 11px 14px 13px;
-}
-
-.dock-groups {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 14px 20px;
-  align-items: flex-start;
-  justify-content: space-between;
-}
-
-.op-section {
+/* Operator rail: vertical, floating over the top-right of the felt */
+.op-rail {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 30;
+  width: 58px;
   display: flex;
   flex-direction: column;
   gap: 8px;
+  padding: 7px 6px;
+  max-height: calc(100% - 20px);
+  overflow-y: auto;
+  scrollbar-width: thin;
+  background: rgba(10, 13, 20, 0.84);
+  border: 2px solid rgba(242, 201, 76, 0.45);
+  box-shadow: 0 5px 0 rgba(9, 8, 15, 0.65);
+  backdrop-filter: blur(2px);
 }
 
-.op-section-title {
-  font-size: 0.75rem;
-  font-weight: 800;
-  color: var(--ink-muted);
-  letter-spacing: 0.04em;
-}
-
-.op-buttons {
+.op-rail__group {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
 }
 
-.btn-op {
+.op-rail__tag {
+  width: 100%;
+  padding-bottom: 2px;
+  border-bottom: 1px solid rgba(242, 201, 76, 0.3);
+  font-family: var(--font-pixel);
+  font-size: 0.5rem;
+  letter-spacing: 0.12em;
+  text-align: center;
+  color: var(--gold);
+}
+
+.op-rail__tag--unary {
+  color: #72efdd;
+  border-color: rgba(114, 239, 221, 0.3);
+}
+
+.op-square {
   position: relative;
-  min-width: 68px;
-  flex-direction: column;
-  gap: 1px;
-  padding: 5px 10px;
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  background: #241e33;
+  border: 2px solid #4a4166;
+  box-shadow: 0 3px 0 #09080f;
+  color: var(--gold);
+  cursor: pointer;
+  transition:
+    transform 0.1s ease,
+    border-color 0.14s ease,
+    background 0.14s ease;
+}
+
+.op-square:hover:not(:disabled),
+.op-square:focus-visible {
+  background: #302846;
+  border-color: var(--gold-bright);
+  transform: translateY(-2px);
+}
+
+.op-square:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+.op-square__sym {
+  font-family: var(--font-mono);
+  font-size: 0.98rem;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.btn-op--unary {
+  border-color: rgba(114, 239, 221, 0.5);
+  color: #72efdd;
+}
+
+.btn-op--active {
+  background: var(--crimson);
+  border-color: #fff;
+  color: #fff;
 }
 
 .op-key {
@@ -3072,31 +3208,132 @@ fieldset.settings-form:disabled {
   opacity: 0.4;
 }
 
-.btn-op--active {
-  background: var(--crimson) !important;
-  border-color: #fff !important;
+/* Hover name plates, rendered outside the scrolling rail so they cannot clip */
+.rail-hint,
+.actions-hint,
+.pan-hint {
+  position: absolute;
+  z-index: 40;
+  padding: 5px 9px;
+  background: #0d0b14;
+  border: 2px solid var(--gold);
+  color: var(--ink-cream);
+  font-family: var(--font-pixel);
+  font-size: 0.56rem;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+  pointer-events: none;
+  animation: hint-in 0.1s ease-out;
+}
+
+.rail-hint {
+  top: 18px;
+  right: calc(10px + 58px + 10px);
+}
+
+.actions-hint {
+  right: 12px;
+  bottom: calc(12px + 40px + 10px);
+}
+
+.pan-hint {
+  left: 12px;
+  bottom: calc(12px + 34px + 10px);
+}
+
+/* Cards ease into a tidied grid instead of teleporting; only while tidying, so
+   dragging a slot around never lags behind the pointer. */
+.workspace-plane--tidying .draggable-group-slot {
+  transition:
+    left 0.2s cubic-bezier(0.22, 1, 0.36, 1),
+    top 0.2s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes hint-in {
+  from {
+    opacity: 0;
+    transform: translateX(4px);
+  }
+}
+
+/* Group & history actions: bottom-right, horizontal */
+.board-actions {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  z-index: 30;
+  display: flex;
+  gap: 8px;
+}
+
+.board-action {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  background: rgba(18, 15, 27, 0.9);
+  border: 2px solid rgba(242, 201, 76, 0.4);
+  box-shadow: 0 3px 0 #09080f;
+  color: var(--ink-cream);
+  cursor: pointer;
+  transition:
+    transform 0.1s ease,
+    border-color 0.14s ease,
+    color 0.14s ease;
+}
+
+.board-action:hover:not(:disabled),
+.board-action:focus-visible {
+  color: var(--gold-bright);
+  border-color: var(--gold-bright);
   transform: translateY(-2px);
 }
 
-.btn-op--unary {
-  border-color: #64dfdf;
+.board-action:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
-.op-sym {
-  font-family: var(--font-mono);
-  font-size: 1.08rem;
-  font-weight: 900;
-  color: var(--gold);
+.board-action__icon {
+  font-size: 1rem;
+  line-height: 1;
 }
 
-.btn-op--unary .op-sym {
-  color: #72efdd;
+/* Pan readout + recenter: bottom-left */
+.board-pan {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
-.op-lbl {
-  font-size: 0.7rem;
+.board-icon-btn {
+  position: relative;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  background: rgba(18, 15, 27, 0.9);
+  border: 2px solid rgba(242, 201, 76, 0.35);
   color: var(--ink-cream);
+  cursor: pointer;
+  transition:
+    color 0.14s ease,
+    border-color 0.14s ease;
 }
+
+.board-icon-btn:hover,
+.board-icon-btn:focus-visible {
+  color: var(--gold-bright);
+  border-color: var(--gold-bright);
+}
+
 
 /* Round End & Game Over */
 .screen-round-end,
@@ -3384,5 +3621,74 @@ fieldset.settings-form:disabled {
 .winner-callout {
   font-size: 1.2rem;
   margin: 8px 0 20px;
+}
+
+/* Board overlays shrink with the screen; kept last so they beat the base sizes */
+@media (max-width: 1000px) {
+  .felt-table {
+    min-height: 420px;
+  }
+  /* Narrow boards: wrap the rail into two columns so no operator hides behind a scrollbar */
+  .op-rail {
+    width: auto;
+  }
+  .op-rail__group {
+    display: grid;
+    grid-template-columns: repeat(2, auto);
+    justify-items: center;
+  }
+  .op-rail__tag {
+    grid-column: 1 / -1;
+  }
+  .rail-hint {
+    right: calc(10px + 106px + 10px);
+  }
+}
+
+@media (max-width: 640px) {
+  .op-rail {
+    top: 8px;
+    right: 8px;
+    width: auto;
+    gap: 4px;
+    padding: 5px 4px;
+    /* stop above the bottom-right action bar */
+    max-height: calc(100% - 62px);
+  }
+  .rail-hint {
+    top: 16px;
+    right: calc(8px + 80px + 10px);
+  }
+  .op-square {
+    width: 32px;
+    height: 32px;
+  }
+  .op-square__sym {
+    font-size: 0.86rem;
+  }
+  .board-actions {
+    right: 8px;
+    bottom: 8px;
+    gap: 6px;
+  }
+  .board-action {
+    width: 36px;
+    height: 36px;
+  }
+  .board-pan {
+    left: 8px;
+    bottom: 8px;
+  }
+  .board-icon-btn {
+    width: 32px;
+    height: 32px;
+  }
+  .pan-hint {
+    left: 8px;
+    bottom: calc(8px + 32px + 10px);
+  }
+  .board-pan .pan-coords {
+    display: none;
+  }
 }
 </style>

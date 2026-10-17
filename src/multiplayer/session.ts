@@ -64,8 +64,6 @@ export const isRoomHost = computed(() => {
   )
 })
 
-export const isConnected = computed(() => multiplayer.status === 'connected')
-
 function clearConnectTimer(): void {
   if (connectTimer) {
     clearTimeout(connectTimer)
@@ -186,8 +184,4 @@ export function leaveRoom(): void {
   multiplayer.room = null
   multiplayer.selfId = null
   multiplayer.error = null
-}
-
-export function retryConnection(): Promise<void> {
-  return connectToRoom({ roomCode: multiplayer.roomCode, name: multiplayer.name })
 }

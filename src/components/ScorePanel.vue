@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { formatNumber } from '../engine/math'
+import { formatNumber, type ScoreBreakdown } from '../engine/math'
 
 const props = defineProps<{
   roundNumber: number
@@ -12,8 +12,8 @@ const props = defineProps<{
   errorPercent: number | null
   score: number | null
   acceptable: boolean
-  groupsLeft: number
-  groupsTotal: number
+  /** Itemised cost of the current solution, or null while cards remain unmerged. */
+  costBreakdown: ScoreBreakdown | null
   /** Bumped by the parent each time the target is hit, to fire the celebration. */
   hitSignal: number
 }>()
@@ -59,7 +59,6 @@ function useTweenedNumber(source: () => number, duration = 380) {
   return shown
 }
 
-const shownValue = useTweenedNumber(() => props.value ?? 0)
 const accuracy = computed(() => {
   if (props.value === null || props.errorPercent === null) return 0
   return Math.max(0, Math.min(100, 100 - Math.abs(props.errorPercent)))
@@ -143,19 +142,11 @@ onBeforeUnmount(() => {
       <div class="blind-card__range">{{ rangeLabel }}</div>
     </div>
 
-    <!-- Score cluster: value chip × accuracy chip -->
+    <!-- Accuracy readout plus an itemised breakdown of the solution's cost -->
     <div class="score-cluster" :class="{ 'score-cluster--hot': acceptable }">
       <div class="score-cluster__title">ACCURACY</div>
 
-      <div class="chips-row">
-        <div
-          class="pixel-chip pixel-chip--value"
-          :class="{ 'pixel-chip--muted': value === null }"
-          data-testid="value-chip"
-        >
-          <span class="pixel-chip__num">{{ formatNumber(Math.round(shownValue * 10) / 10) }}</span>
-        </div>
-        <span class="chips-row__x">×</span>
+      <div class="accuracy-row">
         <div
           class="pixel-chip pixel-chip--mult"
           :class="{ 'pixel-chip--muted': value === null }"
@@ -163,30 +154,49 @@ onBeforeUnmount(() => {
         >
           <span class="pixel-chip__num">{{ Math.round(shownAccuracy) }}%</span>
         </div>
-      </div>
-      <div class="chips-captions">
-        <span>VALUE</span>
-        <span>ACCURACY</span>
-      </div>
-
-      <div class="accuracy-meter" role="progressbar" :aria-valuenow="Math.round(accuracy)" aria-valuemin="0" aria-valuemax="100">
-        <div class="accuracy-meter__fill" :class="{ 'accuracy-meter__fill--hot': acceptable }" :style="{ width: meterWidth }"></div>
-        <div class="accuracy-meter__ticks"></div>
-      </div>
-
-      <div class="cluster-stats">
-        <div class="cluster-stat">
-          <span class="cluster-stat__label">COST</span>
-          <span class="cluster-stat__value">{{ score === null ? '—' : score }}<em>pts</em></span>
-        </div>
-        <div class="cluster-stat">
-          <span class="cluster-stat__label">GROUPS</span>
-          <span class="cluster-stat__value">{{ groupsLeft }}<em>/{{ groupsTotal }}</em></span>
+        <div
+          class="accuracy-meter"
+          role="progressbar"
+          :aria-valuenow="Math.round(accuracy)"
+          aria-valuemin="0"
+          aria-valuemax="100"
+        >
+          <div
+            class="accuracy-meter__fill"
+            :class="{ 'accuracy-meter__fill--hot': acceptable }"
+            :style="{ width: meterWidth }"
+          ></div>
+          <div class="accuracy-meter__ticks"></div>
         </div>
       </div>
 
-      <div class="cluster-status" :class="acceptable ? 'cluster-status--good' : 'cluster-status--idle'">
-        {{ acceptable ? 'TARGET HIT' : value === null ? 'MERGE ALL CARDS' : 'KEEP TUNING' }}
+      <div class="cost-block" :class="{ 'cost-block--idle': costBreakdown === null }">
+        <div class="cost-total">
+          <span class="cost-total__label">COST</span>
+          <span class="cost-total__value" data-testid="cost-total">
+            {{ score === null ? '—' : score }}<em>pts</em>
+          </span>
+        </div>
+        <div class="cost-rows" data-testid="cost-breakdown">
+          <div class="cost-row">
+            <span class="cost-row__label">BINARY</span>
+            <span class="cost-row__count">×{{ costBreakdown?.binaryOperators ?? 0 }}</span>
+            <span class="cost-row__pts">{{ costBreakdown?.binaryCost ?? 0 }}</span>
+          </div>
+          <div class="cost-row">
+            <span class="cost-row__label">UNARY</span>
+            <span class="cost-row__count">×{{ costBreakdown?.unaryOperators ?? 0 }}</span>
+            <span class="cost-row__pts">{{ costBreakdown?.unaryCost ?? 0 }}</span>
+          </div>
+          <div
+            v-if="costBreakdown && costBreakdown.nestingCost > 0"
+            class="cost-row cost-row--nest"
+          >
+            <span class="cost-row__label">NEST</span>
+            <span class="cost-row__count">×{{ costBreakdown.nestingCount }}</span>
+            <span class="cost-row__pts">{{ costBreakdown.nestingCost }}</span>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -339,25 +349,17 @@ onBeforeUnmount(() => {
   text-align: center;
 }
 
-.chips-row {
+/* Accuracy reads as one line: the percentage chip beside its meter */
+.accuracy-row {
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 6px;
-}
-
-.chips-row__x {
-  font-family: var(--font-pixel);
-  font-size: 1rem;
-  color: var(--ink-cream);
-  text-shadow: 0 2px 0 #000;
-  padding-bottom: 2px;
+  gap: 8px;
 }
 
 .pixel-chip {
   position: relative;
-  flex: 1 1 0;
-  min-width: 0;
+  flex: 0 0 auto;
+  min-width: 62px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -370,14 +372,9 @@ onBeforeUnmount(() => {
   transition: transform 0.12s cubic-bezier(0.22, 1, 0.36, 1), filter 0.15s ease;
 }
 
-.pixel-chip--value {
-  background: linear-gradient(180deg, #3b7ddd 0%, #2755a8 100%);
-  transform: rotate(-1.5deg);
-}
-
 .pixel-chip--mult {
   background: linear-gradient(180deg, #ff6b52 0%, #c92f24 100%);
-  transform: rotate(1.5deg);
+  transform: rotate(-1.5deg);
 }
 
 .pixel-chip--muted {
@@ -395,19 +392,11 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
-.chips-captions {
-  display: flex;
-  justify-content: space-between;
-  padding: 0 4px;
-  font-family: var(--font-pixel);
-  font-size: 0.54rem;
-  letter-spacing: 0.16em;
-  color: var(--ink-muted);
-}
-
 .accuracy-meter {
   position: relative;
-  height: 14px;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 22px;
   background: #0a0810;
   border: 2px solid #3a3550;
   overflow: hidden;
@@ -441,62 +430,93 @@ onBeforeUnmount(() => {
   pointer-events: none;
 }
 
-.cluster-stats {
-  display: flex;
-  gap: 6px;
-}
-
-.cluster-stat {
-  flex: 1;
+/* ---------------- Cost: total plus where each point came from ---------------- */
+.cost-block {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  background: #0c0a12;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  padding: 4px 6px;
+  gap: 5px;
+  transition: opacity 0.2s ease;
 }
 
-.cluster-stat__label {
+.cost-block--idle {
+  opacity: 0.55;
+}
+
+.cost-total {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  background: #0c0a12;
+  border: 2px solid rgba(255, 190, 11, 0.35);
+  padding: 5px 8px 6px;
+}
+
+.cost-total__label {
+  font-family: var(--font-pixel);
+  font-size: 0.56rem;
+  letter-spacing: 0.22em;
+  color: var(--ink-muted);
+}
+
+.cost-total__value {
+  font-family: var(--font-mono);
+  font-size: 1.34rem;
+  line-height: 1;
+  color: var(--gold-bright);
+  text-shadow: 0 2px 0 #09080f;
+}
+
+.cost-total__value em {
+  font-style: normal;
+  font-size: 0.72rem;
+  color: var(--ink-muted);
+  margin-left: 3px;
+}
+
+.cost-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.cost-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: baseline;
+  gap: 6px;
+  padding: 3px 7px;
+  background: rgba(12, 10, 18, 0.75);
+  border-left: 3px solid rgba(255, 255, 255, 0.14);
+}
+
+.cost-row__label {
   font-family: var(--font-pixel);
   font-size: 0.52rem;
   letter-spacing: 0.16em;
   color: var(--ink-muted);
 }
 
-.cluster-stat__value {
+.cost-row__count {
   font-family: var(--font-mono);
-  font-size: 1.16rem;
-  line-height: 1;
-  color: var(--gold-bright);
+  font-size: 0.78rem;
+  color: rgba(247, 240, 224, 0.6);
 }
 
-.cluster-stat__value em {
-  font-style: normal;
-  font-size: 0.72rem;
-  color: var(--ink-muted);
-  margin-left: 2px;
+.cost-row__pts {
+  min-width: 4ch;
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: 0.92rem;
+  color: var(--ink-cream);
 }
 
-.cluster-status {
-  text-align: center;
-  font-family: var(--font-pixel);
-  font-size: 0.62rem;
-  letter-spacing: 0.12em;
-  padding: 5px 4px;
-  border: 2px solid;
+.cost-row--nest {
+  border-left-color: var(--crimson);
 }
 
-.cluster-status--idle {
-  color: var(--ink-muted);
-  border-color: rgba(255, 255, 255, 0.16);
-  background: rgba(255, 255, 255, 0.03);
-}
-
-.cluster-status--good {
-  color: #15111e;
-  background: var(--gold);
-  border-color: #fff9db;
-  animation: status-blink 1.1s steps(2) infinite;
+.cost-row--nest .cost-row__pts {
+  color: #ff9d9d;
 }
 
 /* ---------------- Celebration ---------------- */
@@ -604,16 +624,9 @@ onBeforeUnmount(() => {
   }
 }
 
-@keyframes status-blink {
-  50% {
-    background: var(--gold-bright);
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
   .blind-card,
-  .pixel-chip,
-  .cluster-status {
+  .pixel-chip {
     animation: none !important;
   }
   .burst-particle {

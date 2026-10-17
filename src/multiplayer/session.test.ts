@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
+import { watch } from 'vue'
 import {
   connectToLocalTable,
   isRoomHost,
@@ -49,6 +50,27 @@ describe('multiplayer session — swappable transport', () => {
 
     expect(multiplayer.room?.round?.winnerId).toBe(multiplayer.selfId)
     expect(multiplayer.room?.players[0]?.points).toBe(1)
+  })
+
+  it('publishes a fresh snapshot for every state message', async () => {
+    await connectToLocalTable('Snapshot Tester')
+    const phases: string[] = []
+    const stop = watch(
+      () => multiplayer.room,
+      (room) => {
+        if (room) phases.push(room.phase)
+      }
+    )
+
+    const seated = multiplayer.room
+    sendToRoom({ t: 'start-match' })
+    await waitUntil(() => multiplayer.room?.phase === 'playing')
+
+    // The UI mirrors the room with a watcher on this reference, so each update
+    // has to arrive as a new object or the screen would never leave the lobby.
+    expect(multiplayer.room).not.toBe(seated)
+    expect(phases).toContain('playing')
+    stop()
   })
 
   it('only lets the host seat driver change the rules', async () => {

@@ -14,7 +14,7 @@ const emit = defineEmits<{
   (e: 'ungroup', id: string): void
 }>()
 
-function onNodeClick(event: MouseEvent): void {
+function onNodeClick(event: Event): void {
   if (!props.isRoot) return
   event.stopPropagation()
   emit('select', props.node.id)
@@ -39,7 +39,13 @@ function onUngroupClick(event: MouseEvent): void {
       'expr-node--leaf': node.kind === 'card',
     }"
     :data-group-id="isRoot ? node.id : undefined"
+    :role="isRoot ? 'button' : undefined"
+    :tabindex="isRoot ? 0 : undefined"
+    :aria-pressed="isRoot ? !!selected : undefined"
+    :aria-label="isRoot ? `Card group worth ${formatNumber(node.value)}` : undefined"
     @click="onNodeClick"
+    @keydown.enter.prevent="onNodeClick"
+    @keydown.space.prevent="onNodeClick"
   >
     <!-- Root value badge & pending binary operator chip -->
     <div v-if="isRoot && pendingSymbol && selected" class="pending-op-chip">
@@ -127,6 +133,12 @@ function onUngroupClick(event: MouseEvent): void {
 
 .expr-node--root:active {
   cursor: grabbing;
+}
+
+/* Keyboard users can tab between the pieces on the board and pick one up. */
+.expr-node--root:focus-visible {
+  outline: 3px solid var(--gold-bright, #f5c451);
+  outline-offset: 4px;
 }
 
 .expr-node--selected {

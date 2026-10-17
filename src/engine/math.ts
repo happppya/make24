@@ -167,10 +167,6 @@ export function isUnaryOperator(op: OperatorId): op is UnaryOperator {
   )
 }
 
-export function isBinaryOperator(op: OperatorId): op is BinaryOperator {
-  return !isUnaryOperator(op)
-}
-
 const LANCZOS_G = 7
 const LANCZOS_COEFFS = [
   0.99999999999980993,
@@ -629,7 +625,7 @@ export function checkTargetAcceptance(
 }
 
 /**
- * Calculates the score of an expression tree according to the spec:
+ * Itemised cost of an expression tree. The rules:
  * - Lower score is better.
  * - 10 score is added for each binary operator used.
  * - The unary penalty increases per layer: the first unary operator is 10,
@@ -641,20 +637,44 @@ export function checkTargetAcceptance(
  *   nested: e.g. factorial(Γ⁻¹(x)) or Γ⁻¹(factorial(x)). Factorial and plain
  *   gamma together carry no extra penalty.
  */
-export function calculateScore(node: ExprNode): number {
-  function walk(curr: ExprNode, unaryDepthAbove: number): number {
+export interface ScoreBreakdown {
+  /** Total cost, identical to `calculateScore`. */
+  total: number
+  /** Number of binary operators in the tree and the 10 each one costs. */
+  binaryOperators: number
+  binaryCost: number
+  /** Number of unary operators and the summed per-layer cost (10, 20, 30…). */
+  unaryOperators: number
+  unaryCost: number
+  /** Nested factorial + inverse-gamma pairs and the 200 each pair costs. */
+  nestingCount: number
+  nestingCost: number
+}
+
+/**
+ * Walks the tree once, tallying each cost source so the UI can show where the
+ * bill came from instead of a single lump sum. `total` matches `calculateScore`.
+ */
+export function calculateScoreBreakdown(node: ExprNode): ScoreBreakdown {
+  let binaryOperators = 0
+  let unaryOperators = 0
+  let unaryCost = 0
+  let nestingCount = 0
+
+  function walk(curr: ExprNode, unaryDepthAbove: number): void {
     if (curr.kind === 'card') {
-      return 0
+      return
     }
     if (curr.kind === 'binary') {
-      // Binary operator costs 10 and resets the consecutive unary chain for its operands
-      return 10 + walk(curr.left, 0) + walk(curr.right, 0)
+      binaryOperators++
+      walk(curr.left, 0)
+      walk(curr.right, 0)
+      return
     }
-    // Unary operator
+    unaryOperators++
     const currentLayer = unaryDepthAbove + 1
-    let layerCost = currentLayer * 10
+    unaryCost += currentLayer * 10
 
-    // Check if factorial and inverse gamma are nested together directly
     if (curr.operand.kind === 'unary') {
       const outerOp = curr.operator
       const innerOp = curr.operand.operator
@@ -662,14 +682,56 @@ export function calculateScore(node: ExprNode): number {
         (outerOp === 'fact' && innerOp === 'invgamma') ||
         (outerOp === 'invgamma' && innerOp === 'fact')
       ) {
-        layerCost += 200
+        nestingCount++
       }
     }
 
-    return layerCost + walk(curr.operand, currentLayer)
+    walk(curr.operand, currentLayer)
   }
 
-  return walk(node, 0)
+  walk(node, 0)
+
+  return {
+    total: binaryOperators * 10 + unaryCost + nestingCount * 200,
+    binaryOperators,
+    binaryCost: binaryOperators * 10,
+    unaryOperators,
+    unaryCost,
+    nestingCount,
+    nestingCost: nestingCount * 200,
+  }
+}
+
+/** Score of an expression tree; see `calculateScoreBreakdown` for the itemisation. */
+export function calculateScore(node: ExprNode): number {
+  return calculateScoreBreakdown(node).total
+}
+
+/** How many unary operators sit directly on top of `node` (0 for anything else). */
+export function unaryChainDepth(node: ExprNode): number {
+  let depth = 0
+  let current: ExprNode = node
+  while (current.kind === 'unary') {
+    depth += 1
+    current = current.operand
+  }
+  return depth
+}
+
+/**
+ * Points that stacking `operator` on top of `operand` adds to the score.
+ *
+ * The new unary becomes layer one and pushes the chain underneath it down a
+ * layer, so a second stacked unary costs 20, not the 10 a fresh one does. The
+ * factorial/inverse-gamma pairing carries its 200-point penalty too.
+ */
+export function costOfUnaryOn(operator: UnaryOperator, operand: ExprNode): number {
+  const layer = unaryChainDepth(operand) + 1
+  const pairsFactorial =
+    operand.kind === 'unary' &&
+    ((operator === 'fact' && operand.operator === 'invgamma') ||
+      (operator === 'invgamma' && operand.operator === 'fact'))
+  return layer * 10 + (pairsFactorial ? 200 : 0)
 }
 
 function getBinaryPrecedence(op: BinaryOperator): number {

@@ -145,6 +145,56 @@ export function createInitialPositions(groups: ExprNode[]): Record<string, Group
   return positions
 }
 
+export interface TidyGridOptions {
+  /** Cards per row; defaults to the six-per-row deal. */
+  columns?: number
+  spacingX?: number
+  spacingY?: number
+}
+
+/**
+ * Squares every group away into an even grid centred on the workspace origin.
+ * Rows are centred too, so a partial last row still looks deliberate.
+ * Returns false — recording no undo entry — when the board already sits on it.
+ */
+export function tidyWorkspaceGroups(
+  ws: WorkspaceState,
+  options: TidyGridOptions = {}
+): boolean {
+  const count = ws.groups.length
+  if (count === 0) return false
+
+  const spacingX = options.spacingX ?? DEFAULT_CARD_SPACING_X
+  const spacingY = options.spacingY ?? DEFAULT_CARD_SPACING_Y
+  const columns = Math.max(1, Math.min(count, Math.floor(options.columns ?? DEFAULT_CARDS_PER_ROW)))
+  const blockWidth = (columns - 1) * spacingX
+  const blockHeight = (Math.ceil(count / columns) - 1) * spacingY
+
+  const next: Record<string, GroupPosition> = {}
+  ws.groups.forEach((group, index) => {
+    const row = Math.floor(index / columns)
+    const col = index % columns
+    next[group.id] = {
+      x: Math.round(col * spacingX - blockWidth / 2),
+      y: Math.round(row * spacingY - blockHeight / 2),
+    }
+  })
+
+  const alreadyTidy =
+    Object.keys(ws.positions).length === count &&
+    ws.groups.every((group) => {
+      const pos = ws.positions[group.id]
+      const target = next[group.id]!
+      return pos !== undefined && pos.x === target.x && pos.y === target.y
+    })
+  if (alreadyTidy) return false
+
+  pushUndoSnapshot(ws, createSnapshot(ws))
+  // Replacing the map also drops positions left behind by groups that no longer exist.
+  ws.positions = next
+  return true
+}
+
 export function createSnapshot(ws: WorkspaceState): WorkspaceSnapshot {
   return {
     groups: ws.groups.map(cloneExprNode),

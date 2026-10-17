@@ -6,7 +6,6 @@ import {
 } from './room'
 import {
   PROTOCOL_VERSION,
-  normalizeRoomCode,
   type ClientMessage,
   type RoomState,
   type ServerMessage,
@@ -33,8 +32,15 @@ export function createLoopbackTransport(
     handlers.onMessage(message)
   }
 
+  /**
+   * Snapshots go out as copies, exactly like the WebSocket server's JSON frames.
+   * Handing out the live object would leave `multiplayer.room` identical between
+   * updates, so watchers that key off the snapshot identity would never refire.
+   */
+  const snapshot = (): RoomState => JSON.parse(JSON.stringify(room)) as RoomState
+
   const emitState = (): void => {
-    emit({ t: 'state', room, serverTime: Date.now() })
+    emit({ t: 'state', room: snapshot(), serverTime: Date.now() })
   }
 
   const seat = (name: string): void => {
@@ -43,7 +49,7 @@ export function createLoopbackTransport(
       emit({
         t: 'welcome',
         selfId: playerId,
-        room,
+        room: snapshot(),
         protocol: PROTOCOL_VERSION,
         serverTime: Date.now(),
       })
@@ -58,7 +64,7 @@ export function createLoopbackTransport(
     emit({
       t: 'welcome',
       selfId: playerId,
-      room,
+      room: snapshot(),
       protocol: PROTOCOL_VERSION,
       serverTime: Date.now(),
     })
@@ -93,8 +99,4 @@ export function createLoopbackTransport(
       handlers.onClose?.({ code: 1000, reason: 'closed locally', wasClean: true })
     },
   }
-}
-
-export function loopbackRoomCode(): string {
-  return normalizeRoomCode('LOCAL')
 }

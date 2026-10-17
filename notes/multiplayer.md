@@ -43,8 +43,12 @@ Server → client: `welcome` (self id + room snapshot + server time), `state`
 (full snapshot with `revision`), `error` (code + message).
 
 The server never trusts the client: names are trimmed and de-duplicated, settings
-are clamped, solutions must be finite and are stamped with the sender's identity
-and the round clock, and only the host may edit rules or drive round transitions.
+are clamped, solutions must be finite and land inside the round's acceptance band
+(error percent is recomputed from `finalValue` rather than read from the payload)
+and are stamped with the sender's identity and the round clock, and only the host
+may edit rules or drive round transitions. Message frames are capped at 32 KiB
+(`maxPayload`), and an unknown message type is rejected instead of reaching the
+reducer.
 
 Turn order for a round:
 

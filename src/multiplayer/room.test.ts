@@ -8,7 +8,7 @@ import {
   sanitizeSettings,
   tickRoom,
 } from './room'
-import type { RoomState } from './protocol'
+import type { ClientMessage, RoomState } from './protocol'
 import type { GameSettings } from '../engine/types'
 
 function seat(room: RoomState, id: string, name: string): void {
@@ -245,6 +245,79 @@ describe('multiplayer room — rounds', () => {
     submit(room, 'p1', 25)
     expect(room.phase).toBe('game-over')
     expect(room.matchWinnerId).toBe('p1')
+  })
+
+  it('refuses a board that misses the target, however cheap it claims to be', () => {
+    const room = createRoomState('test')
+    seat(room, 'p1', 'Host')
+    seat(room, 'p2', 'Guest')
+    startMatch(room)
+
+    const cheat = handleClientMessage(
+      room,
+      'p1',
+      {
+        t: 'submit',
+        solution: {
+          equation: '2 + 2 = 4',
+          lhs: '2 + 2',
+          finalValue: 4,
+          score: 0,
+          errorPercent: 0,
+          workspaceIndex: 1,
+        },
+      },
+      2_000
+    )
+
+    expect(cheat.error?.code).toBe('bad-message')
+    expect(room.phase).toBe('playing')
+    expect(room.round!.solutions).toHaveLength(0)
+    expect(room.players[0]!.points).toBe(0)
+  })
+
+  it('recomputes the error percent from the target instead of trusting the client', () => {
+    const room = createRoomState('test')
+    seat(room, 'p1', 'Host')
+    room.settings.mode = 'best-1m'
+    room.settings.approximationPercent = 10
+    startMatch(room)
+
+    const padded = handleClientMessage(
+      room,
+      'p1',
+      {
+        t: 'submit',
+        solution: {
+          equation: '5 * 5 = 25',
+          lhs: '5 * 5',
+          finalValue: 25,
+          score: 10,
+          errorPercent: 0, // a lie: 25 is ~4.17% away from 24
+          workspaceIndex: 1,
+        },
+      },
+      2_000
+    )
+
+    expect(padded.error).toBeUndefined()
+    expect(room.round!.solutions).toHaveLength(1)
+    expect(room.round!.solutions[0]!.errorPercent).toBeCloseTo(4.1667, 3)
+  })
+
+  it('answers an unknown message type instead of blowing up', () => {
+    const room = createRoomState('test')
+    seat(room, 'p1', 'Host')
+
+    const bogus = handleClientMessage(
+      room,
+      'p1',
+      { t: 'not-a-real-message' } as unknown as ClientMessage,
+      1_000
+    )
+
+    expect(bogus.changed).toBe(false)
+    expect(bogus.error?.code).toBe('bad-message')
   })
 
   it('rejects malformed solutions without touching the round', () => {

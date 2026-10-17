@@ -39,6 +39,9 @@ export interface ServerOptions {
   log?: (line: string) => void
 }
 
+/** Largest client frame we will even read; the biggest real message is a settings push. */
+const MAX_MESSAGE_BYTES = 32 * 1024
+
 export interface MultiplayerServer {
   port: number
   url: string
@@ -96,7 +99,9 @@ export async function createMultiplayerServer(options: ServerOptions = {}): Prom
     res.end('Not found. Connect to /ws for the table socket.\n')
   })
 
-  const wss = new WebSocketServer({ noServer: true })
+  // `maxPayload` keeps a hostile client from making the process buffer megabytes
+  // of JSON; oversized frames are closed by ws before they reach the reducer.
+  const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_MESSAGE_BYTES })
 
   httpServer.on('upgrade', (req: IncomingMessage, socket, head) => {
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`)

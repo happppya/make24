@@ -6,7 +6,9 @@ import {
   applyBinaryOperator,
   applyUnaryOperator,
   calculateScore,
+  calculateScoreBreakdown,
   checkTargetAcceptance,
+  costOfUnaryOn,
   formatExpressionLhs,
   formatFullEquation,
   realFactorial,
@@ -17,6 +19,7 @@ import { buildDeckPool, createCard, dealHand, generateTargetNumber } from './eng
 import {
   DEFAULT_CARDS_PER_ROW,
   DEFAULT_CARD_SPACING_X,
+  DEFAULT_CARD_SPACING_Y,
   WORKSPACE_COUNT,
   applyOperatorInWorkspace,
   createAllWorkspaces,
@@ -29,10 +32,11 @@ import {
   selectGroupInWorkspace,
   setGroupPosition,
   setWorkspacePan,
+  tidyWorkspaceGroups,
   undoWorkspace,
   ungroupInWorkspace,
 } from './engine/workspace'
-import type { Card } from './engine/types'
+import type { Card, ExprNode } from './engine/types'
 
 describe('Make 24 Remastered — Math & Operators Engine', () => {
   it('evaluates basic binary operators and respects selection order for non-commutative ops', () => {
@@ -158,6 +162,12 @@ describe('Make 24 Remastered — Math & Operators Engine', () => {
   })
 })
 
+/** Unwraps a node the tests know is unary, without a cast in every assertion. */
+function unaryOperandOf(node: ExprNode): ExprNode {
+  if (node.kind !== 'unary') throw new Error('expected a unary node')
+  return node.operand
+}
+
 describe('Make 24 Remastered — Scoring & Equation Formatting', () => {
   let sampleCards: Card[]
 
@@ -247,6 +257,143 @@ describe('Make 24 Remastered — Scoring & Equation Formatting', () => {
     const root = ws.groups[0]!
     expect(formatExpressionLhs(root)).toBe('(4 + 3) * 7')
     expect(formatFullEquation(root)).toBe('(4 + 3) * 7 = 49')
+  })
+
+  it('itemises the cost of consecutive unary operators', () => {
+    const ws = createWorkspace(0, [sampleCards[0]!])
+    selectGroupInWorkspace(ws, ws.groups[0]!.id)
+    applyOperatorInWorkspace(ws, 'sin')
+    applyOperatorInWorkspace(ws, 'cos')
+    applyOperatorInWorkspace(ws, 'tan')
+
+    const root = ws.groups[0]!
+    expect(calculateScoreBreakdown(root)).toEqual({
+      total: 60,
+      binaryOperators: 0,
+      binaryCost: 0,
+      unaryOperators: 3,
+      unaryCost: 60,
+      nestingCount: 0,
+      nestingCost: 0,
+    })
+    expect(calculateScoreBreakdown(root).total).toBe(calculateScore(root))
+  })
+
+  it('reports what the next unary operator actually adds to the score', () => {
+    const ws = createWorkspace(0, [sampleCards[0]!])
+    selectGroupInWorkspace(ws, ws.groups[0]!.id)
+    const empty = calculateScore(ws.groups[0]!)
+
+    // First unary: a fresh layer one costs 10
+    applyOperatorInWorkspace(ws, 'sin')
+    const firstNode = ws.groups[0]!
+    const afterFirst = calculateScore(firstNode)
+    expect(costOfUnaryOn('sin', unaryOperandOf(firstNode))).toBe(afterFirst - empty)
+    expect(costOfUnaryOn('sin', unaryOperandOf(firstNode))).toBe(10)
+
+    // Second stacked unary: it is the new layer one and pushes the first down,
+    // so the board jumps by 20 rather than 10
+    applyOperatorInWorkspace(ws, 'cos')
+    const secondNode = ws.groups[0]!
+    expect(costOfUnaryOn('cos', unaryOperandOf(secondNode))).toBe(
+      calculateScore(secondNode) - afterFirst
+    )
+    expect(costOfUnaryOn('cos', unaryOperandOf(secondNode))).toBe(20)
+
+    // A binary op resets the chain, so the unary above it is layer one again
+    const pair = createWorkspace(0, [sampleCards[0]!, sampleCards[1]!])
+    selectGroupInWorkspace(pair, pair.groups[0]!.id)
+    applyOperatorInWorkspace(pair, 'add')
+    selectGroupInWorkspace(pair, pair.groups[1]!.id)
+    const merged = calculateScore(pair.groups[0]!)
+    applyOperatorInWorkspace(pair, 'fact')
+    const wrapped = pair.groups[0]!
+    expect(costOfUnaryOn('fact', unaryOperandOf(wrapped))).toBe(
+      calculateScore(wrapped) - merged
+    )
+    expect(costOfUnaryOn('fact', unaryOperandOf(wrapped))).toBe(10)
+  })
+
+  it('folds the 200-point pairing into the cost of the operator that creates it', () => {
+    const ws = createWorkspace(0, [sampleCards[1]!]) // card 3
+    selectGroupInWorkspace(ws, ws.groups[0]!.id)
+
+    applyOperatorInWorkspace(ws, 'invgamma')
+    const baseScore = calculateScore(ws.groups[0]!)
+    applyOperatorInWorkspace(ws, 'fact')
+    const nested = ws.groups[0]!
+
+    expect(costOfUnaryOn('fact', unaryOperandOf(nested))).toBe(
+      calculateScore(nested) - baseScore
+    )
+    expect(costOfUnaryOn('fact', unaryOperandOf(nested))).toBe(220)
+
+    // Reversing the pair costs the same, and plain gamma carries no penalty
+    const reverse = createWorkspace(0, [sampleCards[1]!])
+    selectGroupInWorkspace(reverse, reverse.groups[0]!.id)
+    applyOperatorInWorkspace(reverse, 'fact')
+    const beforeReverse = calculateScore(reverse.groups[0]!)
+    applyOperatorInWorkspace(reverse, 'invgamma')
+    const reversed = reverse.groups[0]!
+    expect(costOfUnaryOn('invgamma', unaryOperandOf(reversed))).toBe(
+      calculateScore(reversed) - beforeReverse
+    )
+    expect(costOfUnaryOn('invgamma', unaryOperandOf(reversed))).toBe(220)
+
+    const plain = createWorkspace(0, [sampleCards[1]!])
+    selectGroupInWorkspace(plain, plain.groups[0]!.id)
+    applyOperatorInWorkspace(plain, 'fact')
+    // Stacking plain gamma on that factorial is a mere layer two, no pairing
+    const factorialNode = plain.groups[0]!
+    const factorialScore = calculateScore(factorialNode)
+    applyOperatorInWorkspace(plain, 'gamma')
+    expect(costOfUnaryOn('gamma', factorialNode)).toBe(
+      calculateScore(plain.groups[0]!) - factorialScore
+    )
+    expect(costOfUnaryOn('gamma', factorialNode)).toBe(20)
+  })
+
+  it('separates the nested factorial/inverse-gamma penalty from the unary layers', () => {
+    const ws = createWorkspace(0, [sampleCards[1]!]) // card 3
+    selectGroupInWorkspace(ws, ws.groups[0]!.id)
+    applyOperatorInWorkspace(ws, 'invgamma') // Γ⁻¹(3) -> 10
+    applyOperatorInWorkspace(ws, 'fact') // + 20 layer + 200 nested pair
+    applyOperatorInWorkspace(ws, 'invgamma') // + 30 layer + 200 nested pair
+
+    const root = ws.groups[0]!
+    expect(calculateScoreBreakdown(root)).toEqual({
+      total: 460,
+      binaryOperators: 0,
+      binaryCost: 0,
+      unaryOperators: 3,
+      unaryCost: 60,
+      nestingCount: 2,
+      nestingCost: 400,
+    })
+    expect(calculateScoreBreakdown(root).total).toBe(calculateScore(root))
+  })
+
+  it('counts each binary operator separately from the unary layers around it', () => {
+    const ws = createWorkspace(0, [sampleCards[0]!, sampleCards[1]!, sampleCards[2]!]) // 4, 3, 7
+    selectGroupInWorkspace(ws, ws.groups[0]!.id)
+    applyOperatorInWorkspace(ws, 'fact') // 4! -> layer 1
+    applyOperatorInWorkspace(ws, 'add') // binary, resets the chain
+    selectGroupInWorkspace(ws, ws.groups[1]!.id)
+    applyOperatorInWorkspace(ws, 'sin') // outer unary -> layer 1
+    applyOperatorInWorkspace(ws, 'mult')
+    selectGroupInWorkspace(ws, ws.groups[1]!.id)
+
+    const root = ws.groups[0]!
+    expect(calculateScoreBreakdown(root)).toEqual({
+      total: 40,
+      binaryOperators: 2,
+      binaryCost: 20,
+      unaryOperators: 2,
+      unaryCost: 20,
+      nestingCount: 0,
+      nestingCost: 0,
+    })
+    expect(calculateScoreBreakdown(root).total).toBe(calculateScore(root))
   })
 })
 
@@ -433,6 +580,69 @@ describe('Make 24 Remastered — Deck Pool, 5 Workspaces & Undo/Redo', () => {
     expect(Math.abs(overflow.x - firstCentre)).toBeLessThan(1)
     expect(overflow.y).toBe(secondRow[0]!.y)
   })
+
+  it('tidies scattered groups into an even grid centred on the workspace origin', () => {
+    const hand = Array.from({ length: 4 }, (_, i) => createCard(5, 'hearts', `tidy-${i}`))
+    const ws = createWorkspace(0, hand)
+    const ids = ws.groups.map((group) => group.id)
+
+    // Scatter everything far from home first (and leave a stale entry behind)
+    ids.forEach((id, i) => setGroupPosition(ws, id, 900 + i * 700, -400 + i * 300))
+    ws.positions['leaf-gone'] = { x: 5000, y: 5000 }
+
+    expect(tidyWorkspaceGroups(ws, { columns: 4 })).toBe(true)
+
+    const block = (4 - 1) * DEFAULT_CARD_SPACING_X
+    ids.forEach((id, i) => {
+      const pos = getGroupPosition(ws, id)
+      expect(pos.x).toBe(Math.round((i * DEFAULT_CARD_SPACING_X) - block / 2))
+      expect(pos.y).toBe(0) // a single row sits on the origin line
+    })
+
+    // One tidy row is symmetric about the origin, and stale ids are dropped
+    expect(getGroupPosition(ws, ids[0]!).x).toBe(-getGroupPosition(ws, ids[3]!).x)
+    expect(ws.positions['leaf-gone']).toBeUndefined()
+  })
+
+  it('wraps a tidied board onto further rows and centres each of them', () => {
+    const hand = Array.from({ length: 4 }, (_, i) => createCard(6, 'clubs', `wrap-tidy-${i}`))
+    const ws = createWorkspace(0, hand)
+    const ids = ws.groups.map((group) => group.id)
+
+    expect(tidyWorkspaceGroups(ws, { columns: 3 })).toBe(true)
+
+    const expected = [
+      { x: -DEFAULT_CARD_SPACING_X, y: -DEFAULT_CARD_SPACING_Y / 2 },
+      { x: 0, y: -DEFAULT_CARD_SPACING_Y / 2 },
+      { x: DEFAULT_CARD_SPACING_X, y: -DEFAULT_CARD_SPACING_Y / 2 },
+      { x: -DEFAULT_CARD_SPACING_X, y: DEFAULT_CARD_SPACING_Y / 2 },
+    ]
+    ids.forEach((id, i) => {
+      const pos = getGroupPosition(ws, id)
+      expect(pos.x).toBe(Math.round(expected[i]!.x))
+      expect(pos.y).toBe(Math.round(expected[i]!.y))
+    })
+  })
+
+  it('does nothing when the board is already tidy, and undoes back to the scattered layout', () => {
+    const hand = Array.from({ length: 4 }, (_, i) => createCard(7, 'spades', `undo-tidy-${i}`))
+    const ws = createWorkspace(0, hand)
+    const ids = ws.groups.map((group) => group.id)
+    ids.forEach((id, i) => setGroupPosition(ws, id, 40 + i * 60, -20 * i))
+    const scattered = ids.map((id) => ({ ...getGroupPosition(ws, id) }))
+
+    expect(tidyWorkspaceGroups(ws, { columns: 2 })).toBe(true)
+    const undoDepth = ws.undoStack.length
+
+    // Second pass is a no-op: no movement, no extra history entry
+    expect(tidyWorkspaceGroups(ws, { columns: 2 })).toBe(false)
+    expect(ws.undoStack.length).toBe(undoDepth)
+
+    expect(undoWorkspace(ws)).toBe(true)
+    ids.forEach((id, i) => {
+      expect(getGroupPosition(ws, id)).toEqual(scattered[i])
+    })
+  })
 })
 
 describe('Make 24 Remastered — Playable UI Flow (App.vue)', () => {
@@ -500,6 +710,31 @@ describe('Make 24 Remastered — Playable UI Flow (App.vue)', () => {
     // Finish round and verify transition to Round End screen
     await wrapper.find('[data-testid="finish-round-btn"]').trigger('click')
     expect(wrapper.find('[data-testid="next-round-btn"]').exists()).toBe(true)
+  })
+
+  it('selects a board group from the keyboard, not only the pointer', async () => {
+    const wrapper = mount(App)
+    await wrapper.find('[data-testid="enter-singleplayer"]').trigger('click')
+    await wrapper.find('[data-testid="start-round-btn"]').trigger('click')
+
+    const roots = wrapper.findAll('.expr-node--root')
+    expect(roots.length).toBeGreaterThan(0)
+    // Each piece on the board is a focusable control so the game can be played
+    // without a mouse: tab to a card, Enter to pick it up.
+    expect(roots[0]!.attributes('role')).toBe('button')
+    expect(roots[0]!.attributes('tabindex')).toBe('0')
+
+    await roots[0]!.trigger('keydown', { key: 'Enter' })
+    await nextTick()
+    expect(wrapper.findAll('.expr-node--selected').length).toBe(1)
+    expect(roots[0]!.attributes('aria-pressed')).toBe('true')
+
+    // Space toggles it back off, like a click on the already-selected piece.
+    await roots[0]!.trigger('keydown', { key: ' ' })
+    await nextTick()
+    expect(wrapper.findAll('.expr-node--selected').length).toBe(0)
+
+    wrapper.unmount()
   })
 
   it('applies operators from the digit hotkeys (1–0 binary, Shift+1–0 unary)', async () => {

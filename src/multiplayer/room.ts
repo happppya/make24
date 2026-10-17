@@ -1,4 +1,5 @@
 import { dealHand, generateTargetNumber } from '../engine/deck'
+import { checkTargetAcceptance } from '../engine/math'
 import type {
   Card,
   CardPoolMode,
@@ -14,7 +15,6 @@ import {
   sanitizeName,
   type ClientMessage,
   type LobbyPlayer,
-  type RoomPhase,
   type RoomState,
   type RoundEndReason,
   type RoundState,
@@ -146,8 +146,7 @@ function uniqueName(room: RoomState, wanted: string): string {
 /** Adds a player; the first one in an empty room becomes host. */
 export function addRoomPlayer(
   room: RoomState,
-  player: { id: string; name: string },
-  now = Date.now()
+  player: { id: string; name: string }
 ): { changed: boolean; player?: LobbyPlayer; error?: ServerError } {
   if (room.players.length >= MAX_ROOM_PLAYERS) {
     return {
@@ -169,7 +168,6 @@ export function addRoomPlayer(
   if (isHost) room.hostId = playerEntry.id
   room.players.push(playerEntry)
   room.revision += 1
-  void now
   return { changed: true, player: playerEntry }
 }
 
@@ -289,11 +287,25 @@ function applySubmit(
     payload.lhs.length === 0 ||
     payload.lhs.length > 500 ||
     payload.equation.length > 500 ||
+    !Number.isFinite(payload.finalValue) ||
     !Number.isFinite(payload.score) ||
     payload.score < 0 ||
     payload.score > 1e6
   ) {
     return fail('bad-message', 'That solution payload is not valid.')
+  }
+
+  // The board itself is the server's business: a client can claim any score it
+  // likes, but the value it claims has to land in the round's acceptance band.
+  // Error percent is recomputed here rather than trusted, so a padded payload
+  // cannot win a round it does not deserve.
+  const check = checkTargetAcceptance(
+    payload.finalValue,
+    round.target,
+    room.settings.approximationPercent
+  )
+  if (!check.acceptable) {
+    return fail('bad-message', 'That board is not within the target tolerance.')
   }
 
   const entry: SubmittedSolution = {
@@ -302,9 +314,9 @@ function applySubmit(
     playerName: player.name,
     equation: payload.equation,
     lhs: payload.lhs,
-    finalValue: Number.isFinite(payload.finalValue) ? payload.finalValue : 0,
+    finalValue: payload.finalValue,
     score: payload.score,
-    errorPercent: Number.isFinite(payload.errorPercent) ? payload.errorPercent : 0,
+    errorPercent: check.errorPercent,
     timestampMs: Math.max(0, now - round.startedAt),
     workspaceIndex: Math.max(1, Math.round(payload.workspaceIndex || 1)),
   }
@@ -415,6 +427,11 @@ export function handleClientMessage(
 
     case 'submit':
       return applySubmit(room, playerId, message.solution, now)
+
+    default:
+      // Anything outside the union — a hand-crafted payload — must not reach the
+      // server as an undefined result, which would crash the message handler.
+      return fail('bad-message', 'Unknown message type.')
   }
 }
 
@@ -432,19 +449,6 @@ export function tickRoom(room: RoomState, now = Date.now()): boolean {
 
 export function roomIsEmpty(room: RoomState): boolean {
   return room.players.length === 0
-}
-
-export function phaseLabel(phase: RoomPhase): string {
-  switch (phase) {
-    case 'lobby':
-      return 'Lobby'
-    case 'playing':
-      return 'Round in progress'
-    case 'round-end':
-      return 'Round ended'
-    case 'game-over':
-      return 'Match over'
-  }
 }
 
 /** Re-exported so callers do not need to reach into protocol for the card type. */
