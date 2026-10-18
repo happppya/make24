@@ -1151,5 +1151,41 @@ describe('Make 24 Remastered — Playable UI Flow (App.vue)', () => {
     wrapper.unmount()
     leaveRoom()
   })
-})
 
+  it('reaches the match end screen and deals a new match from it', async () => {
+    const wrapper = mount(App)
+    await wrapper.find('[data-testid="enter-singleplayer"]').trigger('click')
+    await wrapper.find('[data-testid="start-round-btn"]').trigger('click')
+
+    // End Match closes the series immediately, with no board on the books.
+    await wrapper.find('.sidebar-actions .btn-arcade--crimson').trigger('click')
+    const finalScreen = wrapper.find('.screen-game-over')
+    expect(finalScreen.exists()).toBe(true)
+    expect(finalScreen.find('.gameover-joker').exists()).toBe(true)
+    expect(finalScreen.text()).toContain('Match ended early')
+    expect(finalScreen.findAll('.standing-card')).toHaveLength(1)
+
+    // Play Again starts a fresh round without leaving the screen flow.
+    const playAgain = finalScreen
+      .findAll('.round-end-actions button')
+      .find((button) => button.text() === 'Play Again')!
+    await playAgain.trigger('click')
+    expect(wrapper.find('.screen-playing').exists()).toBe(true)
+    expect(wrapper.findAll('.expr-node--root')).toHaveLength(4)
+
+    wrapper.unmount()
+  })
+
+  it('returns from the lobby browser to the title screen with the shared frame', async () => {
+    const wrapper = mount(App)
+    await wrapper.find('[data-testid="enter-multiplayer"]').trigger('click')
+    await nextTick()
+    expect(wrapper.find('.screen-lobby').exists()).toBe(true)
+
+    await wrapper.find('[data-testid="browser-back-btn"]').trigger('click')
+    expect(wrapper.find('.screen-title').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="enter-singleplayer"]').exists()).toBe(true)
+
+    wrapper.unmount()
+  })
+})
