@@ -1,0 +1,148 @@
+name: Deploy table server
+
+# Ships `master` to the Oracle Cloud VM that runs `server/`, restarts the
+# systemd unit and proves the live process answers /health. The VM keeps its own
+# checkout and pulls from GitHub, so a deploy is one fetch + one restart.
+#
+# One-time setup, Settings → Secrets and variables → Actions:
+#   secrets.VM_SSH_KEY   private key whose public half is in the deploy user's
+#                        authorized_keys (the same key the provision script used)
+#   vars.VM_HOST         public IP or hostname of the instance
+#   vars.VM_HEALTH_URL   https://<hostname>/health  (the Caddy front door)
+#   vars.VM_USER         optional, default `ubuntu`
+#   vars.VM_APP_DIR      optional, default `/opt/make24/app`
+#   vars.VM_SERVICE      optional, default `make24`
+#
+# Only table-relevant paths trigger this. A restart drops every room and seat,
+# because the server keeps state in memory, so a copy tweak or a screen
+# redesign must not disconnect players mid-hand.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'server/**'
+      - 'src/multiplayer/**'
+      - 'src/engine/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig*.json'
+      - '.github/workflows/deploy-server.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Never let two deploys race the same box; queue them so the newest commit wins.
+concurrency:
+  group: table-server
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check configuration
+        env:
+          VM_SSH_KEY: ${{ secrets.VM_SSH_KEY }}
+          VM_HOST: ${{ vars.VM_HOST }}
+          VM_HEALTH_URL: ${{ vars.VM_HEALTH_URL }}
+        run: |
+          missing=0
+          for name in VM_SSH_KEY VM_HOST VM_HEALTH_URL; do
+            if [ -z "${!name}" ]; then
+              echo "::error::repository secret/variable $name is not set"
+              missing=1
+            fi
+          done
+          exit "$missing"
+
+      - name: Load the deploy key
+        env:
+          VM_SSH_KEY: ${{ secrets.VM_SSH_KEY }}
+          VM_HOST: ${{ vars.VM_HOST }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VM_SSH_KEY" > ~/.ssh/vm_key
+          chmod 600 ~/.ssh/vm_key
+          ssh-keyscan -t ed25519 -H "$VM_HOST" >> ~/.ssh/known_hosts
+          echo "pinned $(wc -l < ~/.ssh/known_hosts) host key line(s) for $VM_HOST"
+
+      - name: Ship master and restart the unit
+        env:
+          VM_HOST: ${{ vars.VM_HOST }}
+          VM_USER: ${{ vars.VM_USER || 'ubuntu' }}
+          VM_APP_DIR: ${{ vars.VM_APP_DIR || '/opt/make24/app' }}
+          VM_SERVICE: ${{ vars.VM_SERVICE || 'make24' }}
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          ssh -i ~/.ssh/vm_key \
+              -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o BatchMode=yes \
+              "$VM_USER@$VM_HOST" \
+              "APP_DIR='$VM_APP_DIR' SERVICE='$VM_SERVICE' TARGET_SHA='$TARGET_SHA' bash -s" <<'REMOTE'
+          set -euo pipefail
+
+          # The unit runs as this unprivileged user, so the checkout must too.
+          # -H matters: without it sudo keeps HOME=/home/ubuntu and npm cannot
+          # write its cache as m24.
+          APP_USER=m24
+          APP_HOME=$(dirname "$APP_DIR")
+          LOCK_HASH_FILE="$APP_HOME/.package-lock.sha256"
+          as_app() { sudo -H -u "$APP_USER" "$@"; }
+
+          cd "$APP_DIR"
+
+          as_app git fetch --depth 1 origin master
+          as_app git reset --hard FETCH_HEAD
+
+          head_sha=$(as_app git rev-parse HEAD)
+          if [ "$head_sha" != "$TARGET_SHA" ]; then
+            echo "checked out $head_sha but the workflow built $TARGET_SHA" >&2
+            exit 1
+          fi
+          echo "checked out $head_sha"
+
+          # tsx lives in devDependencies, so npm ci must not omit dev packages.
+          # Reinstalling takes minutes on an eighth of a core, so only do it when
+          # the lockfile actually changed.
+          lock_sha=$(sha256sum package-lock.json | cut -d' ' -f1)
+          if [ "$lock_sha" = "$(cat "$LOCK_HASH_FILE" 2>/dev/null || true)" ]; then
+            echo "package-lock.json unchanged; keeping node_modules"
+          else
+            echo "installing dependencies (this is the slow part)"
+            as_app npm ci --no-audit --no-fund
+            printf '%s\n' "$lock_sha" | as_app tee "$LOCK_HASH_FILE" >/dev/null
+          fi
+
+          sudo systemctl restart "$SERVICE"
+          sleep 2
+          systemctl is-active --quiet "$SERVICE"
+          echo "$SERVICE restarted and active"
+          REMOTE
+
+      - name: Check /health
+        env:
+          VM_HEALTH_URL: ${{ vars.VM_HEALTH_URL }}
+        run: |
+          for attempt in $(seq 1 15); do
+            if body=$(curl -fsS --max-time 5 "$VM_HEALTH_URL") && echo "$body" | grep -q '"ok":true'; then
+              echo "$body"
+              exit 0
+            fi
+            echo "attempt $attempt: not serving yet"
+            sleep 2
+          done
+          echo "::error::$VM_HEALTH_URL never returned {\"ok\":true}"
+          exit 1
+
+      - name: Collect server logs
+        if: failure()
+        env:
+          VM_HOST: ${{ vars.VM_HOST }}
+          VM_USER: ${{ vars.VM_USER || 'ubuntu' }}
+          VM_SERVICE: ${{ vars.VM_SERVICE || 'make24' }}
+        run: |
+          ssh -i ~/.ssh/vm_key \
+              -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o BatchMode=yes \
+              "$VM_USER@$VM_HOST" \
+              "journalctl -u '$VM_SERVICE' -n 40 --no-pager -o cat; echo '--- caddy ---'; journalctl -u caddy -n 20 --no-pager -o cat" || true

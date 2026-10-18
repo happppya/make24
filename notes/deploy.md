@@ -31,8 +31,9 @@ use `base: './'` (see `vite.config.ts`). Consequences:
 
 ### Multiplayer
 
-The table server is not deployed by this workflow. See the Oracle Cloud runbook
-below for hosting it, then come back here to point the build at it. To make the
+The table server is not deployed by this workflow — `.github/workflows/deploy-server.yml`
+handles that separately (see "Server deploys" below). See the Oracle Cloud
+runbook below for hosting it, then come back here to point the build at it. To make the
 hosted site multiplayer-capable, add a repository variable `VITE_MULTIPLAYER_URL`
 (Settings → Secrets and variables → Actions → Variables), e.g.
 `wss://table.example.com/ws`; the build step passes it through and
@@ -55,11 +56,30 @@ verification method (not charged unless you upgrade).
 Always Free A1 capacity is frequently exhausted — "Out of host capacity" is
 normal, so retry another availability domain or another time.
 
+### 0. One-shot provision
+
+`scripts/provision-vm.sh` does steps 2–5 on the instance itself: swap, Node from
+the official tarball, the `m24` user, the checkout, `npm ci`, both systemd
+units, the Caddyfile and the iptables insert. Copy it up and run it as root:
+
+```bash
+scp scripts/provision-vm.sh ubuntu@<ip>: && ssh ubuntu@<ip> 'sudo bash provision-vm.sh'
+```
+
+It is idempotent and takes `DOMAIN=…` / `FRONTEND_ORIGIN=…` overrides. It skips
+`npm ci` while `package-lock.json` is unchanged, which makes a re-run the fix
+for any edited unit or Caddyfile. Node comes from the tarball and Caddy as a
+static binary rather than through `apt`/NodeSource, so it also works on Ubuntu
+20.04 images — which is what the Always Free console actually hands out — where
+the current Node release is no longer carried by the distro repo.
+
 ### 1. Instance
 
-- Ubuntu 24.04 image marked *Always Free Eligible*, public subnet with an
-  internet gateway, and a **reserved** public IP (an ephemeral one changes on
-  stop/start, which would silently break DNS).
+- Ubuntu image marked *Always Free Eligible* (20.04 or 24.04), public subnet
+  with an internet gateway, and a **reserved** public IP (an ephemeral one
+  changes on stop/start, which would silently break DNS). Reserving is not an
+  in-place edit: reserve a new address under *IP management → Reserved public
+  IPs*, then reassign it to the VNIC's primary private IP.
 - Security list / NSG ingress: TCP 22 from your own IP, TCP 80 and 443 from
   `0.0.0.0/0`. Do **not** publish 8787; Caddy fronts it on localhost.
 
@@ -112,15 +132,21 @@ the internet.
 
 ```caddyfile
 table.example.com {
-	@table path /ws /health
-	reverse_proxy @table 127.0.0.1:8787
-	respond 404
+	# `route` keeps these in the order written. A bare `respond 404` in the site
+	# block is sorted before `reverse_proxy`, so it would answer every request —
+	# /health and the /ws upgrade included, and the site would 404 forever.
+	route {
+		@table path /ws /health
+		reverse_proxy @table 127.0.0.1:8787
+		respond 404
+	}
 }
 ```
 
 Caddy obtains a certificate automatically once `table.example.com` resolves to
 the reserved IP and ports 80/443 reach the box. It handles the WebSocket
-upgrade without extra configuration.
+upgrade without extra configuration. No domain? An IP of `1.2.3.4` already has
+the hostname `1-2-3-4.sslip.io`, which Let's Encrypt will issue for.
 
 ### 5. Host firewall
 
@@ -155,6 +181,28 @@ Then open the deployed site in two browsers, create a lobby in one and join by
 code in the other: the lobby list, the deal and shared standings all ride the
 WebSocket. A 101 Switching Protocols in the browser's network tab is the
 end-to-end proof of the `wss://` upgrade.
+
+### 8. Server deploys
+
+`.github/workflows/deploy-server.yml` ships `master` to the box on push: it
+fetches and hard-resets `/opt/make24/app` as `m24`, reinstalls dependencies only
+when `package-lock.json` changed (the hash is cached in
+`/opt/make24/.package-lock.sha256`), restarts the unit and then polls
+`/health` from the runner until it answers `{"ok":true}`. On failure it dumps
+`journalctl` for `make24` and `caddy` into the job log.
+
+Only `server/**`, `src/multiplayer/**`, `src/engine/**`, the manifests and the
+workflow itself trigger it. That filter is deliberate: rooms and seats live in
+memory, so every restart disconnects everyone mid-hand and a copy tweak must
+not cost players their game.
+
+**One-time setup:** a secret `VM_SSH_KEY` (the private key whose public half is
+in the VM's `authorized_keys`) and variables `VM_HOST`, `VM_HEALTH_URL`
+(`https://<host>/health`), plus optional `VM_USER` (default `ubuntu`),
+`VM_APP_DIR` (default `/opt/make24/app`) and `VM_SERVICE` (default `make24`).
+The runner pins the host key with `ssh-keyscan` rather than storing a
+`known_hosts` secret; pinning the fingerprint in a variable is stricter if the
+repo ever goes private.
 
 ### Caveats before calling it public
 
