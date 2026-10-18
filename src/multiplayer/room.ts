@@ -50,6 +50,7 @@ export function createDefaultSettings(): GameSettings {
       trig: false,
       inverse: false,
       bitshift: false,
+      concat: false,
     },
     firstToPoints: 3,
   }
@@ -102,6 +103,7 @@ export function sanitizeSettings(input: unknown, base: GameSettings): GameSettin
       trig: Boolean(operators.trig),
       inverse: Boolean(operators.inverse),
       bitshift: Boolean(operators.bitshift),
+      concat: Boolean(operators.concat),
     },
     firstToPoints: Math.round(clampNumber(raw.firstToPoints, 1, 25, base.firstToPoints)),
   }

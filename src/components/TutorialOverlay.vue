@@ -209,6 +209,11 @@ const sections: Section[] = [
           { sym: 'sin° cos° tan°', name: 'Trig', note: 'Angles are in degrees.' },
           { sym: '1/x', name: 'Inverse', note: 'One divided by x.' },
           { sym: '<< >>', name: 'Bit shift', note: 'Integers only, shifted by 0 to 52.' },
+          {
+            sym: '||',
+            name: 'Concat',
+            note: 'Joins the digits in selection order: 6 || 10 is 610, 10 || 6 is 106.',
+          },
         ],
       },
     ],

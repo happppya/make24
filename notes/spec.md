@@ -39,6 +39,7 @@ Both singleplayer and multiplayer modes can enter a lobby screen (where players 
 - ****"Basic trig"**** allows unary operators sin, cos, and tan in degrees.
 - ****"Inverse"**** allows the usage of a unary operator that gives a number's inverse.
 - ****"Bit shifting"**** allows the usage of bit shifting operators like RSHIFT and LSHIFT, for example LSHIFT(5,3) shifts the bits of 5 = 101 to the left by 3 slots.
+- ****"Concatenate"**** allows the binary operator `||`, which joins the decimal digits of its operands in selection order: 6 || 10 = 610 and 10 || 6 = 106. Both operands must be whole numbers of zero or more, and the result must stay inside the exactly representable integer range, so anything larger is refused rather than silently rounded. Scored like every other binary operator (+10).
 - ****First to x:**** After a round ends, the winning player gets a point, or if nobody wins then nobody gets a point. The first player to x wins the entire game. The host can choose to skip a round at any time or end the entire game at any time.
 
 ## Live Gameplay

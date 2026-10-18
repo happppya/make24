@@ -149,6 +149,16 @@ export const OPERATOR_CATALOG: OperatorMeta[] = [
     description: 'RSHIFT(a, b)',
     hotkey: '>',
   },
+  // Concatenation
+  {
+    id: 'concat',
+    arity: 'binary',
+    category: 'concat',
+    label: 'Concat',
+    shortSymbol: '||',
+    description: 'a || b (digits joined)',
+    hotkey: '|',
+  },
 ]
 
 export function getEnabledOperators(allowed: AllowedOperatorsConfig): OperatorMeta[] {
@@ -565,6 +575,34 @@ export function applyBinaryOperator(op: BinaryOperator, a: number, b: number): E
         headerText: `RSHIFT(${aInt}, ${bInt}) = ${formatNumber(val)}`,
       }
     }
+    case 'concat': {
+      // Only exact, non-negative integers have an unambiguous digit string;
+      // numbers above 2^53 would round, and `String()` would switch to exponent
+      // notation, so both sides and the result stay inside the safe range.
+      if (!Number.isSafeInteger(a) || !Number.isSafeInteger(b) || a < 0 || b < 0) {
+        return {
+          ok: false,
+          value: NaN,
+          headerText: '',
+          error: 'Concat needs two whole numbers, zero or higher.',
+        }
+      }
+      const digits = `${a}${b}`
+      const val = Number(digits)
+      if (!Number.isSafeInteger(val)) {
+        return {
+          ok: false,
+          value: NaN,
+          headerText: '',
+          error: 'That concatenation is too long to use as a number.',
+        }
+      }
+      return {
+        ok: true,
+        value: val,
+        headerText: `${aStr} || ${bStr} = ${formatNumber(val)}`,
+      }
+    }
   }
 }
 
@@ -736,6 +774,10 @@ export function costOfUnaryOn(operator: UnaryOperator, operand: ExprNode): numbe
 
 function getBinaryPrecedence(op: BinaryOperator): number {
   switch (op) {
+    // Concatenation is formatted with explicit brackets on binary operands, so
+    // its numeric precedence only matters for how arithmetic above it wraps.
+    case 'concat':
+      return 0
     case 'lshift':
     case 'rshift':
       return 1
@@ -795,6 +837,14 @@ export function formatExpressionLhs(node: ExprNode): string {
     return `${leftWrapped} ^ (1 / ${node.right.kind === 'binary' ? `(${rightStr})` : rightStr})`
   }
 
+  // `6 + 4 || 2` reads two ways, so any arithmetic operand of a concat is
+  // always bracketed: `(6 + 4) || 2`.
+  if (node.operator === 'concat') {
+    const leftWrapped = node.left.kind === 'binary' ? `(${leftStr})` : leftStr
+    const rightWrapped = node.right.kind === 'binary' ? `(${rightStr})` : rightStr
+    return `${leftWrapped} || ${rightWrapped}`
+  }
+
   const prec = getBinaryPrecedence(node.operator)
   const wrapLeft =
     node.left.kind === 'binary' &&
@@ -814,7 +864,10 @@ export function formatExpressionLhs(node: ExprNode): string {
   const lFinal = wrapLeft ? `(${leftStr})` : leftStr
   const rFinal = wrapRight ? `(${rightStr})` : rightStr
 
-  const symbolMap: Record<Exclude<BinaryOperator, 'lshift' | 'rshift' | 'root'>, string> = {
+  const symbolMap: Record<
+    Exclude<BinaryOperator, 'lshift' | 'rshift' | 'root' | 'concat'>,
+    string
+  > = {
     add: '+',
     sub: '-',
     mult: '*',

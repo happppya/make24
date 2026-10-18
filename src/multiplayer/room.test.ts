@@ -104,6 +104,17 @@ describe('multiplayer room — seating and lobby', () => {
     })
     expect(asHost.error).toBeUndefined()
     expect(room.settings.numCards).toBe(6)
+
+    // The concat group is a setting like any other and survives sanitising.
+    expect(room.settings.allowedOperators.concat).toBe(false)
+    handleClientMessage(room, 'p1', {
+      t: 'update-settings',
+      settings: {
+        ...room.settings,
+        allowedOperators: { ...room.settings.allowedOperators, concat: true },
+      },
+    })
+    expect(room.settings.allowedOperators.concat).toBe(true)
   })
 
   it('tracks readiness without letting the host un-ready', () => {

@@ -74,6 +74,7 @@ const settings = reactive<GameSettings>({
     trig: false,
     inverse: false,
     bitshift: false,
+    concat: false,
   },
   firstToPoints: 3,
 })
@@ -1846,6 +1847,14 @@ onBeforeUnmount(() => {
                 <label class="toggle-chip">
                   <input v-model="settings.allowedOperators.bitshift" type="checkbox" />
                   <span>Bit shifting (LSHIFT, RSHIFT)</span>
+                </label>
+                <label class="toggle-chip">
+                  <input
+                    v-model="settings.allowedOperators.concat"
+                    type="checkbox"
+                    data-testid="toggle-concat"
+                  />
+                  <span>Concatenate (6 || 10 = 610)</span>
                 </label>
               </div>
             </div>

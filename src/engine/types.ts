@@ -18,6 +18,7 @@ export type OperatorCategory =
   | 'trig'
   | 'inverse'
   | 'bitshift'
+  | 'concat'
 
 export type BinaryOperator =
   | 'add'
@@ -28,6 +29,7 @@ export type BinaryOperator =
   | 'root'
   | 'lshift'
   | 'rshift'
+  | 'concat'
 
 export type UnaryOperator =
   | 'fact'
@@ -69,6 +71,7 @@ export interface AllowedOperatorsConfig {
   trig: boolean
   inverse: boolean
   bitshift: boolean
+  concat: boolean
 }
 
 export interface GameSettings {

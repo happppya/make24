@@ -20,6 +20,7 @@ import {
   costOfUnaryOn,
   formatExpressionLhs,
   formatFullEquation,
+  getEnabledOperators,
   realFactorial,
   realGamma,
   realInverseGamma,
@@ -155,6 +156,54 @@ describe('Make 24 Remastered — Math & Operators Engine', () => {
     expect(applyBinaryOperator('lshift', 2.5, 1).ok).toBe(false)
   })
 
+  it('concatenates digits in selection order', () => {
+    expect(applyBinaryOperator('concat', 6, 10)).toEqual({
+      ok: true,
+      value: 610,
+      headerText: '6 || 10 = 610',
+    })
+    // Order matters: the first selection is the left operand.
+    expect(applyBinaryOperator('concat', 10, 6).value).toBe(106)
+    expect(applyBinaryOperator('concat', 0, 5).value).toBe(5)
+    expect(applyBinaryOperator('concat', 5, 0).value).toBe(50)
+  })
+
+  it('refuses concatenations that are not exact, non-negative whole numbers', () => {
+    const rejected: Array<[number, number]> = [
+      [6.5, 10],
+      [-6, 10],
+      [6, -10],
+      [1e21, 2],
+      [999999999, 999999999],
+    ]
+    for (const [a, b] of rejected) {
+      const res = applyBinaryOperator('concat', a, b)
+      expect(res.ok).toBe(false)
+      expect(res.error).toBeTruthy()
+    }
+  })
+
+  it('keeps concat behind its own operator group', () => {
+    const allOff = {
+      basic: false,
+      powers: false,
+      factorial: false,
+      trig: false,
+      inverse: false,
+      bitshift: false,
+      concat: false,
+    }
+    expect(getEnabledOperators(allOff)).toHaveLength(0)
+    expect(getEnabledOperators({ ...allOff, concat: true }).map((op) => op.id)).toEqual(['concat'])
+    expect(getEnabledOperators({ ...allOff, basic: true, concat: true }).map((op) => op.id)).toEqual([
+      'add',
+      'sub',
+      'mult',
+      'div',
+      'concat',
+    ])
+  })
+
   it('checks target acceptance with inclusive approximation percent and 0 target edge case', () => {
     // Exact target 24 with 0% approximation
     expect(checkTargetAcceptance(24, 24, 0).acceptable).toBe(true)
@@ -210,6 +259,44 @@ describe('Make 24 Remastered — Scoring & Equation Formatting', () => {
     // Apply 3rd consecutive unary: o(o(o(x))) -> 10 + 20 + 30 = 60 pts
     applyOperatorInWorkspace(ws, 'tan')
     expect(calculateScore(ws.groups[0]!)).toBe(60)
+  })
+
+  it('scores concat as a binary operator and brackets binary operands', () => {
+    const six = createCard(6, 'spades', 'c-six')
+    const ten = createCard(10, 'hearts', 'c-ten')
+    const ws = createWorkspace(0, [six, ten])
+    const [first, second] = ws.groups
+
+    selectGroupInWorkspace(ws, first!.id)
+    applyOperatorInWorkspace(ws, 'concat')
+    selectGroupInWorkspace(ws, second!.id)
+
+    const merged = ws.groups[0]!
+    expect(merged.kind).toBe('binary')
+    expect(merged.value).toBe(610)
+    expect(calculateScore(merged)).toBe(10)
+    expect(formatExpressionLhs(merged)).toBe('6 || 10')
+
+    // Arithmetic used as a concat operand is always bracketed, so the order of
+    // the digits is never ambiguous.
+    const nested: ExprNode = {
+      kind: 'binary',
+      id: 'concat-nested',
+      operator: 'concat',
+      left: { kind: 'card', id: 'leaf-6', card: six, value: 6 },
+      right: {
+        kind: 'binary',
+        id: 'sum',
+        operator: 'add',
+        left: { kind: 'card', id: 'leaf-4', card: createCard(4, 'clubs', 'c-four'), value: 4 },
+        right: { kind: 'card', id: 'leaf-3', card: createCard(3, 'diamonds', 'c-three'), value: 3 },
+        value: 7,
+        headerText: '4 + 3 = 7',
+      },
+      value: 67,
+      headerText: '6 || 7 = 67',
+    }
+    expect(formatExpressionLhs(nested)).toBe('6 || (4 + 3)')
   })
 
   it('adds 200-point penalty each time factorial and inverse gamma are nested together', () => {
@@ -811,8 +898,8 @@ describe('Make 24 Remastered — Playable UI Flow (App.vue)', () => {
     expect(wrapper.findAll('.rail-link')).toHaveLength(8)
 
     // The operator reference covers each operator family the host can enable.
-    expect(wrapper.findAll('.op-table__row')).toHaveLength(9)
-    expect(wrapper.findAll('.op-table__note')).toHaveLength(9)
+    expect(wrapper.findAll('.op-table__row')).toHaveLength(10)
+    expect(wrapper.findAll('.op-table__note')).toHaveLength(10)
 
     // Each screenshot carries alt text and one legend entry per numbered pin.
     const figures = wrapper.findAll('[data-testid="tutorial-scroll"] figure')
@@ -928,6 +1015,32 @@ describe('Make 24 Remastered — Playable UI Flow (App.vue)', () => {
     expect(new Set(cues.map((cue) => cue.attributes('style'))).size).toBeGreaterThan(1)
 
     wrapper.unmount()
+  })
+
+  it('puts concat on the rails only when its lobby toggle is on', async () => {
+    const off = mount(App)
+    await off.find('[data-testid="enter-singleplayer"]').trigger('click')
+    const offToggle = off.find('[data-testid="toggle-concat"]')
+    expect(offToggle.exists()).toBe(true)
+    expect((offToggle.element as HTMLInputElement).checked).toBe(false)
+    await off.find('[data-testid="start-round-btn"]').trigger('click')
+    expect(off.find('[data-testid="op-concat"]').exists()).toBe(false)
+    off.unmount()
+
+    const on = mount(App)
+    await on.find('[data-testid="enter-singleplayer"]').trigger('click')
+    await on.find('[data-testid="toggle-concat"]').setValue(true)
+    await on.find('[data-testid="start-round-btn"]').trigger('click')
+    expect(on.find('[data-testid="op-concat"]').exists()).toBe(true)
+
+    // Joining two dealt cards with it prints a concatenated header, in pick order.
+    await on.findAll('.expr-node--root')[0]!.trigger('click')
+    await on.find('[data-testid="op-concat"]').trigger('click')
+    await on.findAll('.expr-node--root')[1]!.trigger('click')
+    const header = on.find('.group-header-eq').text()
+    expect(header).toMatch(/^\d+ \|\| \d+ = \d+$/)
+
+    on.unmount()
   })
 
   it('takes Multiplayer to the lobby selector, not straight into a room', async () => {
