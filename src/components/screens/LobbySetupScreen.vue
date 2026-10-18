@@ -10,7 +10,6 @@ const {
   multiplayerHost,
   multiplayerReady,
   canEditSettings,
-  connectionLine,
   awaitingNextDeal,
   toggleReady,
   leaveTable,
@@ -48,7 +47,7 @@ const {
 
       <div v-if="settings.isMultiplayer" class="mp-connect" data-testid="lobby-identity">
         <div class="lobby-code-block">
-          <span class="lobby-code-block__label">Lobby code</span>
+          <span class="lobby-code-block__label">Lobby join code</span>
           <span class="lobby-code-block__code" data-testid="lobby-code">
             {{ multiplayerSession.room?.code ?? '——' }}
           </span>
@@ -59,16 +58,6 @@ const {
             {{ multiplayerSession.room?.isPublic ? 'PUBLIC' : 'PRIVATE' }}
           </span>
         </div>
-        <p class="browser-hint">
-          {{
-            multiplayerSession.room?.isPublic
-              ? 'Listed in the public lobby browser.'
-              : 'Hidden from the list — share the code to invite players.'
-          }}
-        </p>
-        <p class="mp-status" :class="`mp-status--${multiplayerSession.status}`">
-          {{ connectionLine }}
-        </p>
         <p v-if="awaitingNextDeal" class="lobby-waiting-note" data-testid="lobby-waiting-note">
           A round is already running. You're dealt in on the next one.
         </p>

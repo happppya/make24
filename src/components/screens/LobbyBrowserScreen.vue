@@ -69,9 +69,6 @@ const {
         >
           {{ creatingLobby ? 'Opening…' : 'Create Lobby' }}
         </button>
-        <p class="browser-hint">
-          You become the host. Every lobby gets its own short code other players can type in.
-        </p>
       </div>
 
       <div class="browser-join">
