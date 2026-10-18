@@ -2,7 +2,7 @@
 
 Vue 3 + Vite + TypeScript. `main.ts` mounts [App.vue](App.vue), which is a thin
 shell: it picks a screen for the current phase, provides the shared game state
-and keeps the pause menu and the tutorial overlay.
+and keeps the pause menu and the tutorial overlay..
 
 ```text
 src/
