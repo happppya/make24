@@ -587,6 +587,39 @@ void [feltRef, sidebarRef, viewportRef]
   min-height: 0;
 }
 
+/* The HUD outgrows a short window as soon as a famous-constant card (symbol,
+   name and meaning) or a many-digit target is on the table. The score column
+   then scrolls inside its own rail, so the workspace tabs and the round
+   controls below it stay pinned in view instead of slipping below the fold. */
+.table-sidebar :deep(.blind-sidebar) {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: #4a4368 transparent;
+}
+
+.table-sidebar :deep(.blind-sidebar)::-webkit-scrollbar {
+  width: 6px;
+}
+
+.table-sidebar :deep(.blind-sidebar)::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.table-sidebar :deep(.blind-sidebar)::-webkit-scrollbar-thumb {
+  background: #4a4368;
+}
+
+/* Only the score rail gives up height; the controls keep their size. */
+.table-sidebar > .sidebar-panel,
+.table-sidebar > .sidebar-timer,
+.table-sidebar > .sidebar-actions {
+  flex: 0 0 auto;
+}
+
 .table-main {
   display: flex;
   flex-direction: column;
@@ -616,6 +649,19 @@ void [feltRef, sidebarRef, viewportRef]
         'timer timer';
       gap: 8px;
       align-items: start;
+      /* Cap the strip so a tall constant card can never eat the felt; the
+         remaining HUD content scrolls within the cap instead. */
+      max-height: min(58dvh, 420px);
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      scrollbar-width: thin;
+      scrollbar-color: #4a4368 transparent;
+    }
+    .table-sidebar::-webkit-scrollbar {
+      width: 6px;
+    }
+    .table-sidebar::-webkit-scrollbar-thumb {
+      background: #4a4368;
     }
     :deep(.blind-sidebar) {
       grid-area: score;
@@ -669,6 +715,18 @@ void [feltRef, sidebarRef, viewportRef]
         'score timer actions';
       gap: 8px;
       align-items: start;
+      /* Landscapes keep most of the height for the felt. */
+      max-height: min(50dvh, 320px);
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      scrollbar-width: thin;
+      scrollbar-color: #4a4368 transparent;
+    }
+    .table-sidebar::-webkit-scrollbar {
+      width: 6px;
+    }
+    .table-sidebar::-webkit-scrollbar-thumb {
+      background: #4a4368;
     }
     .sidebar-panel {
       align-self: stretch;

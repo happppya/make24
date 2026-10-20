@@ -91,7 +91,11 @@ const maxBindOptions = [0, 1, 2, 3, 4, 5, 6]
 </script>
 
 <template>
-<LobbyFrame :badge="settings.isMultiplayer ? 'MULTIPLAYER' : 'SINGLEPLAYER'" title="Table Setup">
+<LobbyFrame
+  :badge="settings.isMultiplayer ? 'MULTIPLAYER' : 'SINGLEPLAYER'"
+  title="Table Setup"
+  fill
+>
 
   <div class="lobby-grid">
     <!-- Left column: Players & Match Controls -->
@@ -100,7 +104,8 @@ const maxBindOptions = [0, 1, 2, 3, 4, 5, 6]
         <h2>{{ settings.isMultiplayer ? 'Multiplayer Lobby' : 'Singleplayer Setup' }}</h2>
       </div>
 
-      <div class="player-list">
+      <div class="lobby-players__body">
+        <div class="player-list">
         <div v-for="player in players" :key="player.id" class="player-row">
           <div class="player-ident">
             <span class="player-badge">{{ player.isHost ? 'HOST' : 'PLAYER' }}</span>
@@ -184,6 +189,7 @@ const maxBindOptions = [0, 1, 2, 3, 4, 5, 6]
           </li>
         </ul>
       </div>
+      </div>
 
       <div class="lobby-start-cta">
         <button
@@ -206,6 +212,9 @@ const maxBindOptions = [0, 1, 2, 3, 4, 5, 6]
       <h2>Table Settings</h2>
 
       <fieldset class="settings-form" :disabled="!canEditSettings">
+      <section class="settings-section">
+        <h3 class="settings-section__title">Deal &amp; match</h3>
+
         <!-- Mode (multiplayer only dropdown) -->
         <div v-if="settings.isMultiplayer" class="field-row">
           <label for="setting-mode">Mode</label>
@@ -231,6 +240,36 @@ const maxBindOptions = [0, 1, 2, 3, 4, 5, 6]
             class="input-arcade input-short"
           />
         </div>
+
+        <!-- Card pool -->
+        <div class="field-row">
+          <label for="setting-pool">Card pool</label>
+          <select id="setting-pool" v-model="settings.cardPool" class="input-arcade">
+            <option value="1-deck">One deck (52 cards)</option>
+            <option value="2-decks">Two decks (104 cards)</option>
+            <option value="3-decks">Three decks (156 cards)</option>
+            <option value="unlimited">
+              Unlimited (with replacement, all ranks equally likely)
+            </option>
+          </select>
+        </div>
+
+        <!-- First to X points -->
+        <div class="field-row">
+          <label for="setting-first-to">First to X points wins match</label>
+          <input
+            id="setting-first-to"
+            v-model.number="settings.firstToPoints"
+            type="number"
+            min="1"
+            max="25"
+            class="input-arcade input-short"
+          />
+        </div>
+      </section>
+
+      <section class="settings-section">
+        <h3 class="settings-section__title">Target</h3>
 
         <!-- Target number preset -->
         <div class="field-row">
@@ -347,19 +386,10 @@ const maxBindOptions = [0, 1, 2, 3, 4, 5, 6]
             {{ settings.approximationPercent > 0 ? accuracyRuleBlurb : 'Set Approximations above 0% to score closeness.' }}
           </span>
         </div>
+      </section>
 
-        <!-- Card pool -->
-        <div class="field-row">
-          <label for="setting-pool">Card pool</label>
-          <select id="setting-pool" v-model="settings.cardPool" class="input-arcade">
-            <option value="1-deck">One deck (52 cards)</option>
-            <option value="2-decks">Two decks (104 cards)</option>
-            <option value="3-decks">Three decks (156 cards)</option>
-            <option value="unlimited">
-              Unlimited (with replacement, all ranks equally likely)
-            </option>
-          </select>
-        </div>
+      <section class="settings-section">
+        <h3 class="settings-section__title">Opening binds</h3>
 
         <!-- Automatic opening binds -->
         <div class="field-row">
@@ -447,19 +477,10 @@ const maxBindOptions = [0, 1, 2, 3, 4, 5, 6]
             locked and cannot be ungrouped.
           </span>
         </div>
+      </section>
 
-        <!-- First to X points -->
-        <div class="field-row">
-          <label for="setting-first-to">First to X points wins match</label>
-          <input
-            id="setting-first-to"
-            v-model.number="settings.firstToPoints"
-            type="number"
-            min="1"
-            max="25"
-            class="input-arcade input-short"
-          />
-        </div>
+      <section class="settings-section">
+        <h3 class="settings-section__title">Operators</h3>
 
         <!-- Allowed operators: group switch plus one switch per operator -->
         <div class="field-row">
@@ -504,6 +525,10 @@ const maxBindOptions = [0, 1, 2, 3, 4, 5, 6]
             </section>
           </div>
         </div>
+      </section>
+
+      <section class="settings-section">
+        <h3 class="settings-section__title">House rules</h3>
 
         <!-- Forbidden moves: shortcut rules with one shared price -->
         <div class="field-row">
@@ -547,6 +572,7 @@ const maxBindOptions = [0, 1, 2, 3, 4, 5, 6]
             <span class="field-hint">pts</span>
           </div>
         </div>
+      </section>
       </fieldset>
     </section>
   </div>
@@ -558,11 +584,14 @@ const maxBindOptions = [0, 1, 2, 3, 4, 5, 6]
   display: grid;
   grid-template-columns: 1fr 1.25fr;
   gap: 24px;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 @media (max-width: 900px) {
     .lobby-grid {
       grid-template-columns: 1fr;
+      flex: 0 0 auto;
     }
 }
 
@@ -634,6 +663,73 @@ const maxBindOptions = [0, 1, 2, 3, 4, 5, 6]
 .lobby-players,
 .lobby-settings {
   background: linear-gradient(180deg, #201a2e 0%, #15111f 100%);
+}
+
+/* Both panels are fixed-height columns: the long part scrolls, the buttons
+   that move the game along stay where they are. */
+.lobby-players,
+.lobby-settings {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.lobby-players .section-header,
+.lobby-settings h2 {
+  flex: 0 0 auto;
+}
+
+.lobby-players__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 6px;
+  scrollbar-width: thin;
+  scrollbar-color: #6b5a2c transparent;
+}
+
+.lobby-players__body .scoring-summary-box {
+  margin-bottom: 0;
+}
+
+.lobby-start-cta {
+  flex: 0 0 auto;
+  padding-top: 14px;
+}
+
+.lobby-settings h2 {
+  margin-bottom: 10px;
+}
+
+@media (max-width: 900px) {
+  .lobby-players,
+  .lobby-settings {
+    overflow: visible;
+  }
+  .lobby-players__body,
+  .settings-form {
+    overflow: visible;
+    padding-right: 0;
+  }
+}
+
+/* Chunky scrollbars so they read as part of the cabinet rather than the OS. */
+.lobby-players__body::-webkit-scrollbar,
+.settings-form::-webkit-scrollbar {
+  width: 8px;
+}
+
+.lobby-players__body::-webkit-scrollbar-track,
+.settings-form::-webkit-scrollbar-track {
+  background: #0d0b14;
+}
+
+.lobby-players__body::-webkit-scrollbar-thumb,
+.settings-form::-webkit-scrollbar-thumb {
+  background: #6b5a2c;
+  border: 2px solid #0d0b14;
 }
 
 .player-list {
@@ -729,10 +825,41 @@ fieldset.settings-form {
   padding: 0;
   margin: 0;
   min-width: 0;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 8px;
+  scrollbar-width: thin;
+  scrollbar-color: #6b5a2c transparent;
 }
 
 fieldset.settings-form:disabled {
   opacity: 0.55;
+}
+
+/* One titled block per subject, separated by a dashed rule, so the list reads
+   as sections instead of one endless form. */
+.settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 16px;
+  border-top: 2px dashed rgba(242, 201, 76, 0.22);
+}
+
+.settings-section:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.settings-section__title {
+  margin: 0;
+  font-family: var(--font-pixel);
+  font-size: 0.6rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--gold-bright);
 }
 
 .scoring-summary-box {
@@ -766,7 +893,8 @@ fieldset.settings-form:disabled {
 .settings-form {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 16px;
+  padding-bottom: 2px;
 }
 
 .field-row {

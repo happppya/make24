@@ -343,6 +343,13 @@ onBeforeUnmount(() => {
   min-width: 0;
 }
 
+/* The playing screen lets this column scroll when the HUD is taller than the
+   window (a famous-constant card adds a block, and 32-digit targets are tall).
+   Without this, the blocks would instead be squashed and clip their own text. */
+.blind-sidebar > * {
+  flex: 0 0 auto;
+}
+
 /* ---------------- Blind card ---------------- */
 .blind-card {
   position: relative;

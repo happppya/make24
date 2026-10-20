@@ -9,13 +9,23 @@ defineProps<{
   title: string
   /** Optional test hook for the back button. */
   backTestId?: string
+  /**
+   * Lock the frame to the viewport so a screen with long content scrolls its
+   * own panels instead of growing the page. Screens that pass this must give
+   * their content a `min-height: 0` flex column to scroll inside.
+   */
+  fill?: boolean
 }>()
 
 const { menuOpen, tutorialOpen, targetPromptOpen, goToTitle } = useGameContext()
 </script>
 
 <template>
-  <main class="screen-lobby" :inert="menuOpen || tutorialOpen || targetPromptOpen">
+  <main
+    class="screen-lobby"
+    :class="{ 'screen-lobby--fill': fill }"
+    :inert="menuOpen || tutorialOpen || targetPromptOpen"
+  >
     <div class="lobby-marquee">
       <div class="lobby-marquee__left">
         <span class="lobby-marquee__badge">{{ badge }}</span>
@@ -42,6 +52,34 @@ const { menuOpen, tutorialOpen, targetPromptOpen, goToTitle } = useGameContext()
   max-width: 1240px;
   width: 100%;
   margin: 0 auto;
+}
+
+/* Long settings screens: the frame owns the viewport and the panels scroll
+   themselves, so the start button and the marquee never leave the screen. */
+.screen-lobby--fill {
+  display: flex;
+  flex-direction: column;
+  /* `flex: 1` bases the height on content, which would ignore the locked
+     height and let the page grow again. */
+  flex: 0 0 auto;
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.screen-lobby--fill .lobby-marquee {
+  flex: 0 0 auto;
+}
+
+/* One column on narrow screens: stacked panels each want a full scroll area,
+   which a locked viewport cannot give them, so fall back to page scrolling. */
+@media (max-width: 900px) {
+  .screen-lobby--fill {
+    flex: 1 1 auto;
+    height: auto;
+    overflow: visible;
+  }
 }
 
 .lobby-marquee {
