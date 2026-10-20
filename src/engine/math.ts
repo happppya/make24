@@ -2,10 +2,26 @@ import type {
   AllowedOperatorsConfig,
   BinaryOperator,
   ExprNode,
+  ForbiddenMovesConfig,
   OperatorId,
   OperatorMeta,
+  SolutionScoringMode,
   UnaryOperator,
 } from './types'
+
+/**
+ * Accuracy penalty at the edge of the acceptance band, in score points.
+ *
+ * The band is normalised to 0–1, so the numbers mean the same thing at any
+ * tolerance: cost-first only lets accuracy break a tie, balanced makes a
+ * full-band miss cost as much as one binary operator, and accuracy-first makes
+ * precision worth more than several operators.
+ */
+export const ACCURACY_WEIGHT: Record<SolutionScoringMode, number> = {
+  'cost-first': 2,
+  balanced: 30,
+  'accuracy-first': 100,
+}
 
 export const OPERATOR_CATALOG: OperatorMeta[] = [
   // Basic binary
@@ -191,6 +207,10 @@ const LANCZOS_COEFFS = [
 ]
 
 const EPSILON = 1e-11
+/** Doubles carry ~16 significant decimal digits; keep all of them when snapping noise. */
+const SNAPPED_SIGNIFICANT_DIGITS = 16
+/** Scientific notation keeps 15 significant digits (14 after the leading one). */
+const SCIENTIFIC_DECIMALS = 14
 
 export function cleanFloat(n: number): number {
   if (!Number.isFinite(n)) return n
@@ -198,12 +218,19 @@ export function cleanFloat(n: number): number {
   if (Math.abs(n - rounded) < EPSILON) {
     return Object.is(rounded, -0) ? 0 : rounded
   }
-  // Also snap clean decimal fractions like 0.5, 0.25, etc.
-  const scaled = Math.round(n * 1e9) / 1e9
-  if (Math.abs(n - scaled) < EPSILON) {
-    return Object.is(scaled, -0) ? 0 : scaled
+  // Snap away double-precision noise without throwing away real precision.
+  // Rounding to a fixed number of decimal places (the old 9) made small values
+  // coarser than the doubles underneath them; significant digits do not.
+  const snapped = Number(n.toPrecision(SNAPPED_SIGNIFICANT_DIGITS))
+  if (Number.isFinite(snapped) && Math.abs(n - snapped) < EPSILON) {
+    return Object.is(snapped, -0) ? 0 : snapped
   }
   return Object.is(n, -0) ? 0 : n
+}
+
+function formatScientific(n: number): string {
+  const [mantissa, exponent] = n.toExponential(SCIENTIFIC_DECIMALS).split('e')
+  return `${Number(mantissa)}e${Number(exponent)}`
 }
 
 export function formatNumber(n: number): string {
@@ -213,10 +240,10 @@ export function formatNumber(n: number): string {
     return String(clean)
   }
   const abs = Math.abs(clean)
-  if (abs >= 1e7 || (abs > 0 && abs < 1e-4)) {
-    return clean.toExponential(3)
+  if (abs >= 1e7 || abs < 1e-4) {
+    return formatScientific(clean)
   }
-  return Number(clean.toFixed(4)).toString()
+  return String(clean)
 }
 
 export function realGamma(z: number): number | null {
@@ -662,21 +689,79 @@ export function checkTargetAcceptance(
   }
 }
 
+export interface AccuracyScoring {
+  errorPercent: number
+  approximationPercent: number
+  mode: SolutionScoringMode
+}
+
+/**
+ * Penalty for missing the target, scaled by how much of the allowed band the
+ * miss uses. Exact hits pay nothing; the edge of the band pays the mode's
+ * weight. Approximations being off means accuracy is not scored at all.
+ */
+export function accuracyPenaltyFor(
+  errorPercent: number,
+  approximationPercent: number,
+  mode: SolutionScoringMode
+): number {
+  if (!(approximationPercent > 0) || !Number.isFinite(errorPercent)) return 0
+  const bandUsed = Math.min(1, Math.max(0, Math.abs(errorPercent) / approximationPercent))
+  return cleanFloat(bandUsed * ACCURACY_WEIGHT[mode])
+}
+
+/** Default price of one forbidden move, in score points. */
+export const DEFAULT_FORBIDDEN_MOVE_PENALTY = 200
+
+/** Out of the box, both house rules are on at the classic 200-point price. */
+export const DEFAULT_FORBIDDEN_MOVES: ForbiddenMovesConfig = {
+  factorialInvgamma: true,
+  oneToPower: true,
+}
+
+/** Which forbidden moves are active, and what each occurrence costs. */
+export interface ForbiddenMoveRules {
+  moves: ForbiddenMovesConfig
+  penalty: number
+}
+
+function resolvedForbiddenRules(rules?: ForbiddenMoveRules): ForbiddenMoveRules {
+  if (!rules) return { moves: DEFAULT_FORBIDDEN_MOVES, penalty: DEFAULT_FORBIDDEN_MOVE_PENALTY }
+  // A negative or missing price must never turn a forbidden move into a rebate.
+  const penalty = Number.isFinite(rules.penalty) ? Math.max(0, rules.penalty) : 0
+  return { moves: rules.moves, penalty }
+}
+
+function isFactorialInvgammaPair(outer: UnaryOperator, inner: UnaryOperator): boolean {
+  return (
+    (outer === 'fact' && inner === 'invgamma') ||
+    (outer === 'invgamma' && inner === 'fact')
+  )
+}
+
+/** A power whose base evaluates to 1, however that 1 was made. */
+function isOneToPower(operator: BinaryOperator, base: ExprNode): boolean {
+  return operator === 'pow' && base.value === 1
+}
+
 /**
  * Itemised cost of an expression tree. The rules:
  * - Lower score is better.
+ * - Accuracy can add a weighted penalty; without `accuracy`, `total` is the
+ *   plain operator cost returned by `calculateScore`.
  * - 10 score is added for each binary operator used.
  * - The unary penalty increases per layer: the first unary operator is 10,
  *   then the second is 20, then the third is 30, and so on with 40, 50, 60...
  *   So, using o(o(x)) incurs 30 points while o(o(o(x))) incurs 60 points.
  * - Nested unary operators on the same group count as a consecutive unary,
  *   and a binary operation resets the chain.
- * - Factorial and inverse gamma nested together incur 200 points each time when
- *   nested: e.g. factorial(Γ⁻¹(x)) or Γ⁻¹(factorial(x)). Factorial and plain
- *   gamma together carry no extra penalty.
+ * - House rules can forbid shortcut moves: `!` and `Γ⁻¹` nested directly
+ *   together, and a power whose base is 1 (`1 ^ x`). Each occurrence adds the
+ *   forbidden-move penalty (200 by default, host-configurable). Factorial and
+ *   plain gamma together carry no extra penalty.
  */
 export interface ScoreBreakdown {
-  /** Total cost, identical to `calculateScore`. */
+  /** Operator cost plus any accuracy penalty; plain cost without `accuracy`. */
   total: number
   /** Number of binary operators in the tree and the 10 each one costs. */
   binaryOperators: number
@@ -684,20 +769,27 @@ export interface ScoreBreakdown {
   /** Number of unary operators and the summed per-layer cost (10, 20, 30…). */
   unaryOperators: number
   unaryCost: number
-  /** Nested factorial + inverse-gamma pairs and the 200 each pair costs. */
-  nestingCount: number
-  nestingCost: number
+  /** Forbidden-move occurrences and the penalty each one adds. */
+  forbiddenCount: number
+  forbiddenCost: number
+  /** Weighted distance from the target, when accuracy scoring is supplied. */
+  accuracyCost: number
 }
 
 /**
  * Walks the tree once, tallying each cost source so the UI can show where the
- * bill came from instead of a single lump sum. `total` matches `calculateScore`.
+ * bill came from instead of a single lump sum.
  */
-export function calculateScoreBreakdown(node: ExprNode): ScoreBreakdown {
+export function calculateScoreBreakdown(
+  node: ExprNode,
+  accuracy?: AccuracyScoring,
+  forbidden?: ForbiddenMoveRules
+): ScoreBreakdown {
+  const rules = resolvedForbiddenRules(forbidden)
   let binaryOperators = 0
   let unaryOperators = 0
   let unaryCost = 0
-  let nestingCount = 0
+  let forbiddenCount = 0
 
   function walk(curr: ExprNode, unaryDepthAbove: number): void {
     if (curr.kind === 'card') {
@@ -705,6 +797,9 @@ export function calculateScoreBreakdown(node: ExprNode): ScoreBreakdown {
     }
     if (curr.kind === 'binary') {
       binaryOperators++
+      if (rules.moves.oneToPower && isOneToPower(curr.operator, curr.left)) {
+        forbiddenCount++
+      }
       walk(curr.left, 0)
       walk(curr.right, 0)
       return
@@ -713,15 +808,12 @@ export function calculateScoreBreakdown(node: ExprNode): ScoreBreakdown {
     const currentLayer = unaryDepthAbove + 1
     unaryCost += currentLayer * 10
 
-    if (curr.operand.kind === 'unary') {
-      const outerOp = curr.operator
-      const innerOp = curr.operand.operator
-      if (
-        (outerOp === 'fact' && innerOp === 'invgamma') ||
-        (outerOp === 'invgamma' && innerOp === 'fact')
-      ) {
-        nestingCount++
-      }
+    if (
+      rules.moves.factorialInvgamma &&
+      curr.operand.kind === 'unary' &&
+      isFactorialInvgammaPair(curr.operator, curr.operand.operator)
+    ) {
+      forbiddenCount++
     }
 
     walk(curr.operand, currentLayer)
@@ -729,20 +821,69 @@ export function calculateScoreBreakdown(node: ExprNode): ScoreBreakdown {
 
   walk(node, 0)
 
+  const accuracyCost = accuracy
+    ? accuracyPenaltyFor(accuracy.errorPercent, accuracy.approximationPercent, accuracy.mode)
+    : 0
+  const forbiddenCost = forbiddenCount * rules.penalty
+
   return {
-    total: binaryOperators * 10 + unaryCost + nestingCount * 200,
+    total: binaryOperators * 10 + unaryCost + forbiddenCost + accuracyCost,
     binaryOperators,
     binaryCost: binaryOperators * 10,
     unaryOperators,
     unaryCost,
-    nestingCount,
-    nestingCost: nestingCount * 200,
+    forbiddenCount,
+    forbiddenCost,
+    accuracyCost,
   }
 }
 
 /** Score of an expression tree; see `calculateScoreBreakdown` for the itemisation. */
 export function calculateScore(node: ExprNode): number {
   return calculateScoreBreakdown(node).total
+}
+
+/**
+ * Cost of every group on a board, so the HUD can bill the player as they build
+ * instead of only once a solution exists. Accuracy still belongs to a finished
+ * board, so the caller supplies it only when one group remains.
+ */
+export function calculateBoardBreakdown(
+  groups: ExprNode[],
+  accuracy?: AccuracyScoring,
+  forbidden?: ForbiddenMoveRules
+): ScoreBreakdown {
+  let binaryOperators = 0
+  let binaryCost = 0
+  let unaryOperators = 0
+  let unaryCost = 0
+  let forbiddenCount = 0
+  let forbiddenCost = 0
+
+  for (const group of groups) {
+    const part = calculateScoreBreakdown(group, undefined, forbidden)
+    binaryOperators += part.binaryOperators
+    binaryCost += part.binaryCost
+    unaryOperators += part.unaryOperators
+    unaryCost += part.unaryCost
+    forbiddenCount += part.forbiddenCount
+    forbiddenCost += part.forbiddenCost
+  }
+
+  const accuracyCost = accuracy
+    ? accuracyPenaltyFor(accuracy.errorPercent, accuracy.approximationPercent, accuracy.mode)
+    : 0
+
+  return {
+    total: binaryCost + unaryCost + forbiddenCost + accuracyCost,
+    binaryOperators,
+    binaryCost,
+    unaryOperators,
+    unaryCost,
+    forbiddenCount,
+    forbiddenCost,
+    accuracyCost,
+  }
 }
 
 /** How many unary operators sit directly on top of `node` (0 for anything else). */
@@ -760,16 +901,35 @@ export function unaryChainDepth(node: ExprNode): number {
  * Points that stacking `operator` on top of `operand` adds to the score.
  *
  * The new unary becomes layer one and pushes the chain underneath it down a
- * layer, so a second stacked unary costs 20, not the 10 a fresh one does. The
- * factorial/inverse-gamma pairing carries its 200-point penalty too.
+ * layer, so a second stacked unary costs 20, not the 10 a fresh one does. A
+ * forbidden factorial/inverse-gamma pairing adds the configured penalty.
  */
-export function costOfUnaryOn(operator: UnaryOperator, operand: ExprNode): number {
+export function costOfUnaryOn(
+  operator: UnaryOperator,
+  operand: ExprNode,
+  forbidden?: ForbiddenMoveRules
+): number {
+  const rules = resolvedForbiddenRules(forbidden)
   const layer = unaryChainDepth(operand) + 1
   const pairsFactorial =
+    rules.moves.factorialInvgamma &&
     operand.kind === 'unary' &&
-    ((operator === 'fact' && operand.operator === 'invgamma') ||
-      (operator === 'invgamma' && operand.operator === 'fact'))
-  return layer * 10 + (pairsFactorial ? 200 : 0)
+    isFactorialInvgammaPair(operator, operand.operator)
+  return layer * 10 + (pairsFactorial ? rules.penalty : 0)
+}
+
+/**
+ * Points that merging two groups with a binary operator adds to the score.
+ * A power with a base of 1 only costs extra while that house rule is on.
+ */
+export function costOfBinaryOn(
+  operator: BinaryOperator,
+  left: ExprNode,
+  forbidden?: ForbiddenMoveRules
+): number {
+  const rules = resolvedForbiddenRules(forbidden)
+  const forbiddenMove = rules.moves.oneToPower && isOneToPower(operator, left)
+  return 10 + (forbiddenMove ? rules.penalty : 0)
 }
 
 function getBinaryPrecedence(op: BinaryOperator): number {

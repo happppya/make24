@@ -1,6 +1,8 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import LobbyFrame from '../LobbyFrame.vue'
 import { useGameContext } from '../../app/context'
+import { scoringModeLabel } from '../../app/labels'
 import { multiplayer as multiplayerSession, selfPlayer } from '../../multiplayer/session'
 
 const {
@@ -15,6 +17,25 @@ const {
   leaveTable,
   startMatchFromLobby,
 } = useGameContext()
+
+const accuracyRuleBlurb = computed(() => {
+  switch (settings.scoringMode) {
+    case 'accuracy-first':
+      return 'a full tolerance-band miss costs 100 pts, so precision can beat a cheaper board.'
+    case 'balanced':
+      return 'a full tolerance-band miss costs 30 pts, about one binary operator.'
+    default:
+      return 'operation cost decides; accuracy only breaks ties.'
+  }
+})
+
+/** The house rules currently switched on, for the rules summary. */
+const forbiddenMoveLabels = computed(() => {
+  const labels: string[] = []
+  if (settings.forbiddenMoves.factorialInvgamma) labels.push('! with Γ⁻¹')
+  if (settings.forbiddenMoves.oneToPower) labels.push('1 to a power')
+  return labels
+})
 </script>
 
 <template>
@@ -90,9 +111,16 @@ const {
             <strong>+10, +20, +30… pts</strong> for consecutive stacked unary operators
             (<code>o(o(x)) = 30</code>, <code>o(o(o(x))) = 60</code>; binary resets chain)
           </li>
-          <li>
-            <strong>+200 pts</strong> penalty each time <code>!</code> and
-            <code>Γ⁻¹</code> are nested directly together
+          <li v-if="forbiddenMoveLabels.length" data-testid="forbidden-summary">
+            <strong>+{{ settings.forbiddenMovePenalty }} pts</strong> each time a forbidden
+            move is used ({{ forbiddenMoveLabels.join(', ') }})
+          </li>
+          <li v-else data-testid="forbidden-summary">Forbidden moves are off.</li>
+          <li v-if="settings.approximationPercent > 0">
+            <strong>{{ scoringModeLabel(settings.scoringMode) }}</strong> accuracy weighting:
+            {{ accuracyRuleBlurb }}</li>
+          <li v-else>
+            Accuracy is not scored while Approximations is <strong>0%</strong>.
           </li>
         </ul>
       </div>
@@ -214,6 +242,25 @@ const {
           </div>
         </div>
 
+        <!-- How accuracy is traded against operator cost -->
+        <div class="field-row">
+          <label for="setting-scoring-mode">Accuracy weighting</label>
+          <select
+            id="setting-scoring-mode"
+            v-model="settings.scoringMode"
+            class="input-arcade"
+            data-testid="setting-scoring-mode"
+            :disabled="!(settings.approximationPercent > 0)"
+          >
+            <option value="cost-first">Cost first</option>
+            <option value="balanced">Balanced</option>
+            <option value="accuracy-first">Accuracy first</option>
+          </select>
+          <span class="field-hint">
+            {{ settings.approximationPercent > 0 ? accuracyRuleBlurb : 'Set Approximations above 0% to score closeness.' }}
+          </span>
+        </div>
+
         <!-- Card pool -->
         <div class="field-row">
           <label for="setting-pool">Card pool</label>
@@ -276,6 +323,49 @@ const {
               />
               <span>Concatenate (||)</span>
             </label>
+          </div>
+        </div>
+
+        <!-- Forbidden moves: shortcut rules with one shared price -->
+        <div class="field-row">
+          <label>Forbidden moves</label>
+          <div class="operator-toggles">
+            <label class="toggle-chip">
+              <input
+                v-model="settings.forbiddenMoves.factorialInvgamma"
+                type="checkbox"
+                data-testid="forbid-factorial-invgamma"
+              />
+              <span>! nested with Γ⁻¹</span>
+            </label>
+            <label class="toggle-chip">
+              <input
+                v-model="settings.forbiddenMoves.oneToPower"
+                type="checkbox"
+                data-testid="forbid-one-to-power"
+              />
+              <span>1 to a power (1 ^ x)</span>
+            </label>
+          </div>
+          <span class="field-hint">
+            Each occurrence adds the penalty below to the solution's score.
+          </span>
+        </div>
+
+        <div class="field-row">
+          <label for="setting-forbidden-penalty">Penalty per forbidden move</label>
+          <div class="inline-field">
+            <input
+              id="setting-forbidden-penalty"
+              v-model.number="settings.forbiddenMovePenalty"
+              type="number"
+              min="0"
+              max="9999"
+              step="10"
+              class="input-arcade input-short"
+              data-testid="forbidden-penalty"
+            />
+            <span class="field-hint">pts</span>
           </div>
         </div>
       </fieldset>

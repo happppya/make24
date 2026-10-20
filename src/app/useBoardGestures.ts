@@ -4,6 +4,7 @@ import {
   DEFAULT_CARDS_PER_ROW,
   DEFAULT_CARD_SPACING_X,
   DEFAULT_CARD_SPACING_Y,
+  bringGroupToFront,
   getGroupPosition,
   setGroupPosition,
   setWorkspacePan,
@@ -48,6 +49,10 @@ export function useBoardGestures(deps: {
     const ws = activeWorkspace.value
     if (!ws) return
     event.stopPropagation()
+    // Picking a piece up lifts it above its neighbours straight away, and it
+    // stays there when dropped: a card dragged across another must not slide
+    // back underneath it.
+    bringGroupToFront(ws, groupId)
     const pos = getGroupPosition(ws, groupId, idx)
     activeDrag.value = {
       kind: 'group',
@@ -117,6 +122,7 @@ export function useBoardGestures(deps: {
   function handleRecenterView(): void {
     const ws = activeWorkspace.value
     if (!ws) return
+    // The plane is anchored at the viewport centre, so pan (0, 0) is the origin.
     setWorkspacePan(ws, 0, 0)
   }
 
@@ -143,6 +149,15 @@ export function useBoardGestures(deps: {
       DEFAULT_CARD_SPACING_Y
     )
     const widestSlot = Math.max(...slots.map((slot) => slot.offsetWidth), DEFAULT_CARD_SPACING_X)
+    const slotSizes: Record<string, { width: number; height: number }> = {}
+    for (const slot of slots) {
+      const testId = slot.getAttribute('data-testid')
+      if (!testId?.startsWith('group-slot-')) continue
+      slotSizes[testId.slice('group-slot-'.length)] = {
+        width: slot.offsetWidth,
+        height: slot.offsetHeight,
+      }
+    }
 
     // Fit as many whole pieces as the felt is wide, plus a little breathing room.
     const usableWidth = viewport.clientWidth - 32
@@ -154,7 +169,12 @@ export function useBoardGestures(deps: {
         Math.floor((usableWidth - widestSlot) / widest) + 1
       )
     )
-    const changed = tidyWorkspaceGroups(ws, { columns, spacingX: widest, spacingY: tallest })
+    const changed = tidyWorkspaceGroups(ws, {
+      columns,
+      spacingX: widest,
+      spacingY: tallest,
+      slotSizes,
+    })
 
     if (changed) {
       tidyingBoard.value = true

@@ -2,6 +2,7 @@ import { computed, nextTick, onBeforeUnmount, provide, reactive, ref, watch } fr
 import { playSfx } from '../audio/sfx'
 import {
   OPERATOR_CATALOG,
+  costOfBinaryOn,
   costOfUnaryOn,
   getEnabledOperators,
   isUnaryOperator,
@@ -173,6 +174,19 @@ export function useGame() {
     match.enterSoloLobby()
   }
 
+  /**
+   * The game-over screen's Play Again: bring the table back to its lobby so the
+   * rules can be changed before the next series. The server moves every seat.
+   */
+  function playAgainFromGameOver(): void {
+    playSfx('click')
+    if (settings.isMultiplayer) {
+      if (room.multiplayerHost.value) sendToRoom({ t: 'return-to-lobby' })
+      return
+    }
+    match.enterSoloLobby()
+  }
+
   function startMatchFromLobby(): void {
     // Ensure at least one operator category is enabled
     const anyEnabled = Object.values(settings.allowedOperators).some(Boolean)
@@ -263,16 +277,22 @@ export function useGame() {
   }
 
   /**
-   * What this press costs. A binary operator is a flat 10 (arming it or merging
-   * with it costs the same); a unary one ramps with the chain it lands on, and
-   * includes the 200-point factorial/inverse-gamma pairing.
+   * What this press costs. A binary operator is a flat 10 unless the selected
+   * left operand makes a forbidden move; a unary one ramps with the chain it
+   * lands on and includes any forbidden factorial/inverse-gamma pairing.
    */
   function operatorCostLabel(opId: OperatorId): string {
-    if (!isUnaryOperator(opId)) return '+10'
+    const forbidden = {
+      moves: settings.forbiddenMoves,
+      penalty: settings.forbiddenMovePenalty,
+    }
     const ws = match.activeWorkspace.value
     const node = ws?.groups.find((group) => group.id === ws.selectedGroupId)
+    if (!isUnaryOperator(opId)) {
+      return `+${node ? costOfBinaryOn(opId, node, forbidden) : 10}`
+    }
     if (!node) return '+10'
-    return `+${costOfUnaryOn(opId, node)}`
+    return `+${costOfUnaryOn(opId, node, forbidden)}`
   }
 
   function handleUndo(): void {
@@ -377,6 +397,7 @@ export function useGame() {
     goToTitle,
     goToLobby,
     enterLobby,
+    playAgainFromGameOver,
     startMatchFromLobby,
     handleSelectGroup,
     handleUngroup,

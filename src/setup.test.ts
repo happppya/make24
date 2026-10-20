@@ -11,15 +11,21 @@ vi.mock('./multiplayer/session', async (importOriginal) => {
   return { ...actual, openLobbyBrowser: vi.fn(async () => {}) }
 })
 import App from './App.vue'
+import ScorePanel from './components/ScorePanel.vue'
 import {
+  accuracyPenaltyFor,
   applyBinaryOperator,
   applyUnaryOperator,
+  calculateBoardBreakdown,
   calculateScore,
   calculateScoreBreakdown,
   checkTargetAcceptance,
+  cleanFloat,
+  costOfBinaryOn,
   costOfUnaryOn,
   formatExpressionLhs,
   formatFullEquation,
+  formatNumber,
   getEnabledOperators,
   realFactorial,
   realGamma,
@@ -28,6 +34,8 @@ import {
 import { buildDeckPool, createCard, dealHand, generateTargetNumber } from './engine/deck'
 import {
   DEFAULT_CARDS_PER_ROW,
+  DEFAULT_CARD_SLOT_HEIGHT,
+  DEFAULT_CARD_SLOT_WIDTH,
   DEFAULT_CARD_SPACING_X,
   DEFAULT_CARD_SPACING_Y,
   WORKSPACE_COUNT,
@@ -36,6 +44,7 @@ import {
   createWorkspace,
   evaluateWorkspaceSolution,
   getGroupPosition,
+  getGroupStackRank,
   redoWorkspace,
   resetGroupIdCounter,
   resetWorkspaceToHand,
@@ -47,6 +56,7 @@ import {
   ungroupInWorkspace,
 } from './engine/workspace'
 import type { Card, ExprNode } from './engine/types'
+import { fittedFontSize, formatPercent, formatScore } from './app/labels'
 import { createDefaultSettings } from './multiplayer/room'
 import { leaveRoom, multiplayer as multiplayerSession } from './multiplayer/session'
 import type { LobbyPlayer, RoomState } from './multiplayer/protocol'
@@ -204,6 +214,30 @@ describe('Make 24 Remastered — Math & Operators Engine', () => {
     ])
   })
 
+  it('formats numbers at full double precision, including small values', () => {
+    expect(formatNumber(Math.PI)).toBe('3.141592653589793')
+    expect(cleanFloat(Math.PI)).toBe(Math.PI)
+    expect(formatNumber(0.000123456789012345)).toBe('0.000123456789012345')
+    expect(formatNumber(1.23456789012345e-7)).toBe('1.23456789012345e-7')
+    // Floating noise still snaps away.
+    expect(formatNumber(0.1 + 0.2)).toBe('0.3')
+    expect(cleanFloat(0.1 + 0.2)).toBe(0.3)
+
+    // HUD scores and percentages stay short enough for their columns.
+    expect(formatScore(38.5)).toBe('38.5')
+    expect(formatScore(38)).toBe('38')
+    expect(formatScore(null)).toBe('—')
+    expect(formatPercent(19.047619047619047)).toBe('19.05%')
+  })
+
+  it('fits an oversized target number into its card', () => {
+    expect(fittedFontSize(46, 230, 230)).toBeNull()
+    expect(fittedFontSize(46, 230, 460)).toBe(23)
+    expect(fittedFontSize(46, 100, 1000)).toBe(8)
+    expect(fittedFontSize(46, 144, 773)).toBe(8)
+    expect(fittedFontSize(46, 0, 1000)).toBeNull()
+  })
+
   it('checks target acceptance with inclusive approximation percent and 0 target edge case', () => {
     // Exact target 24 with 0% approximation
     expect(checkTargetAcceptance(24, 24, 0).acceptable).toBe(true)
@@ -227,6 +261,28 @@ describe('Make 24 Remastered — Math & Operators Engine', () => {
 function unaryOperandOf(node: ExprNode): ExprNode {
   if (node.kind !== 'unary') throw new Error('expected a unary node')
   return node.operand
+}
+
+function demoLeaf(rank: 3 | 9 | 10, id: string): ExprNode {
+  const card = createCard(rank, 'spades', id)
+  return { kind: 'card', id, card, value: card.value }
+}
+
+function demoBinary(
+  operator: 'add' | 'sub' | 'mult',
+  left: ExprNode,
+  right: ExprNode,
+  value: number,
+  id: string
+): ExprNode {
+  return { kind: 'binary', id, operator, left, right, value, headerText: '' }
+}
+
+/** A one-group workspace, for scoring a hand-built board end to end. */
+function boardWithRoot(root: ExprNode) {
+  const ws = createWorkspace(0, [])
+  ws.groups = [root]
+  return ws
 }
 
 describe('Make 24 Remastered — Scoring & Equation Formatting', () => {
@@ -372,10 +428,112 @@ describe('Make 24 Remastered — Scoring & Equation Formatting', () => {
       binaryCost: 0,
       unaryOperators: 3,
       unaryCost: 60,
-      nestingCount: 0,
-      nestingCost: 0,
+      forbiddenCount: 0,
+      forbiddenCost: 0,
+      accuracyCost: 0,
     })
     expect(calculateScoreBreakdown(root).total).toBe(calculateScore(root))
+  })
+
+  it('costs every group while the board is still being solved', () => {
+    const ws = createWorkspace(0, [sampleCards[0]!, sampleCards[1]!, sampleCards[2]!]) // 4, 3, 7
+    expect(calculateBoardBreakdown(ws.groups)).toMatchObject({
+      total: 0,
+      binaryOperators: 0,
+      unaryOperators: 0,
+      forbiddenCount: 0,
+    })
+
+    // 4! costs 10 even though three untouched groups remain on the board.
+    selectGroupInWorkspace(ws, ws.groups[0]!.id)
+    applyOperatorInWorkspace(ws, 'fact')
+    expect(ws.groups.length).toBe(3)
+    expect(calculateBoardBreakdown(ws.groups)).toMatchObject({
+      total: 10,
+      unaryOperators: 1,
+      unaryCost: 10,
+    })
+
+    // Merging 4! with 3 adds the binary 10 while two groups still remain.
+    applyOperatorInWorkspace(ws, 'add')
+    selectGroupInWorkspace(ws, ws.groups[1]!.id)
+    expect(ws.groups.length).toBe(2)
+    expect(calculateBoardBreakdown(ws.groups)).toMatchObject({
+      total: 20,
+      binaryOperators: 1,
+      binaryCost: 10,
+      unaryOperators: 1,
+      unaryCost: 10,
+    })
+
+    // Forbidden moves are counted per group too.
+    const forbiddenBoard = createWorkspace(0, [
+      createCard(1, 'spades', 'board-one'),
+      createCard(5, 'hearts', 'board-five'),
+    ])
+    selectGroupInWorkspace(forbiddenBoard, forbiddenBoard.groups[0]!.id)
+    applyOperatorInWorkspace(forbiddenBoard, 'pow')
+    selectGroupInWorkspace(forbiddenBoard, forbiddenBoard.groups[1]!.id)
+    expect(calculateBoardBreakdown(forbiddenBoard.groups)).toMatchObject({
+      forbiddenCount: 1,
+      forbiddenCost: 200,
+      total: 210,
+    })
+
+    // Accuracy only joins the bill once the board is a finished solution.
+    const accuracy = { errorPercent: 10, approximationPercent: 20, mode: 'balanced' as const }
+    expect(calculateBoardBreakdown(ws.groups, accuracy)).toMatchObject({
+      accuracyCost: 15,
+      total: 35,
+    })
+  })
+
+  it('weights accuracy against operation cost according to the scoring mode', () => {
+    // 81 within a 20% band of 100: 19% error, one binary operator.
+    // An exact 100 board costs three binary operators (30 points).
+    const cheapInaccurate = boardWithRoot(
+      demoBinary('mult', demoLeaf(9, 'nine-a'), demoLeaf(9, 'nine-b'), 81, 'eighty-one')
+    )
+    const exactExpensive = boardWithRoot(
+      demoBinary(
+        'add',
+        demoBinary('mult', demoLeaf(10, 'ten-a'), demoLeaf(10, 'ten-b'), 100, 'hundred'),
+        demoBinary('sub', demoLeaf(3, 'three-a'), demoLeaf(3, 'three-b'), 0, 'zero'),
+        100,
+        'exact-hundred'
+      )
+    )
+
+    expect(accuracyPenaltyFor(19, 20, 'cost-first')).toBe(1.9)
+    expect(accuracyPenaltyFor(19, 20, 'balanced')).toBe(28.5)
+    expect(accuracyPenaltyFor(19, 20, 'accuracy-first')).toBe(95)
+    // Without an approximation band there is nothing to trade off.
+    expect(accuracyPenaltyFor(19, 0, 'accuracy-first')).toBe(0)
+
+    const costFirst = evaluateWorkspaceSolution(cheapInaccurate, 100, 20, 'cost-first')
+    const balancedCheap = evaluateWorkspaceSolution(cheapInaccurate, 100, 20, 'balanced')
+    const accurateCheap = evaluateWorkspaceSolution(cheapInaccurate, 100, 20, 'accuracy-first')
+    const balancedExact = evaluateWorkspaceSolution(exactExpensive, 100, 20, 'balanced')
+
+    expect(costFirst.score).toBe(11.9)
+    expect(balancedCheap.score).toBe(38.5)
+    expect(accurateCheap.score).toBe(105)
+    expect(balancedExact.score).toBe(30)
+
+    // Cost-first still rewards cheaper operations, balanced makes a full-band
+    // error worth one binary operator, and accuracy-first lets precision win.
+    expect(costFirst.score!).toBeLessThan(balancedExact.score!)
+    expect(balancedExact.score!).toBeLessThan(balancedCheap.score!)
+    expect(balancedExact.score!).toBeLessThan(accurateCheap.score!)
+
+    const cheapBreakdown = calculateScoreBreakdown(cheapInaccurate.groups[0]!, {
+      errorPercent: 19,
+      approximationPercent: 20,
+      mode: 'balanced',
+    })
+    expect(cheapBreakdown.binaryCost).toBe(10)
+    expect(cheapBreakdown.accuracyCost).toBe(28.5)
+    expect(cheapBreakdown.total).toBe(38.5)
   })
 
   it('reports what the next unary operator actually adds to the score', () => {
@@ -452,7 +610,94 @@ describe('Make 24 Remastered — Scoring & Equation Formatting', () => {
     expect(costOfUnaryOn('gamma', factorialNode)).toBe(20)
   })
 
-  it('separates the nested factorial/inverse-gamma penalty from the unary layers', () => {
+  it('penalises 1 raised to a power as a configurable forbidden move', () => {
+    const one = createCard(1, 'spades', 'pow-one')
+    const five = createCard(5, 'hearts', 'pow-five')
+    const ws = createWorkspace(0, [one, five])
+    selectGroupInWorkspace(ws, ws.groups[0]!.id)
+    applyOperatorInWorkspace(ws, 'pow')
+    selectGroupInWorkspace(ws, ws.groups[1]!.id)
+    const tree = ws.groups[0]!
+    expect(tree.value).toBe(1)
+
+    // Default house rules: the binary costs 10 and the forbidden move 200.
+    expect(calculateScoreBreakdown(tree)).toMatchObject({
+      binaryCost: 10,
+      forbiddenCount: 1,
+      forbiddenCost: 200,
+      total: 210,
+    })
+
+    // The host can reprice the move...
+    const priced = {
+      moves: { factorialInvgamma: true, oneToPower: true },
+      penalty: 35,
+    }
+    expect(calculateScoreBreakdown(tree, undefined, priced).total).toBe(45)
+    if (tree.kind !== 'binary') throw new Error('expected a power tree')
+    expect(costOfBinaryOn('pow', tree.left, priced)).toBe(45)
+    expect(
+      costOfBinaryOn('pow', tree.left, {
+        moves: { factorialInvgamma: true, oneToPower: false },
+        penalty: 35,
+      })
+    ).toBe(10)
+
+    // ...or switch it off, leaving only the operator cost.
+    expect(
+      calculateScoreBreakdown(tree, undefined, {
+        moves: { factorialInvgamma: true, oneToPower: false },
+        penalty: 200,
+      }).total
+    ).toBe(10)
+
+    // A negative or missing penalty can never turn a forbidden move into a rebate.
+    const enabled = { moves: { factorialInvgamma: true, oneToPower: true } }
+    expect(calculateScoreBreakdown(tree, undefined, { ...enabled, penalty: -50 }).total).toBe(10)
+    expect(calculateScoreBreakdown(tree, undefined, { ...enabled, penalty: NaN }).total).toBe(10)
+
+    // A power with any other base is ordinary play.
+    const normal = createWorkspace(0, [createCard(2, 'clubs', 'pow-two'), five])
+    selectGroupInWorkspace(normal, normal.groups[0]!.id)
+    applyOperatorInWorkspace(normal, 'pow')
+    selectGroupInWorkspace(normal, normal.groups[1]!.id)
+    expect(calculateScoreBreakdown(normal.groups[0]!)).toMatchObject({
+      forbiddenCount: 0,
+      total: 10,
+    })
+  })
+
+  it('makes the factorial/inverse-gamma pairing a configurable forbidden move', () => {
+    const ws = createWorkspace(0, [sampleCards[1]!]) // card 3
+    selectGroupInWorkspace(ws, ws.groups[0]!.id)
+    applyOperatorInWorkspace(ws, 'invgamma')
+    applyOperatorInWorkspace(ws, 'fact')
+    const tree = ws.groups[0]!
+
+    expect(calculateScoreBreakdown(tree).total).toBe(230)
+
+    // Switching the move off leaves the ordinary 10 + 20 unary ladder.
+    expect(
+      calculateScoreBreakdown(tree, undefined, {
+        moves: { factorialInvgamma: false, oneToPower: true },
+        penalty: 200,
+      })
+    ).toMatchObject({ forbiddenCount: 0, forbiddenCost: 0, total: 30 })
+
+    // A cheaper penalty applies to the existing pairing too.
+    const cheap = {
+      moves: { factorialInvgamma: true, oneToPower: true },
+      penalty: 25,
+    }
+    expect(calculateScoreBreakdown(tree, undefined, cheap)).toMatchObject({
+      forbiddenCount: 1,
+      forbiddenCost: 25,
+      total: 55,
+    })
+    expect(costOfUnaryOn('fact', unaryOperandOf(tree), cheap)).toBe(45)
+  })
+
+  it('separates the forbidden-move penalty from the unary layers', () => {
     const ws = createWorkspace(0, [sampleCards[1]!]) // card 3
     selectGroupInWorkspace(ws, ws.groups[0]!.id)
     applyOperatorInWorkspace(ws, 'invgamma') // Γ⁻¹(3) -> 10
@@ -466,8 +711,9 @@ describe('Make 24 Remastered — Scoring & Equation Formatting', () => {
       binaryCost: 0,
       unaryOperators: 3,
       unaryCost: 60,
-      nestingCount: 2,
-      nestingCost: 400,
+      forbiddenCount: 2,
+      forbiddenCost: 400,
+      accuracyCost: 0,
     })
     expect(calculateScoreBreakdown(root).total).toBe(calculateScore(root))
   })
@@ -489,8 +735,9 @@ describe('Make 24 Remastered — Scoring & Equation Formatting', () => {
       binaryCost: 20,
       unaryOperators: 2,
       unaryCost: 20,
-      nestingCount: 0,
-      nestingCost: 0,
+      forbiddenCount: 0,
+      forbiddenCost: 0,
+      accuracyCost: 0,
     })
     expect(calculateScoreBreakdown(root).total).toBe(calculateScore(root))
   })
@@ -647,8 +894,66 @@ describe('Make 24 Remastered — Deck Pool, 5 Workspaces & Undo/Redo', () => {
     const leftPos = getGroupPosition(ws, id0, 0)
     const rightPos = getGroupPosition(ws, id1, 1)
     expect(leftPos).not.toEqual(rightPos)
-    expect(rightPos.x - leftPos.x).toBeGreaterThan(80)
+    expect(Math.abs(rightPos.x - leftPos.x)).toBeGreaterThan(80)
     expect(Math.abs(rightPos.y - leftPos.y)).toBeGreaterThan(0)
+  })
+
+  it('fans ungrouped halves to a random side so repeated splits do not drift right', () => {
+    const hand = [createCard(6, 'spades', 'fan-1'), createCard(4, 'hearts', 'fan-2')]
+
+    // Merge both cards, park the group at a known spot, then split it again.
+    const splitAt = (randomValue: number) => {
+      const random = vi.spyOn(Math, 'random').mockReturnValue(randomValue)
+      const ws = createWorkspace(0, hand)
+      const ids = ws.groups.map((group) => group.id)
+      setGroupPosition(ws, ids[0]!, 300, 200)
+      selectGroupInWorkspace(ws, ids[0]!)
+      applyOperatorInWorkspace(ws, 'add')
+      selectGroupInWorkspace(ws, ids[1]!)
+      expect(ungroupInWorkspace(ws).changed).toBe(true)
+      random.mockRestore()
+      return {
+        left: getGroupPosition(ws, ids[0]!, 0),
+        right: getGroupPosition(ws, ids[1]!, 1),
+      }
+    }
+
+    // A high roll fans the pair right, leaving the left operand near the parent.
+    const rightFan = splitAt(0.9)
+    expect(rightFan.left.x).toBeGreaterThan(250)
+    expect(rightFan.right.x - 300).toBeGreaterThan(100)
+    expect(rightFan.right.x - rightFan.left.x).toBeGreaterThan(100)
+
+    // A low roll fans the same split left, or every split would walk the board
+    // further right than the last.
+    const leftFan = splitAt(0.1)
+    expect(300 - leftFan.left.x).toBeGreaterThan(100)
+    expect(leftFan.right.x).toBeGreaterThan(250)
+    expect(leftFan.right.x - leftFan.left.x).toBeGreaterThan(100)
+  })
+
+  it('keeps a left-fanning split heading left when its landing spot is occupied', () => {
+    const hand = [
+      createCard(6, 'spades', 'avoid-1'),
+      createCard(4, 'hearts', 'avoid-2'),
+      createCard(2, 'clubs', 'avoid-3'),
+    ]
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0.1)
+    const ws = createWorkspace(0, hand)
+    const ids = ws.groups.map((group) => group.id)
+    setGroupPosition(ws, ids[0]!, 300, 200)
+    // Park the third card exactly where the left half would otherwise land.
+    setGroupPosition(ws, ids[2]!, 141, 240)
+
+    selectGroupInWorkspace(ws, ids[0]!)
+    applyOperatorInWorkspace(ws, 'add')
+    selectGroupInWorkspace(ws, ids[1]!)
+    expect(ungroupInWorkspace(ws).changed).toBe(true)
+    random.mockRestore()
+
+    // Stepping around the neighbour must not reverse the fan into the parent.
+    const fannedLeft = getGroupPosition(ws, ids[0]!, 0)
+    expect(fannedLeft.x).toBeLessThan(100)
   })
 
   it('deals six cards per row and wraps the rest onto a centred second row', () => {
@@ -662,6 +967,16 @@ describe('Make 24 Remastered — Deck Pool, 5 Workspaces & Undo/Redo', () => {
     expect(firstRow).toHaveLength(6)
     expect(new Set(firstRow.map((p) => p.y)).size).toBe(1)
     expect(firstRow[5]!.x - firstRow[0]!.x).toBe(DEFAULT_CARD_SPACING_X * 5)
+
+    // The dealt cards themselves, not just their top-left corners, are centred
+    // on the workspace origin.
+    expect(
+      Math.abs(firstRow[0]!.x + firstRow[5]!.x + DEFAULT_CARD_SLOT_WIDTH)
+    ).toBeLessThan(1)
+    // The two-row block as a whole is vertically centred on the origin.
+    expect(Math.abs(firstRow[0]!.y + secondRow[0]!.y + DEFAULT_CARD_SLOT_HEIGHT)).toBeLessThan(
+      1.5
+    )
 
     // The overflow forms a shorter second row below it
     expect(secondRow).toHaveLength(4)
@@ -703,6 +1018,36 @@ describe('Make 24 Remastered — Deck Pool, 5 Workspaces & Undo/Redo', () => {
     expect(ws.positions['leaf-gone']).toBeUndefined()
   })
 
+  it('centres a tidied grid by the card boxes, not their top-left corners', () => {
+    const hand = Array.from({ length: 4 }, (_, i) => createCard(8, 'spades', `box-tidy-${i}`))
+    const ws = createWorkspace(0, hand)
+    const ids = ws.groups.map((group) => group.id)
+    const slotSizes = Object.fromEntries(
+      ids.map((id) => [id, { width: DEFAULT_CARD_SLOT_WIDTH, height: DEFAULT_CARD_SLOT_HEIGHT }])
+    )
+
+    expect(tidyWorkspaceGroups(ws, { columns: 4, slotSizes })).toBe(true)
+
+    const boxes = ids.map((id) => {
+      const pos = getGroupPosition(ws, id)
+      return {
+        minX: pos.x,
+        maxX: pos.x + DEFAULT_CARD_SLOT_WIDTH,
+        minY: pos.y,
+        maxY: pos.y + DEFAULT_CARD_SLOT_HEIGHT,
+      }
+    })
+    const minX = Math.min(...boxes.map((box) => box.minX))
+    const maxX = Math.max(...boxes.map((box) => box.maxX))
+    const minY = Math.min(...boxes.map((box) => box.minY))
+    const maxY = Math.max(...boxes.map((box) => box.maxY))
+
+    expect(Math.abs(minX + maxX)).toBeLessThan(1)
+    // An odd card height leaves the exact centre on a half pixel, so one pixel
+    // of integer rounding is expected.
+    expect(Math.abs(minY + maxY)).toBeLessThanOrEqual(1)
+  })
+
   it('wraps a tidied board onto further rows and centres each of them', () => {
     const hand = Array.from({ length: 4 }, (_, i) => createCard(6, 'clubs', `wrap-tidy-${i}`))
     const ws = createWorkspace(0, hand)
@@ -741,6 +1086,45 @@ describe('Make 24 Remastered — Deck Pool, 5 Workspaces & Undo/Redo', () => {
     ids.forEach((id, i) => {
       expect(getGroupPosition(ws, id)).toEqual(scattered[i])
     })
+  })
+
+  it('stacks the most recently selected or handled group on top', () => {
+    const hand = Array.from({ length: 4 }, (_, i) => createCard(3, 'clubs', `stack-${i}`))
+    const ws = createWorkspace(0, hand)
+    const ids = ws.groups.map((group) => group.id)
+
+    // The deal itself is a stack: the last card dealt sits on top.
+    expect(ws.stackOrder).toEqual(ids)
+    expect(getGroupStackRank(ws, ids[3]!)).toBe(3)
+    expect(getGroupStackRank(ws, ids[0]!)).toBe(0)
+
+    // Selecting a card lifts it above everything else...
+    selectGroupInWorkspace(ws, ids[0]!)
+    expect(getGroupStackRank(ws, ids[0]!)).toBe(3)
+    // ...and selecting another card takes that top spot from it.
+    selectGroupInWorkspace(ws, ids[1]!)
+    expect(getGroupStackRank(ws, ids[1]!)).toBe(3)
+    expect(getGroupStackRank(ws, ids[0]!)).toBe(2)
+
+    // Merging leaves the fused group on top and forgets its absorbed operand.
+    applyOperatorInWorkspace(ws, 'add')
+    selectGroupInWorkspace(ws, ids[0]!)
+    expect(ws.groups.length).toBe(3)
+    const merged = ws.groups.find((group) => group.kind === 'binary')!
+    expect(ws.stackOrder.at(-1)).toBe(merged.id)
+    expect(ws.stackOrder).not.toContain(ids[0])
+
+    // Splitting the fused group lifts both halves above the untouched cards.
+    selectGroupInWorkspace(ws, ids[2]!)
+    expect(ungroupInWorkspace(ws, merged.id).changed).toBe(true)
+    const splitIds = ws.groups.slice(0, 2).map((group) => group.id)
+    expect(ws.stackOrder.at(-2)).toBe(splitIds[0])
+    expect(ws.stackOrder.at(-1)).toBe(splitIds[1])
+
+    // Undo restores any group the order had pruned, without losing the live ones.
+    expect(undoWorkspace(ws)).toBe(true)
+    expect(new Set(ws.stackOrder)).toEqual(new Set(ws.groups.map((group) => group.id)))
+    expect(ws.stackOrder).toHaveLength(ws.groups.length)
   })
 })
 
@@ -809,6 +1193,257 @@ describe('Make 24 Remastered — Playable UI Flow (App.vue)', () => {
     // Finish round and verify transition to Round End screen
     await wrapper.find('[data-testid="finish-round-btn"]').trigger('click')
     expect(wrapper.find('[data-testid="next-round-btn"]').exists()).toBe(true)
+  })
+
+  it('shows the running score while the board is still being solved', async () => {
+    const wrapper = mount(App)
+    await wrapper.find('[data-testid="enter-singleplayer"]').trigger('click')
+    await wrapper.find('[data-testid="start-round-btn"]').trigger('click')
+
+    const total = () => wrapper.find('[data-testid="cost-total"]').text()
+    expect(total()).toContain('0')
+
+    // A unary on one card costs 10 while the other three groups stay untouched.
+    await wrapper.findAll('.expr-node--root')[0]!.trigger('click')
+    await wrapper.find('[data-testid="op-fact"]').trigger('click')
+    expect(wrapper.findAll('.expr-node--root').length).toBe(4)
+    expect(total()).toContain('10')
+
+    // Merging that group adds the binary cost, still with two groups left.
+    await wrapper.find('[data-testid="op-add"]').trigger('click')
+    await wrapper.findAll('.expr-node--root')[1]!.trigger('click')
+    expect(wrapper.findAll('.expr-node--root').length).toBe(3)
+    expect(total()).toContain('20')
+
+    wrapper.unmount()
+  })
+
+  it('offers forbidden moves and their penalty in the lobby settings', async () => {
+    const wrapper = mount(App)
+    await wrapper.find('[data-testid="enter-singleplayer"]').trigger('click')
+
+    const factorialToggle = wrapper.find('[data-testid="forbid-factorial-invgamma"]')
+    const powerToggle = wrapper.find('[data-testid="forbid-one-to-power"]')
+    const penalty = wrapper.find('[data-testid="forbidden-penalty"]')
+    const summary = () => wrapper.find('[data-testid="forbidden-summary"]').text()
+
+    // Both house rules are on by default, at 200 points each.
+    expect((factorialToggle.element as HTMLInputElement).checked).toBe(true)
+    expect((powerToggle.element as HTMLInputElement).checked).toBe(true)
+    expect((penalty.element as HTMLInputElement).value).toBe('200')
+    expect(summary()).toContain('+200 pts')
+    expect(summary()).toContain('! with Γ⁻¹')
+    expect(summary()).toContain('1 to a power')
+
+    // The host reprices the moves from the same form.
+    await penalty.setValue('75')
+    expect(summary()).toContain('+75 pts')
+
+    // Unticking a move drops it from the rules summary.
+    await powerToggle.setValue(false)
+    expect(summary()).toContain('! with Γ⁻¹')
+    expect(summary()).not.toContain('1 to a power')
+
+    await factorialToggle.setValue(false)
+    expect(summary()).toContain('Forbidden moves are off.')
+
+    wrapper.unmount()
+  })
+
+  it('puts the workspace origin at the centre of the felt', async () => {
+    const wrapper = mount(App)
+    await wrapper.find('[data-testid="enter-singleplayer"]').trigger('click')
+    await wrapper.find('[data-testid="start-round-btn"]').trigger('click')
+
+    const plane = wrapper.find('[data-testid="workspace-plane"]')
+    expect(plane.exists()).toBe(true)
+    // The pan translation is applied on top of a 50%/50% origin offset, so
+    // pan (0, 0) is the visual centre rather than the felt's top-left corner.
+    expect(plane.attributes('style')).toContain('translate(50%, 50%)')
+
+    wrapper.unmount()
+  })
+
+  it('raises the last card the player selects or picks up above the others', async () => {
+    const wrapper = mount(App)
+    await wrapper.find('[data-testid="enter-singleplayer"]').trigger('click')
+    await wrapper.find('[data-testid="start-round-btn"]').trigger('click')
+
+    const slots = () => wrapper.findAll('.draggable-group-slot')
+    const zIndexes = () =>
+      slots().map((slot) => Number((slot.element as HTMLElement).style.zIndex))
+    const topZ = () => Math.max(...zIndexes())
+
+    // The dealt cards stack in order, so every card has its own layer.
+    const initial = zIndexes()
+    expect(new Set(initial).size).toBe(initial.length)
+    expect(initial.at(-1)).toBe(topZ())
+
+    // Selecting the first card lifts it above every neighbour.
+    await wrapper.findAll('.expr-node--root')[0]!.trigger('click')
+    expect(zIndexes()[0]).toBe(topZ())
+
+    // Picking up another card (pointer-down) lifts that one instead, immediately.
+    await slots()[1]!.trigger('pointerdown')
+    const afterPickup = zIndexes()
+    expect(afterPickup[1]).toBe(topZ())
+    expect(afterPickup[0]).toBeLessThan(afterPickup[1]!)
+
+    wrapper.unmount()
+  })
+
+  it('shows the winning board in card form on the round-end screen', async () => {
+    const wrapper = mount(App)
+    await wrapper.find('[data-testid="enter-singleplayer"]').trigger('click')
+
+    // A wide band and target make any sum of the random hand acceptable.
+    await wrapper.find('#setting-target').setValue('manual')
+    await nextTick()
+    await wrapper.find('#setting-manual-target').setValue('100')
+    await wrapper.find('#setting-approx').setValue('100')
+    await wrapper.find('[data-testid="start-round-btn"]').trigger('click')
+
+    // Merge every card with addition; the merged group stays selected.
+    await wrapper.findAll('.expr-node--root')[0]!.trigger('click')
+    for (let step = 0; step < 3; step++) {
+      await wrapper.find('[data-testid="op-add"]').trigger('click')
+      const groups = wrapper.findAll('.expr-node--root')
+      await groups[1]!.trigger('click')
+      await nextTick()
+    }
+    expect(wrapper.findAll('.expr-node--root')).toHaveLength(1)
+
+    await wrapper.find('[data-testid="finish-round-btn"]').trigger('click')
+    await nextTick()
+
+    const board = wrapper.find('[data-testid="winning-board"]')
+    expect(board.exists()).toBe(true)
+    expect(board.findAll('.playing-card')).toHaveLength(4)
+    expect(wrapper.find('[data-testid="round-end-equation"]').text()).toContain('=')
+
+    wrapper.unmount()
+  })
+
+  it('offers the three weighted scoring modes in the lobby, enabled with approximations', async () => {
+    const wrapper = mount(App)
+    await wrapper.find('[data-testid="enter-singleplayer"]').trigger('click')
+
+    const select = wrapper.find('[data-testid="setting-scoring-mode"]')
+    expect(select.exists()).toBe(true)
+    expect(select.findAll('option').map((option) => option.attributes('value'))).toEqual([
+      'cost-first',
+      'balanced',
+      'accuracy-first',
+    ])
+    // With no tolerance there is no accuracy to trade off, so the control rests.
+    expect(select.attributes('disabled')).toBeDefined()
+
+    await wrapper.find('#setting-approx').setValue('5')
+    expect(select.attributes('disabled')).toBeUndefined()
+    await select.setValue('accuracy-first')
+    expect((select.element as HTMLSelectElement).value).toBe('accuracy-first')
+
+    wrapper.unmount()
+  })
+
+  it('shows the running cost before a solution is complete', () => {
+    const wrapper = mount(ScorePanel, {
+      props: {
+        roundNumber: 1,
+        target: 24,
+        approximationPercent: 0,
+        scoringMode: 'cost-first',
+        value: null,
+        errorPercent: null,
+        acceptable: false,
+        costBreakdown: {
+          total: 20,
+          binaryOperators: 1,
+          binaryCost: 10,
+          unaryOperators: 1,
+          unaryCost: 10,
+          forbiddenCount: 0,
+          forbiddenCost: 0,
+          accuracyCost: 0,
+        },
+        hitSignal: 0,
+      },
+    })
+
+    expect(wrapper.find('[data-testid="cost-total"]').text()).toContain('20')
+    const breakdown = wrapper.find('[data-testid="cost-breakdown"]').text()
+    expect(breakdown).toContain('BINARY')
+    expect(breakdown).toContain('UNARY')
+
+    wrapper.unmount()
+  })
+
+  it('shows the accuracy penalty in the score widget and folds it into the total', () => {
+    const wrapper = mount(ScorePanel, {
+      props: {
+        roundNumber: 1,
+        target: 100,
+        approximationPercent: 20,
+        scoringMode: 'balanced',
+        value: 81,
+        errorPercent: 19,
+        acceptable: true,
+        costBreakdown: {
+          total: 38.5,
+          binaryOperators: 1,
+          binaryCost: 10,
+          unaryOperators: 0,
+          unaryCost: 0,
+          forbiddenCount: 0,
+          forbiddenCost: 0,
+          accuracyCost: 28.5,
+        },
+        hitSignal: 0,
+      },
+    })
+
+    expect(wrapper.find('[data-testid="cost-total"]').text()).toContain('38.5')
+    const breakdown = wrapper.find('[data-testid="cost-breakdown"]').text()
+    expect(breakdown).toContain('BINARY')
+    expect(breakdown).toContain('ACCURACY')
+    expect(breakdown).toContain('19%')
+    expect(breakdown).toContain('28.5')
+    expect(wrapper.find('[data-testid="scoring-mode"]').text()).toContain('BALANCED')
+
+    wrapper.unmount()
+  })
+
+  it('itemises forbidden moves as their own score row', () => {
+    const wrapper = mount(ScorePanel, {
+      props: {
+        roundNumber: 1,
+        target: 24,
+        approximationPercent: 0,
+        scoringMode: 'cost-first',
+        value: 1,
+        errorPercent: 0,
+        acceptable: false,
+        costBreakdown: {
+          total: 210,
+          binaryOperators: 1,
+          binaryCost: 10,
+          unaryOperators: 0,
+          unaryCost: 0,
+          forbiddenCount: 1,
+          forbiddenCost: 200,
+          accuracyCost: 0,
+        },
+        hitSignal: 0,
+      },
+    })
+
+    const row = wrapper.find('[data-testid="cost-forbidden"]')
+    expect(row.exists()).toBe(true)
+    expect(row.text()).toContain('FORBID')
+    expect(row.text()).toContain('×1')
+    expect(row.text()).toContain('200')
+
+    wrapper.unmount()
   })
 
   it('selects a board group from the keyboard, not only the pointer', async () => {
@@ -1049,7 +1684,12 @@ describe('Make 24 Remastered — Playable UI Flow (App.vue)', () => {
     await nextTick()
 
     // Name, create (public/private) and code entry all live on the selector.
-    expect(wrapper.find('[data-testid="mp-name-input"]').exists()).toBe(true)
+    const nameInput = wrapper.find('[data-testid="mp-name-input"]')
+    expect(nameInput.exists()).toBe(true)
+    // A fresh player gets a playful placeholder, not the generic "Player".
+    const defaultName = (nameInput.element as HTMLInputElement).value
+    expect(defaultName).not.toBe('Player')
+    expect(defaultName.length).toBeGreaterThan(3)
     expect(wrapper.find('[data-testid="lobby-create-btn"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="mp-room-input"]').exists()).toBe(true)
     // No seat yet: the table setup screen and its Deal button are not on screen.
@@ -1152,7 +1792,7 @@ describe('Make 24 Remastered — Playable UI Flow (App.vue)', () => {
     leaveRoom()
   })
 
-  it('reaches the match end screen and deals a new match from it', async () => {
+  it('returns to the lobby from the match end screen before dealing again', async () => {
     const wrapper = mount(App)
     await wrapper.find('[data-testid="enter-singleplayer"]').trigger('click')
     await wrapper.find('[data-testid="start-round-btn"]').trigger('click')
@@ -1165,11 +1805,15 @@ describe('Make 24 Remastered — Playable UI Flow (App.vue)', () => {
     expect(finalScreen.text()).toContain('Match ended early')
     expect(finalScreen.findAll('.standing-card')).toHaveLength(1)
 
-    // Play Again starts a fresh round without leaving the screen flow.
+    // Play Again goes through the lobby so the next match can use new rules.
     const playAgain = finalScreen
       .findAll('.round-end-actions button')
       .find((button) => button.text() === 'Play Again')!
     await playAgain.trigger('click')
+    expect(wrapper.find('.screen-lobby').exists()).toBe(true)
+    expect(wrapper.find('.screen-playing').exists()).toBe(false)
+
+    await wrapper.find('[data-testid="start-round-btn"]').trigger('click')
     expect(wrapper.find('.screen-playing').exists()).toBe(true)
     expect(wrapper.findAll('.expr-node--root')).toHaveLength(4)
 

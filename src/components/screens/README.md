@@ -15,8 +15,8 @@ Each phase screen:
 | [LobbyBrowserScreen.vue](LobbyBrowserScreen.vue) | `lobby-select` | Name, public lobby list, create public/private, join by code |
 | [LobbySetupScreen.vue](LobbySetupScreen.vue) | `lobby` | Seats, ready-up, and the full table settings (host-only) |
 | [PlayingScreen.vue](PlayingScreen.vue) | `playing` | HUD sidebar, felt board, operator rails, board tools |
-| [RoundEndScreen.vue](RoundEndScreen.vue) | `round-end` | Round result, submitted boards, standings |
-| [GameOverScreen.vue](GameOverScreen.vue) | `game-over` | Series winner, final standings, rematch |
+| [RoundEndScreen.vue](RoundEndScreen.vue) | `round-end` | Round result, submitted boards, winning card replay, standings |
+| [GameOverScreen.vue](GameOverScreen.vue) | `game-over` | Series winner, final standings, host-run rematch via the lobby |
 | [PauseMenu.vue](PauseMenu.vue) | n/a | Overlay for any phase: resume, lobby, main menu, sound |
 
 Both lobby screens render inside [../LobbyFrame.vue](../LobbyFrame.vue) so the

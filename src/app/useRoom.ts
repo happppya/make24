@@ -27,7 +27,7 @@ export function useRoom(deps: {
 }) {
   const { settings, phase, match, standings } = deps
 
-  const playerName = ref('Player')
+  const playerName = ref(multiplayerSession.name)
   /** Code typed on the lobby selector. */
   const lobbyCodeInput = ref('')
   /** Create form: public lobbies are listed for everyone, private ones are code-only. */
@@ -84,7 +84,7 @@ export function useRoom(deps: {
     creatingLobby.value = true
     const isPublic = newLobbyIsPublic.value
     await createLobby({
-      name: playerName.value.trim() || 'Player',
+      name: playerName.value.trim() || multiplayerSession.name,
       isPublic,
     })
     creatingLobby.value = false
@@ -97,7 +97,7 @@ export function useRoom(deps: {
   async function joinTableByCode(code = lobbyCodeInput.value): Promise<void> {
     playSfx('click')
     joiningLobby.value = true
-    await joinLobby(code, playerName.value.trim() || 'Player')
+    await joinLobby(code, playerName.value.trim() || multiplayerSession.name)
     joiningLobby.value = false
     const joined = multiplayerSession.room
     if (joined) {

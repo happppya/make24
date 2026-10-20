@@ -63,10 +63,10 @@ export function useJuice(viewportRef: Ref<HTMLElement | null>) {
     })
     if (measured === 0) return
 
-    const boxW = maxX - minX
-    const boxH = maxY - minY
-    const desiredPanX = Math.round((viewport.clientWidth - boxW) / 2 - minX)
-    const desiredPanY = Math.round((viewport.clientHeight - boxH) / 2 - minY)
+    // The plane's origin sits at the viewport centre, so shifting by the box's
+    // centre puts that box in the middle; viewport size cancels out.
+    const desiredPanX = Math.round(-(minX + maxX) / 2)
+    const desiredPanY = Math.round(-(minY + maxY) / 2)
     if (Math.abs(desiredPanX - ws.panX) < 2 && Math.abs(desiredPanY - ws.panY) < 2) return
 
     panGlide.value = true

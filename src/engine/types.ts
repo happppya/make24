@@ -64,6 +64,9 @@ export type TargetPreset = 'just-24' | 'small' | 'big' | 'custom' | 'manual'
 
 export type CardPoolMode = '1-deck' | '2-decks' | '3-decks' | 'unlimited'
 
+/** How a solution's accuracy is traded against its operator cost. */
+export type SolutionScoringMode = 'cost-first' | 'balanced' | 'accuracy-first'
+
 export interface AllowedOperatorsConfig {
   basic: boolean
   powers: boolean
@@ -72,6 +75,14 @@ export interface AllowedOperatorsConfig {
   inverse: boolean
   bitshift: boolean
   concat: boolean
+}
+
+/** Shortcut moves the host can forbid, and charge a penalty for. */
+export interface ForbiddenMovesConfig {
+  /** `!` stacked directly on `Γ⁻¹`, or the other way round. */
+  factorialInvgamma: boolean
+  /** A power whose base is 1, e.g. `1 ^ 5`. */
+  oneToPower: boolean
 }
 
 export interface GameSettings {
@@ -83,8 +94,14 @@ export interface GameSettings {
   customMax: number
   manualTarget: number
   approximationPercent: number
+  /** Only bites when `approximationPercent` is above zero. */
+  scoringMode: SolutionScoringMode
   cardPool: CardPoolMode
   allowedOperators: AllowedOperatorsConfig
+  /** Which shortcut moves carry the forbidden-move penalty. */
+  forbiddenMoves: ForbiddenMovesConfig
+  /** Points added for each forbidden move in a solution. */
+  forbiddenMovePenalty: number
   firstToPoints: number
 }
 
@@ -132,6 +149,12 @@ export interface WorkspaceState {
   index: number
   groups: ExprNode[]
   positions: Record<string, GroupPosition>
+  /**
+   * Group ids in ascending render order: the last entry is drawn on top.
+   * Selecting or picking up a piece moves it to the end, so a card the player
+   * just touched never slips underneath the one they laid it over.
+   */
+  stackOrder: string[]
   panX: number
   panY: number
   selectedGroupId: string | null
@@ -151,6 +174,8 @@ export interface SubmittedSolution {
   errorPercent: number
   timestampMs: number
   workspaceIndex: number
+  /** The winning board in card form; absent on older or minimal submissions. */
+  expression?: ExprNode
 }
 
 export interface PlayerInfo {

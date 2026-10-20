@@ -1,16 +1,18 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { fittedFontSize, formatPercent, formatScore, scoringModeLabel } from '../app/labels'
 import { formatNumber, type ScoreBreakdown } from '../engine/math'
+import type { SolutionScoringMode } from '../engine/types'
 
 const props = defineProps<{
   roundNumber: number
   target: number
   approximationPercent: number
+  scoringMode: SolutionScoringMode
   /** Value of the single combined group, or null while cards remain unmerged. */
   value: number | null
   /** Signed error vs target, when a single group exists. */
   errorPercent: number | null
-  score: number | null
   acceptable: boolean
   /** Itemised cost of the current solution, or null while cards remain unmerged. */
   costBreakdown: ScoreBreakdown | null
@@ -58,6 +60,37 @@ function useTweenedNumber(source: () => number, duration = 380) {
 
   return shown
 }
+
+const targetText = computed(() => formatNumber(props.target))
+const targetRef = ref<HTMLElement | null>(null)
+
+/**
+ * High-precision targets can be much wider than the blind card. Start from the
+ * card's designed font size and shrink only when the number would spill out.
+ */
+function fitTargetNumber(): void {
+  const el = targetRef.value
+  if (!el) return
+  el.style.removeProperty('font-size')
+  const base = Number.parseFloat(getComputedStyle(el).fontSize)
+  const fitted = fittedFontSize(base, el.clientWidth, el.scrollWidth)
+  if (fitted !== null) el.style.fontSize = `${fitted}px`
+}
+
+watch(targetText, fitTargetNumber, { flush: 'post' })
+
+let fitFrame = 0
+function handleTargetResize(): void {
+  if (fitFrame) cancelAnimationFrame(fitFrame)
+  fitFrame = requestAnimationFrame(fitTargetNumber)
+}
+
+onMounted(() => {
+  fitTargetNumber()
+  window.addEventListener('resize', handleTargetResize)
+  // The pixel font swaps in after first paint; re-fit once its metrics are real.
+  if (document.fonts?.ready) void document.fonts.ready.then(fitTargetNumber)
+})
 
 const accuracy = computed(() => {
   if (props.value === null || props.errorPercent === null) return 0
@@ -126,6 +159,8 @@ watch(
 
 onBeforeUnmount(() => {
   if (burstTimer) clearTimeout(burstTimer)
+  window.removeEventListener('resize', handleTargetResize)
+  if (fitFrame) cancelAnimationFrame(fitFrame)
 })
 </script>
 
@@ -137,7 +172,9 @@ onBeforeUnmount(() => {
         <span>ROUND {{ roundNumber }}</span>
         <span class="blind-card__suit">♠</span>
       </div>
-      <div class="blind-card__target" data-testid="target-display">{{ formatNumber(target) }}</div>
+      <div ref="targetRef" class="blind-card__target" data-testid="target-display">
+        {{ targetText }}
+      </div>
       <div class="blind-card__caption">TARGET</div>
       <div class="blind-card__range">{{ rangeLabel }}</div>
     </div>
@@ -172,9 +209,9 @@ onBeforeUnmount(() => {
 
       <div class="cost-block" :class="{ 'cost-block--idle': costBreakdown === null }">
         <div class="cost-total">
-          <span class="cost-total__label">COST</span>
+          <span class="cost-total__label">SCORE</span>
           <span class="cost-total__value" data-testid="cost-total">
-            {{ score === null ? '—' : score }}<em>pts</em>
+            {{ formatScore(costBreakdown?.total ?? null) }}<em>pts</em>
           </span>
         </div>
         <div class="cost-rows" data-testid="cost-breakdown">
@@ -189,13 +226,28 @@ onBeforeUnmount(() => {
             <span class="cost-row__pts">{{ costBreakdown?.unaryCost ?? 0 }}</span>
           </div>
           <div
-            v-if="costBreakdown && costBreakdown.nestingCost > 0"
-            class="cost-row cost-row--nest"
+            v-if="costBreakdown && costBreakdown.forbiddenCost > 0"
+            class="cost-row cost-row--forbidden"
+            data-testid="cost-forbidden"
           >
-            <span class="cost-row__label">NEST</span>
-            <span class="cost-row__count">×{{ costBreakdown.nestingCount }}</span>
-            <span class="cost-row__pts">{{ costBreakdown.nestingCost }}</span>
+            <span class="cost-row__label">FORBID</span>
+            <span class="cost-row__count">×{{ costBreakdown.forbiddenCount }}</span>
+            <span class="cost-row__pts">{{ costBreakdown.forbiddenCost }}</span>
           </div>
+          <div
+            v-if="approximationPercent > 0"
+            class="cost-row cost-row--accuracy"
+            data-testid="cost-accuracy"
+          >
+            <span class="cost-row__label">ACCURACY</span>
+            <span class="cost-row__count">
+              {{ errorPercent === null ? '—' : formatPercent(Math.abs(errorPercent)) }}
+            </span>
+            <span class="cost-row__pts">{{ formatScore(costBreakdown?.accuracyCost ?? 0) }}</span>
+          </div>
+        </div>
+        <div v-if="approximationPercent > 0" class="cost-mode" data-testid="scoring-mode">
+          {{ scoringModeLabel(scoringMode) }}
         </div>
       </div>
     </div>
@@ -288,6 +340,8 @@ onBeforeUnmount(() => {
 
 .blind-card__target {
   position: relative;
+  max-width: 100%;
+  white-space: nowrap;
   font-family: var(--font-display);
   font-size: 2.9rem;
   line-height: 1;
@@ -511,12 +565,29 @@ onBeforeUnmount(() => {
   color: var(--ink-cream);
 }
 
-.cost-row--nest {
+.cost-row--forbidden {
   border-left-color: var(--crimson);
 }
 
-.cost-row--nest .cost-row__pts {
+.cost-row--forbidden .cost-row__pts {
   color: #ff9d9d;
+}
+
+.cost-row--accuracy {
+  border-left-color: #72efdd;
+}
+
+.cost-row--accuracy .cost-row__pts {
+  color: #9df5e8;
+}
+
+.cost-mode {
+  font-family: var(--font-pixel);
+  font-size: 0.48rem;
+  letter-spacing: 0.14em;
+  text-align: right;
+  color: rgba(247, 240, 224, 0.45);
+  padding: 2px 2px 0;
 }
 
 /* ---------------- Celebration ---------------- */
@@ -631,6 +702,153 @@ onBeforeUnmount(() => {
   }
   .burst-particle {
     display: none;
+  }
+}
+
+/* Stacked HUD on tablets: the sidebar is wide, so the two blocks sit side by
+   side there too and keep the felt tall. */
+@media (min-width: 700px) and (max-width: 1000px) {
+  .blind-sidebar {
+    flex-direction: row;
+    align-items: stretch;
+    gap: 10px;
+  }
+  .blind-card {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+  .score-cluster {
+    flex: 1.1 1 0;
+    min-width: 0;
+  }
+}
+
+/* Phones: keep the HUD vertical (a side-by-side pair is too narrow to read)
+   but shave its height down so the felt still gets most of the screen. */
+@media (max-width: 520px) {
+  .blind-card {
+    padding: 8px 10px 9px;
+  }
+  .blind-card__target {
+    font-size: 2.2rem;
+    padding: 6px 0 0;
+  }
+  .blind-card__range {
+    margin-top: 5px;
+    padding-top: 4px;
+    font-size: 0.74rem;
+  }
+  .score-cluster {
+    gap: 6px;
+    padding: 8px 9px 9px;
+  }
+  .accuracy-row {
+    gap: 6px;
+  }
+  .pixel-chip {
+    min-width: 56px;
+    padding: 6px 4px 5px;
+  }
+  .accuracy-meter {
+    height: 20px;
+  }
+  .cost-total {
+    padding: 4px 7px 5px;
+  }
+  .cost-total__value {
+    white-space: nowrap;
+  }
+  /* Two source chips per row: four in a line would clip their values. */
+  .cost-rows {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 3px;
+  }
+  .cost-row {
+    min-width: 0;
+    grid-template-columns: 1fr auto;
+    gap: 3px;
+    padding: 2px 5px;
+  }
+  .cost-row__label {
+    font-size: 0.44rem;
+    letter-spacing: 0.08em;
+  }
+  .cost-row__count {
+    display: none;
+  }
+  .cost-row__pts {
+    min-width: 0;
+    font-size: 0.8rem;
+  }
+  /* A fourth chip joins the grid when approximations are on: keep it legible. */
+  .cost-row--accuracy .cost-row__label {
+    font-size: 0.4rem;
+    letter-spacing: 0.02em;
+  }
+  .cost-mode {
+    display: none;
+  }
+}
+
+/* Very short sidebars: shave the cards down a little further before the HUD
+   moves into its horizontal strip layout. */
+@media (max-height: 620px) {
+  .blind-card {
+    padding: 7px 10px 8px;
+  }
+  .blind-card__target {
+    font-size: 2.2rem;
+    padding: 5px 0 0;
+  }
+  .blind-card__range {
+    margin-top: 4px;
+    padding-top: 3px;
+    font-size: 0.78rem;
+  }
+  .score-cluster {
+    gap: 6px;
+    padding: 8px 9px 9px;
+  }
+  .cost-total {
+    padding: 4px 7px 5px;
+  }
+  .cost-row {
+    padding: 2px 6px;
+  }
+}
+
+/* Short screens: lay the two HUD blocks side by side so the playing screen can
+   keep its whole strip of controls above the felt. Narrow portrait screens keep
+   the stacked pair — there is not enough width to read two blocks at once. */
+@media (max-height: 560px) and (min-width: 520px) {
+  .blind-sidebar {
+    flex-direction: row;
+    align-items: stretch;
+    gap: 8px;
+  }
+  .blind-card {
+    flex: 1 1 0;
+    min-width: 0;
+    padding: 6px 9px 8px;
+  }
+  .blind-card__target {
+    font-size: clamp(1.6rem, 5.2vh, 2.2rem);
+    padding: 5px 0 0;
+  }
+  .blind-card__range {
+    margin-top: 4px;
+    padding-top: 3px;
+    font-size: 0.72rem;
+  }
+  .score-cluster {
+    flex: 1.15 1 0;
+    min-width: 0;
+    gap: 5px;
+    padding: 6px 8px 8px;
+  }
+  .cost-row {
+    padding: 2px 6px;
   }
 }
 </style>

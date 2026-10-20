@@ -1,4 +1,5 @@
-import type { Card, GameSettings, SubmittedSolution } from '../engine/types'
+import type { Card, ExprNode, GameSettings, SubmittedSolution } from '../engine/types'
+import { randomPlayerName } from './playerNames'
 
 /**
  * Wire format for the multiplayer table.
@@ -81,6 +82,8 @@ export interface SubmittedSolutionPayload {
   score: number
   errorPercent: number
   workspaceIndex: number
+  /** Optional card-form snapshot of the board, used for the round-end reveal. */
+  expression?: ExprNode
 }
 
 export type ClientMessage =
@@ -95,6 +98,8 @@ export type ClientMessage =
   | { t: 'next-round' }
   | { t: 'skip-round' }
   | { t: 'end-match' }
+  /** After the series: host sends the room back to its lobby for a rematch. */
+  | { t: 'return-to-lobby' }
   | { t: 'submit'; solution: SubmittedSolutionPayload }
 
 export type ServerErrorCode =
@@ -157,10 +162,10 @@ export function normalizeRoomCode(code: string): string {
     .slice(0, MAX_ROOM_CODE_LENGTH)
 }
 
-export function sanitizeName(raw: string, fallback = 'Player'): string {
+export function sanitizeName(raw: string, fallback?: string): string {
   const trimmed = String(raw ?? '')
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, MAX_NAME_LENGTH)
-  return trimmed.length > 0 ? trimmed : fallback
+  return trimmed.length > 0 ? trimmed : (fallback ?? randomPlayerName())
 }

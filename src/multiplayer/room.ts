@@ -1,13 +1,23 @@
 import { dealHand, generateTargetNumber } from '../engine/deck'
-import { checkTargetAcceptance } from '../engine/math'
+import {
+  DEFAULT_FORBIDDEN_MOVES,
+  DEFAULT_FORBIDDEN_MOVE_PENALTY,
+  calculateScoreBreakdown,
+  checkTargetAcceptance,
+  formatExpressionLhs,
+  formatFullEquation,
+} from '../engine/math'
 import type {
   Card,
   CardPoolMode,
+  ExprNode,
   GameMode,
   GameSettings,
+  SolutionScoringMode,
   SubmittedSolution,
   TargetPreset,
 } from '../engine/types'
+import { sanitizeSolutionTree } from './solutionTree'
 import {
   MAX_ROOM_PLAYERS,
   ROOM_CODE_LENGTH,
@@ -42,6 +52,7 @@ export function createDefaultSettings(): GameSettings {
     customMax: 250,
     manualTarget: 24,
     approximationPercent: 0,
+    scoringMode: 'cost-first',
     cardPool: '1-deck',
     allowedOperators: {
       basic: true,
@@ -52,6 +63,8 @@ export function createDefaultSettings(): GameSettings {
       bitshift: false,
       concat: false,
     },
+    forbiddenMoves: { ...DEFAULT_FORBIDDEN_MOVES },
+    forbiddenMovePenalty: DEFAULT_FORBIDDEN_MOVE_PENALTY,
     firstToPoints: 3,
   }
 }
@@ -66,6 +79,7 @@ const GAME_MODES: GameMode[] = [
 ]
 const TARGET_PRESETS: TargetPreset[] = ['just-24', 'small', 'big', 'custom', 'manual']
 const CARD_POOLS: CardPoolMode[] = ['1-deck', '2-decks', '3-decks', 'unlimited']
+const SCORING_MODES: SolutionScoringMode[] = ['cost-first', 'balanced', 'accuracy-first']
 
 function pick<T extends string>(value: unknown, allowed: readonly T[], fallback: T): T {
   return typeof value === 'string' && (allowed as readonly string[]).includes(value)
@@ -86,6 +100,10 @@ export function sanitizeSettings(input: unknown, base: GameSettings): GameSettin
     string,
     unknown
   >
+  const forbidden = (raw.forbiddenMoves ?? base.forbiddenMoves) as unknown as Record<
+    string,
+    unknown
+  >
   return {
     isMultiplayer: true,
     mode: pick(raw.mode, GAME_MODES, base.mode),
@@ -95,6 +113,7 @@ export function sanitizeSettings(input: unknown, base: GameSettings): GameSettin
     customMax: clampNumber(raw.customMax, -99999, 99999, base.customMax),
     manualTarget: clampNumber(raw.manualTarget, -99999, 99999, base.manualTarget),
     approximationPercent: clampNumber(raw.approximationPercent, 0, 100, base.approximationPercent),
+    scoringMode: pick(raw.scoringMode, SCORING_MODES, base.scoringMode),
     cardPool: pick(raw.cardPool, CARD_POOLS, base.cardPool),
     allowedOperators: {
       basic: Boolean(operators.basic),
@@ -105,6 +124,13 @@ export function sanitizeSettings(input: unknown, base: GameSettings): GameSettin
       bitshift: Boolean(operators.bitshift),
       concat: Boolean(operators.concat),
     },
+    forbiddenMoves: {
+      factorialInvgamma: Boolean(forbidden.factorialInvgamma),
+      oneToPower: Boolean(forbidden.oneToPower),
+    },
+    forbiddenMovePenalty: Math.round(
+      clampNumber(raw.forbiddenMovePenalty, 0, 9_999, base.forbiddenMovePenalty)
+    ),
     firstToPoints: Math.round(clampNumber(raw.firstToPoints, 1, 25, base.firstToPoints)),
   }
 }
@@ -304,13 +330,9 @@ function endRound(
     .filter((player): player is LobbyPlayer => player !== undefined)
     .filter((player) => player.points >= room.settings.firstToPoints)
 
-  if (matchWinners.length > 0) {
-    room.phase = 'game-over'
-    room.matchWinnerIds = matchWinners.map((player) => player.id)
-    room.revision += 1
-    return
-  }
-
+  // Even the deciding round shows its solution screen. The match winner is
+  // recorded now, and the host moves on to the series screen from there.
+  room.matchWinnerIds = matchWinners.map((player) => player.id)
   room.phase = 'round-end'
   room.revision += 1
 }
@@ -345,12 +367,23 @@ function applySubmit(
     return fail('bad-message', 'That solution payload is not valid.')
   }
 
-  // The board itself is the server's business: a client can claim any score it
-  // likes, but the value it claims has to land in the round's acceptance band.
-  // Error percent is recomputed here rather than trusted, so a padded payload
-  // cannot win a round it does not deserve.
+  // A board snapshot is optional for compatibility, but when present it is
+  // rebuilt against the dealt hand and becomes the source of truth for the
+  // displayed cards, equation and score.
+  let expression: ExprNode | undefined
+  let finalValue = payload.finalValue
+  if (payload.expression !== undefined) {
+    const sanitized = sanitizeSolutionTree(payload.expression, round.hand)
+    if (!sanitized) return fail('bad-message', 'That card board does not use the dealt hand.')
+    expression = sanitized
+    finalValue = sanitized.value
+  }
+
+  // The board itself is the server's business: the value has to land in the
+  // round's acceptance band. Error percent is recomputed here rather than
+  // trusted, so a padded payload cannot win a round it does not deserve.
   const check = checkTargetAcceptance(
-    payload.finalValue,
+    finalValue,
     round.target,
     room.settings.approximationPercent
   )
@@ -358,17 +391,33 @@ function applySubmit(
     return fail('bad-message', 'That board is not within the target tolerance.')
   }
 
+  const score = expression
+    ? calculateScoreBreakdown(
+        expression,
+        {
+          errorPercent: check.errorPercent,
+          approximationPercent: room.settings.approximationPercent,
+          mode: room.settings.scoringMode,
+        },
+        {
+          moves: room.settings.forbiddenMoves,
+          penalty: room.settings.forbiddenMovePenalty,
+        }
+      ).total
+    : payload.score
+
   const entry: SubmittedSolution = {
     id: `sol-${playerId}-${round.number}-${round.solutions.length + 1}`,
     playerId,
     playerName: player.name,
-    equation: payload.equation,
-    lhs: payload.lhs,
-    finalValue: payload.finalValue,
-    score: payload.score,
+    equation: expression ? formatFullEquation(expression) : payload.equation,
+    lhs: expression ? formatExpressionLhs(expression) : payload.lhs,
+    finalValue,
+    score,
     errorPercent: check.errorPercent,
     timestampMs: Math.max(0, now - round.startedAt),
     workspaceIndex: Math.max(1, Math.round(payload.workspaceIndex || 1)),
+    expression,
   }
 
   // Same board submitted twice replaces the earlier copy; the score is allowed to improve.
@@ -436,7 +485,7 @@ export function handleClientMessage(
 
     case 'start-match': {
       if (!isRoomHost(room, playerId)) return fail('not-host', 'Only the host can deal the first round.')
-      if (room.phase === 'playing') return fail('wrong-phase', 'The match is already running.')
+      if (room.phase !== 'lobby') return fail('wrong-phase', 'Return to the lobby to deal a new match.')
       if (room.players.length === 0) return fail('wrong-phase', 'Nobody is seated.')
       for (const p of room.players) {
         p.points = 0
@@ -452,7 +501,28 @@ export function handleClientMessage(
     case 'next-round': {
       if (!isRoomHost(room, playerId)) return fail('not-host', 'Only the host can deal the next round.')
       if (room.phase !== 'round-end') return fail('wrong-phase', 'The round has not finished yet.')
+      if (room.matchWinnerIds.length > 0) {
+        room.phase = 'game-over'
+        room.revision += 1
+        return ok(true)
+      }
       dealRound(room, now)
+      return ok(true)
+    }
+
+    case 'return-to-lobby': {
+      if (!isRoomHost(room, playerId)) return fail('not-host', 'Only the host can return the table to the lobby.')
+      if (room.phase !== 'game-over') return fail('wrong-phase', 'The match is still running.')
+      room.phase = 'lobby'
+      room.round = null
+      room.matchWinnerIds = []
+      for (const p of room.players) {
+        p.points = 0
+        p.bestRoundScore = null
+        p.isWaiting = false
+        p.isReady = p.isHost
+      }
+      room.revision += 1
       return ok(true)
     }
 

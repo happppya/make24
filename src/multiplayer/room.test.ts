@@ -10,7 +10,8 @@ import {
   tickRoom,
 } from './room'
 import type { ClientMessage, RoomState } from './protocol'
-import type { GameSettings } from '../engine/types'
+import { createCard } from '../engine/deck'
+import type { Card, ExprNode, GameSettings } from '../engine/types'
 
 function seat(room: RoomState, id: string, name: string): void {
   const result = addRoomPlayer(room, { id, name })
@@ -38,6 +39,28 @@ function submit(room: RoomState, playerId: string, score: number, lhs = `${playe
       },
     },
     2_000
+  )
+}
+
+/** A single add chain over the whole hand, for exercising the card-board snapshot. */
+function addTree(cards: Card[]): ExprNode {
+  const toLeaf = (card: Card): ExprNode => ({
+    kind: 'card',
+    id: `leaf-${card.id}`,
+    card,
+    value: card.value,
+  })
+  return cards.slice(1).reduce<ExprNode>(
+    (left, card) => ({
+      kind: 'binary',
+      id: `add-${card.id}`,
+      operator: 'add',
+      left,
+      right: toLeaf(card),
+      value: left.value + card.value,
+      headerText: '',
+    }),
+    toLeaf(cards[0]!)
   )
 }
 
@@ -76,6 +99,13 @@ describe('multiplayer room — seating and lobby', () => {
     seat(room, 'p1', 'Host')
     seat(room, 'p2', 'Guest')
 
+    // Both house rules start on, priced at the classic 200 points.
+    expect(room.settings.forbiddenMoves).toEqual({
+      factorialInvgamma: true,
+      oneToPower: true,
+    })
+    expect(room.settings.forbiddenMovePenalty).toBe(200)
+
     const asGuest = handleClientMessage(room, 'p2', {
       t: 'update-settings',
       settings: { ...room.settings, numCards: 10 },
@@ -89,6 +119,9 @@ describe('multiplayer room — seating and lobby', () => {
       approximationPercent: -4,
       mode: 'nonsense',
       cardPool: 'dozens',
+      scoringMode: 'closest-wins',
+      forbiddenMoves: { factorialInvgamma: 'yes', oneToPower: 0 },
+      forbiddenMovePenalty: 99_999,
     } as unknown as GameSettings
     expect(sanitizeSettings(wild, room.settings)).toMatchObject({
       numCards: 10,
@@ -96,7 +129,20 @@ describe('multiplayer room — seating and lobby', () => {
       approximationPercent: 0,
       mode: room.settings.mode,
       cardPool: room.settings.cardPool,
+      scoringMode: room.settings.scoringMode,
+      forbiddenMoves: { factorialInvgamma: true, oneToPower: false },
+      forbiddenMovePenalty: 9_999,
     })
+    expect(
+      sanitizeSettings({ ...room.settings, forbiddenMovePenalty: -5 }, room.settings)
+        .forbiddenMovePenalty
+    ).toBe(0)
+
+    // The three weighted modes survive the trip through the wire.
+    for (const scoringMode of ['cost-first', 'balanced', 'accuracy-first'] as const) {
+      const next = sanitizeSettings({ ...room.settings, scoringMode }, room.settings)
+      expect(next.scoringMode).toBe(scoringMode)
+    }
 
     const asHost = handleClientMessage(room, 'p1', {
       t: 'update-settings',
@@ -275,6 +321,12 @@ describe('multiplayer room — rounds', () => {
     submit(room, 'p2', 25, 'b')
     tickRoom(room, room.round!.deadline!)
 
+    // The last round still shows its solution screen first; the host moves on
+    // to the series winner from there.
+    expect(room.phase).toBe('round-end')
+    expect(room.matchWinnerIds).toEqual(['p1', 'p2'])
+
+    expect(handleClientMessage(room, 'p1', { t: 'next-round' }).error).toBeUndefined()
     expect(room.phase).toBe('game-over')
     expect(room.matchWinnerIds).toEqual(['p1', 'p2'])
   })
@@ -355,8 +407,66 @@ describe('multiplayer room — rounds', () => {
     startMatch(room)
 
     submit(room, 'p1', 25)
+    expect(room.phase).toBe('round-end')
+    expect(room.matchWinnerIds).toEqual(['p1'])
+
+    expect(handleClientMessage(room, 'p2', { t: 'next-round' }).error?.code).toBe('not-host')
+    expect(handleClientMessage(room, 'p1', { t: 'next-round' }).error).toBeUndefined()
     expect(room.phase).toBe('game-over')
     expect(room.matchWinnerIds).toEqual(['p1'])
+  })
+
+  it('returns the whole table to the lobby for a rematch, host only', () => {
+    const room = createRoomState('test')
+    seat(room, 'p1', 'Host')
+    seat(room, 'p2', 'Guest')
+    room.settings.firstToPoints = 1
+    startMatch(room)
+
+    submit(room, 'p1', 25)
+    handleClientMessage(room, 'p1', { t: 'next-round' })
+    expect(room.phase).toBe('game-over')
+
+    expect(handleClientMessage(room, 'p2', { t: 'return-to-lobby' }).error?.code).toBe('not-host')
+    expect(room.phase).toBe('game-over')
+
+    expect(handleClientMessage(room, 'p1', { t: 'return-to-lobby' }).error).toBeUndefined()
+    expect(room.phase).toBe('lobby')
+    expect(room.round).toBeNull()
+    expect(room.matchWinnerIds).toEqual([])
+    expect(room.hostId).toBe('p1')
+    expect(room.players.map((p) => p.isReady)).toEqual([true, false])
+    // The rules stay as the host left them so they can be tweaked in the lobby.
+    expect(room.settings.firstToPoints).toBe(1)
+
+    // From there the host can deal a fresh series with the same room.
+    expect(handleClientMessage(room, 'p1', { t: 'start-match' }).error).toBeUndefined()
+    expect(room.phase).toBe('playing')
+    expect(room.round!.number).toBe(1)
+    expect(room.players.map((p) => p.points)).toEqual([0, 0])
+  })
+
+  it('unlocks the rules only after the room is back in its lobby', () => {
+    const room = createRoomState('test')
+    seat(room, 'p1', 'Host')
+    room.settings.firstToPoints = 1
+    startMatch(room)
+    submit(room, 'p1', 25)
+    handleClientMessage(room, 'p1', { t: 'next-round' })
+
+    const locked = handleClientMessage(room, 'p1', {
+      t: 'update-settings',
+      settings: { ...room.settings, numCards: 8 },
+    })
+    expect(locked.error?.code).toBe('wrong-phase')
+
+    handleClientMessage(room, 'p1', { t: 'return-to-lobby' })
+    const editable = handleClientMessage(room, 'p1', {
+      t: 'update-settings',
+      settings: { ...room.settings, numCards: 8 },
+    })
+    expect(editable.error).toBeUndefined()
+    expect(room.settings.numCards).toBe(8)
   })
 
   it('refuses a board that misses the target, however cheap it claims to be', () => {
@@ -443,6 +553,126 @@ describe('multiplayer room — rounds', () => {
     })
     expect(bad.error?.code).toBe('bad-message')
     expect(room.phase).toBe('playing')
+    expect(room.round!.solutions).toHaveLength(0)
+  })
+
+  it('stores a validated card board and derives the score and equation from it', () => {
+    const room = createRoomState('test')
+    seat(room, 'p1', 'Host')
+    room.settings.mode = 'best-1m'
+    startMatch(room)
+
+    const hand = room.round!.hand
+    const board = addTree(hand)
+    room.round!.target = board.value
+
+    const result = handleClientMessage(
+      room,
+      'p1',
+      {
+        t: 'submit',
+        solution: {
+          equation: 'not the real equation',
+          lhs: 'not the real board',
+          finalValue: board.value,
+          score: 0,
+          errorPercent: 0,
+          workspaceIndex: 2,
+          expression: board,
+        },
+      },
+      2_000
+    )
+
+    expect(result.error).toBeUndefined()
+    const solution = room.round!.solutions[0]!
+    expect(solution.expression).toBeDefined()
+    expect(solution.expression!.value).toBe(board.value)
+    expect(solution.lhs).not.toBe('not the real board')
+    expect(solution.lhs).toContain(' + ')
+    expect(solution.score).toBe(30)
+    expect(solution.finalValue).toBe(board.value)
+  })
+
+  it('prices forbidden moves from the host rules on submitted boards', () => {
+    const priceOfOneToPower = (patch: Partial<GameSettings>): number => {
+      const room = createRoomState('test')
+      seat(room, 'p1', 'Host')
+      room.settings.mode = 'best-1m'
+      Object.assign(room.settings, patch)
+      startMatch(room)
+
+      const one = createCard(1, 'spades', 'forbidden-one')
+      const five = createCard(5, 'hearts', 'forbidden-five')
+      room.round!.hand = [one, five]
+      room.round!.target = 1
+      const board: ExprNode = {
+        kind: 'binary',
+        id: 'pow-one',
+        operator: 'pow',
+        left: { kind: 'card', id: `leaf-${one.id}`, card: one, value: 1 },
+        right: { kind: 'card', id: `leaf-${five.id}`, card: five, value: 5 },
+        value: 1,
+        headerText: '1 ^ 5 = 1',
+      }
+
+      const result = handleClientMessage(
+        room,
+        'p1',
+        {
+          t: 'submit',
+          solution: {
+            equation: '1 ^ 5 = 1',
+            lhs: '1 ^ 5',
+            finalValue: 1,
+            score: 0,
+            errorPercent: 0,
+            workspaceIndex: 1,
+            expression: board,
+          },
+        },
+        2_000
+      )
+      expect(result.error).toBeUndefined()
+      return room.round!.solutions[0]!.score
+    }
+
+    expect(priceOfOneToPower({ forbiddenMovePenalty: 75 })).toBe(85)
+    expect(
+      priceOfOneToPower({
+        forbiddenMoves: { factorialInvgamma: true, oneToPower: false },
+      })
+    ).toBe(10)
+  })
+
+  it('rejects a board snapshot that does not use the dealt hand', () => {
+    const room = createRoomState('test')
+    seat(room, 'p1', 'Host')
+    room.settings.mode = 'best-1m'
+    startMatch(room)
+
+    const pair = addTree(room.round!.hand.slice(0, 2))
+    room.round!.target = pair.value
+
+    const result = handleClientMessage(
+      room,
+      'p1',
+      {
+        t: 'submit',
+        solution: {
+          equation: 'partial board',
+          lhs: 'partial board',
+          finalValue: pair.value,
+          score: 10,
+          errorPercent: 0,
+          workspaceIndex: 1,
+          expression: pair,
+        },
+      },
+      2_000
+    )
+
+    expect(result.error?.code).toBe('bad-message')
     expect(room.round!.solutions).toHaveLength(0)
   })
 

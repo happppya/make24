@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { useGameContext } from '../../app/context'
+import { formatPercent, formatScore } from '../../app/labels'
 import { formatNumber } from '../../engine/math'
+import SolutionBoard from '../SolutionBoard.vue'
 
 const {
   menuOpen,
@@ -83,10 +85,21 @@ const {
           {{ sol.equation }}
         </div>
         <div class="sol-score">
-          <span class="score-pill">{{ sol.score }} pts</span>
+          <span class="score-pill">{{ formatScore(sol.score) }} pts</span>
           <span v-if="settings.approximationPercent > 0" class="error-sub">
-            ({{ formatNumber(sol.errorPercent) }}% err)
+            ({{ formatPercent(sol.errorPercent) }} err)
           </span>
+        </div>
+        <div
+          v-if="winningSolutionIds.has(sol.id) && sol.expression"
+          class="sol-board"
+          data-testid="winning-board"
+        >
+          <div class="sol-board__head">
+            <span class="sol-board__title">Winning board</span>
+            <span class="sol-board__meta">Workspace {{ sol.workspaceIndex }}</span>
+          </div>
+          <SolutionBoard :node="sol.expression" />
         </div>
       </div>
     </div>
@@ -231,7 +244,8 @@ const {
       grid-template-areas:
         'rank score'
         'player player'
-        'eq eq';
+        'eq eq'
+        'board board';
       row-gap: 8px;
     }
     .sol-rank {
@@ -254,6 +268,9 @@ const {
       grid-area: eq;
       font-size: 0.92rem;
       overflow-wrap: anywhere;
+    }
+    .sol-board {
+      grid-area: board;
     }
 }
 
@@ -283,6 +300,35 @@ const {
   font-size: 1.05rem;
   font-weight: 800;
   color: #fff;
+}
+
+.sol-board {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.sol-board__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.sol-board__title {
+  font-family: var(--font-pixel);
+  font-size: 0.54rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--gold);
+}
+
+.sol-board__meta {
+  font-family: var(--font-mono);
+  font-size: 0.84rem;
+  color: var(--ink-muted);
 }
 
 .score-pill {

@@ -58,13 +58,19 @@ the next deal clears the flag and deals them in.
 
 Client → server: `browse`, `create-room`, `join`, `set-name`, `set-ready`,
 `update-settings`, `start-match`, `next-round`, `skip-round`, `end-match`,
-`submit`.
+`return-to-lobby`, `submit`.
 
 Server → client: `welcome` (self id + room snapshot + server time), `state`
 (full snapshot with `revision`), `lobbies` (public room summaries), `error`
 (code + message).
 
-The server never trusts the client: names are trimmed and de-duplicated, settings
+A submission can also carry an optional expression-tree snapshot of the board. The
+server rebuilds it against the dealt hand, recomputes its values and headers, and
+uses it for the round-end card replay (and, when present, to derive the submitted
+score and equation).
+
+The server never trusts the client: names are trimmed and de-duplicated (a blank
+name gets a generated two-word handle), settings
 are clamped, solutions must be finite and land inside the round's acceptance band
 (error percent is recomputed from `finalValue` rather than read from the payload)
 and are stamped with the sender's identity and the round clock, and only the host
@@ -79,13 +85,21 @@ Turn order for a round:
 3. A player reaches an acceptable single-group board → `submit`.
 4. `first-to-solve` ends the round immediately with that player as winner; timed
    modes keep accepting boards until the server clock passes `deadline`.
-5. Round end awards one point; equal best scores share the round, so every tied
-   player scores. Reaching `firstToPoints` ends the match, and players who get
-   there on the same round draw the series.
+5. Round end awards one point to the lowest score; equal best scores share the
+   round, so every tied player scores. Once approximations are enabled, the
+   host's scoring mode (`cost-first`, `balanced`, `accuracy-first`) folds each
+   board's distance from the target into that score. Reaching `firstToPoints` still shows that round's solution
+   screen: the snapshot stays in `round-end` and records `matchWinnerIds`. The
+   host's `next-round` then moves the room to `game-over`. Players who reach the
+   target on the same round draw the series. Winning submissions carry their
+   board snapshot, which the round-end screen renders in card form.
 
 Host controls: `skip-round` closes a round early (pays the best submitted board
-if there is one, otherwise no point), `next-round` deals again, `end-match`
-finishes the series.
+if there is one, otherwise no point), `next-round` deals again or, after the
+final round, opens the series screen, `end-match` finishes the series early, and
+`return-to-lobby` sends everyone from `game-over` back to the room's lobby so the
+host can adjust the rules before the next match. `start-match` is only accepted
+from `lobby`.
 
 ## Swapping the transport for the cloud
 
@@ -115,6 +129,9 @@ npm run test
 - `src/multiplayer/room.test.ts` — rules: seating, readable room codes, waiting
 seats, host handover to the oldest player, clamping, deal, first-to-solve, timed
 expiry, host-ended rounds, match end.
+- `src/multiplayer/solutionTree.test.ts` — submitted board snapshots are rebuilt
+from the dealt hand, with forged cards, missing cards and unknown operators
+rejected.
 - `src/multiplayer/server.test.ts` — boots the real server on an ephemeral port
   and walks socket clients through lobby list → create → join by code → round →
   match, including private-room visibility, host handover and a mid-round joiner.

@@ -1,5 +1,6 @@
 import { computed, reactive } from 'vue'
 import { createLoopbackTransport } from './loopback'
+import { randomPlayerName } from './playerNames'
 import {
   PROTOCOL_VERSION,
   normalizeRoomCode,
@@ -50,7 +51,7 @@ export const multiplayer = reactive<MultiplayerSessionState>({
   status: 'idle',
   error: null,
   roomCode: '',
-  name: 'Player',
+  name: randomPlayerName(),
   selfId: null,
   room: null,
   transportLabel: '',

@@ -1,3 +1,4 @@
+import { DEFAULT_FORBIDDEN_MOVES, DEFAULT_FORBIDDEN_MOVE_PENALTY } from '../engine/math'
 import type { GameSettings } from '../engine/types'
 
 /** A fresh table: solo, four cards, target 24, basic + powers + factorials on. */
@@ -11,6 +12,7 @@ export function createDefaultSettings(): GameSettings {
     customMax: 250,
     manualTarget: 24,
     approximationPercent: 0,
+    scoringMode: 'cost-first',
     cardPool: '1-deck',
     allowedOperators: {
       basic: true,
@@ -21,6 +23,8 @@ export function createDefaultSettings(): GameSettings {
       bitshift: false,
       concat: false,
     },
+    forbiddenMoves: { ...DEFAULT_FORBIDDEN_MOVES },
+    forbiddenMovePenalty: DEFAULT_FORBIDDEN_MOVE_PENALTY,
     firstToPoints: 3,
   }
 }

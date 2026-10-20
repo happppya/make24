@@ -1,9 +1,10 @@
 <script setup lang="ts">
+import { onBeforeUnmount, onMounted, watch } from 'vue'
 import { useGameContext } from '../../app/context'
-import { formatTimer, opKeyLabel } from '../../app/labels'
+import { formatScore, formatTimer, opKeyLabel } from '../../app/labels'
 import CardGroupNode from '../CardGroupNode.vue'
 import ScorePanel from '../ScorePanel.vue'
-import { getGroupPosition } from '../../engine/workspace'
+import { getGroupPosition, getGroupStackRank } from '../../engine/workspace'
 
 const {
   menuOpen,
@@ -50,7 +51,44 @@ const {
   panGlide,
   tidyingBoard,
   floatingCues,
+  glideToGroups,
 } = useGameContext()
+
+/* Frame the dealt cards whenever the hand or workspace changes, and after the
+   felt is resized (orientation change, HUD reflow). The board is pannable, but
+   it should never open with cards sitting outside the visible area. */
+function fitBoardToViewport(): void {
+  const ws = activeWorkspace.value
+  if (!ws || ws.groups.length === 0) return
+  void glideToGroups(ws, ws.groups.map((group) => group.id))
+}
+
+watch(
+  [() => currentHand.value.map((card) => card.id).join('|'), activeWorkspaceIdx],
+  fitBoardToViewport,
+  { immediate: true }
+)
+
+let fitTimer: ReturnType<typeof setTimeout> | null = null
+let resizeObserver: ResizeObserver | null = null
+
+function handleViewportResize(): void {
+  if (fitTimer) clearTimeout(fitTimer)
+  fitTimer = setTimeout(fitBoardToViewport, 160)
+}
+
+onMounted(() => {
+  window.addEventListener('resize', handleViewportResize)
+  if (!viewportRef.value || typeof ResizeObserver === 'undefined') return
+  resizeObserver = new ResizeObserver(handleViewportResize)
+  resizeObserver.observe(viewportRef.value)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', handleViewportResize)
+  resizeObserver?.disconnect()
+  if (fitTimer) clearTimeout(fitTimer)
+})
 
 // The lookups above are bound to elements in the template as string refs, which
 // vue-tsc does not count as a use; this keeps them from reading as dead bindings.
@@ -66,9 +104,9 @@ void [feltRef, sidebarRef, viewportRef]
         :round-number="roundNumber"
         :target="currentTarget"
         :approximation-percent="settings.approximationPercent"
+        :scoring-mode="settings.scoringMode"
         :value="currentEvaluation?.finalValue ?? null"
         :error-percent="currentEvaluation?.errorPercent ?? null"
-        :score="currentEvaluation?.score ?? null"
         :acceptable="!!(currentEvaluation?.isSingleGroup && currentEvaluation.acceptable)"
         :cost-breakdown="costBreakdown"
         :hit-signal="hitSignal"
@@ -86,7 +124,7 @@ void [feltRef, sidebarRef, viewportRef]
             :data-testid="`workspace-tab-${ws.index + 1}`"
             @click="switchWorkspace(ws.index)"
           >
-            <span class="ws-tab-num">W{{ ws.index + 1 }}</span>
+            <span class="ws-tab-num"><span class="ws-tab-w">W</span>{{ ws.index + 1 }}</span>
             <span class="ws-tab-key">⌥{{ ws.index + 1 }}</span>
           </button>
         </div>
@@ -157,7 +195,7 @@ void [feltRef, sidebarRef, viewportRef]
           {{ currentEvaluation.acceptable ? 'ACCEPTABLE' : 'NOT ACCEPTABLE' }}
         </span>
         <span class="equation-ribbon__eq">{{ currentEvaluation.equation }}</span>
-        <span class="equation-ribbon__score">{{ currentEvaluation.score }} pts</span>
+        <span class="equation-ribbon__score">{{ formatScore(currentEvaluation.score) }} pts</span>
       </div>
       <div v-else class="equation-ribbon equation-ribbon--idle" data-testid="solution-status-incomplete">
         <span class="equation-ribbon__tag">MERGING</span>
@@ -193,7 +231,8 @@ void [feltRef, sidebarRef, viewportRef]
           class="workspace-plane"
           data-testid="workspace-plane"
           :style="{
-            transform: `translate3d(${activeWorkspace.panX}px, ${activeWorkspace.panY}px, 0)`,
+            // The origin is the viewport centre; pan is an offset from it.
+            transform: `translate(50%, 50%) translate(${activeWorkspace.panX}px, ${activeWorkspace.panY}px)`,
             transition: panGlide
               ? 'transform 0.28s cubic-bezier(0.22, 1, 0.36, 1)'
               : 'none',
@@ -215,6 +254,8 @@ void [feltRef, sidebarRef, viewportRef]
             :style="{
               left: `${getGroupPosition(activeWorkspace, group.id, idx).x}px`,
               top: `${getGroupPosition(activeWorkspace, group.id, idx).y}px`,
+              // Recency wins: the piece last selected or picked up draws on top.
+              zIndex: 2 + getGroupStackRank(activeWorkspace, group.id),
             }"
             @pointerdown="(e) => handleGroupPointerDown(e, group.id, idx)"
           >
@@ -437,15 +478,20 @@ void [feltRef, sidebarRef, viewportRef]
   filter: saturate(0.55) brightness(0.85);
 }
 
-/* Playing Screen: Balatro-ish table with left HUD rail, filling the viewport */
+/* Playing Screen: Balatro-ish table with left HUD rail, filling the viewport.
+   The screen is locked to the viewport height so the board always takes the
+   space that is left instead of pushing the page into a scroll. */
 .screen-playing {
   flex: 1;
   display: flex;
   min-height: 0;
+  height: 100vh;
+  height: 100dvh;
   padding: 14px 20px 18px;
   max-width: 1520px;
   width: 100%;
   margin: 0 auto;
+  overflow: hidden;
 }
 
 .table-layout {
@@ -458,12 +504,11 @@ void [feltRef, sidebarRef, viewportRef]
 }
 
 .table-sidebar {
-  position: sticky;
-  top: 12px;
   display: flex;
   flex-direction: column;
   gap: 10px;
   min-width: 0;
+  min-height: 0;
 }
 
 .table-main {
@@ -472,39 +517,95 @@ void [feltRef, sidebarRef, viewportRef]
   gap: 10px;
   min-width: 0;
   min-height: 0;
+  overflow: hidden;
 }
 
+/* Narrow screens: the HUD stacks over the felt as a compact two-column grid so
+   its full height stays on screen. */
 @media (max-width: 1000px) {
+    .screen-playing {
+      padding: 10px 12px 12px;
+    }
     .table-layout {
       grid-template-columns: 1fr;
       grid-template-rows: auto minmax(0, 1fr);
+      gap: 8px;
     }
     .table-sidebar {
-      position: static;
       display: grid;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+      grid-template-areas:
+        'score workspaces'
+        'score actions'
+        'timer timer';
+      gap: 8px;
       align-items: start;
     }
-    .sidebar-actions {
-      grid-column: 1 / -1;
-      flex-direction: row;
-      flex-wrap: wrap;
+    :deep(.blind-sidebar) {
+      grid-area: score;
+      align-self: stretch;
     }
-    .sidebar-actions .btn-arcade {
-      flex: 1;
+    .sidebar-panel {
+      grid-area: workspaces;
+    }
+    .sidebar-actions {
+      grid-area: actions;
+      align-self: end;
+    }
+    .sidebar-timer {
+      grid-area: timer;
     }
 }
 
-@media (max-width: 640px) {
+@media (max-width: 520px) {
     .table-sidebar {
+      grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr);
+    }
+    .ws-tab-w {
+      display: none;
+    }
+    .ws-tab-key {
+      display: none;
+    }
+    .sidebar-actions .btn-arcade {
+      padding: 7px 6px;
+      font-size: 0.66rem;
+    }
+}
+
+/* Short screens (laptops, phones in landscape): keep the HUD as a single strip
+   across the top instead of a tall column. Phones in portrait stay on the
+   stacked layout — their column is too narrow for three side-by-side blocks. */
+@media (max-height: 560px) and (min-width: 520px) {
+    .screen-playing {
+      padding: 8px 10px 10px;
+    }
+    .table-layout {
       grid-template-columns: 1fr;
+      grid-template-rows: auto minmax(0, 1fr);
+      gap: 8px;
+    }
+    .table-sidebar {
+      display: grid;
+      grid-template-columns: minmax(0, 1.9fr) minmax(0, 1fr) minmax(0, 0.9fr);
+      grid-template-areas:
+        'score workspaces actions'
+        'score timer actions';
+      gap: 8px;
+      align-items: start;
+    }
+    .sidebar-panel {
+      align-self: stretch;
     }
     .sidebar-actions {
-      grid-column: auto;
-      flex-direction: column;
+      align-self: stretch;
     }
-    .screen-playing {
-      padding: 10px 12px 22px;
+    .sidebar-timer {
+      grid-area: timer;
+    }
+    .sidebar-actions .btn-arcade {
+      padding: 5px 8px;
+      font-size: 0.64rem;
     }
 }
 
@@ -525,29 +626,33 @@ void [feltRef, sidebarRef, viewportRef]
   margin-bottom: 6px;
 }
 
+/* Workspace tabs: one compact row so the HUD never grows past a short screen */
 .workspace-stack {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 4px;
 }
 
 .ws-tab {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 8px;
+  justify-content: center;
+  gap: 1px;
+  min-width: 0;
   background: #1d1830;
   color: var(--ink-cream);
   border: 2px solid #3a3550;
-  padding: 5px 8px;
+  padding: 4px 2px;
   font-family: var(--font-pixel);
-  text-align: left;
+  text-align: center;
   cursor: pointer;
   transition: transform 0.1s steps(2), border-color 0.12s ease, background 0.12s ease;
 }
 
 .ws-tab:hover {
   border-color: var(--gold);
-  transform: translateX(2px);
+  transform: translateY(-2px);
 }
 
 .ws-tab--active {
@@ -555,20 +660,21 @@ void [feltRef, sidebarRef, viewportRef]
   border-color: #fff9db;
   color: #15111e;
   box-shadow: inset 0 -3px 0 rgba(0, 0, 0, 0.28);
-  transform: translateX(3px);
+  transform: translateY(-2px);
 }
 
 .ws-tab-num {
   font-weight: 800;
-  font-size: 0.82rem;
+  font-size: 0.76rem;
+  line-height: 1.1;
 }
 
 .ws-tab-key {
-  margin-left: auto;
-  font-size: 0.56rem;
+  font-size: 0.5rem;
+  line-height: 1;
   opacity: 0.55;
   border: 1px solid currentColor;
-  padding: 0 3px;
+  padding: 0 2px;
 }
 
 .sidebar-timer {
@@ -723,7 +829,7 @@ void [feltRef, sidebarRef, viewportRef]
 .felt-table {
   position: relative;
   flex: 1;
-  min-height: 380px;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   background: radial-gradient(circle at 50% 50%, #1f4737 0%, #122b21 85%);
@@ -804,17 +910,13 @@ void [feltRef, sidebarRef, viewportRef]
 
 .draggable-group-slot {
   position: absolute;
-  z-index: 2;
+  /* Stacking order comes from the workspace (see getGroupStackRank), so the
+     piece the player touched last always sits on top. */
   user-select: none;
   touch-action: none;
 }
 
-.draggable-group-slot--selected {
-  z-index: 12;
-}
-
 .draggable-group-slot--dragging {
-  z-index: 25;
   filter: drop-shadow(0 12px 18px rgba(0, 0, 0, 0.65));
 }
 
@@ -829,7 +931,8 @@ void [feltRef, sidebarRef, viewportRef]
   flex-direction: column;
   gap: 8px;
   padding: 7px 6px;
-  max-height: calc(100% - 20px);
+  /* Leave room for the bottom-right board tools so the rail never hides them */
+  max-height: calc(100% - 62px);
   overflow-y: auto;
   scrollbar-width: thin;
   background: rgba(10, 13, 20, 0.84);
@@ -1056,11 +1159,93 @@ void [feltRef, sidebarRef, viewportRef]
   border-color: var(--gold-bright);
 }
 
+/* Short screens: tighten the sidebar's own spacing so its content fits the
+   viewport column without ever spilling under the fold. */
+@media (max-height: 700px) {
+    .table-sidebar {
+      gap: 7px;
+    }
+    .sidebar-panel {
+      padding: 6px 8px 8px;
+    }
+    .sidebar-panel__title {
+      margin-bottom: 4px;
+    }
+    .sidebar-actions {
+      gap: 6px;
+    }
+    .sidebar-actions .btn-arcade {
+      padding: 6px 10px;
+    }
+}
+
+/* Very short landscape screens: scale the whole table down a notch. The felt
+   still gets more real pixels than the strip layout alone would leave, and the
+   cards fit without zooming into a single-pixel strip. */
+@media (max-height: 440px) and (min-width: 520px) {
+    .table-layout {
+      zoom: 0.82;
+    }
+}
+
+/* Narrow tabs and the shorter equation ribbon live here, after the base rules,
+   so they are not overridden by the component's default sizes. */
+@media (max-width: 520px) {
+    .ws-tab {
+      padding: 4px 1px;
+    }
+    .ws-tab-num {
+      font-size: 0.62rem;
+    }
+}
+
+@media (max-height: 560px) {
+    .equation-ribbon {
+      min-height: 36px;
+      padding: 4px 10px;
+    }
+    .equation-ribbon__eq {
+      font-size: 0.92rem;
+    }
+}
+
+/* Very short screens: one more notch of sidebar spacing before the layout
+   flips to the horizontal strip at 560px. */
+@media (max-height: 620px) {
+    .table-sidebar {
+      gap: 6px;
+    }
+    .sidebar-panel {
+      padding: 5px 8px 6px;
+    }
+    .sidebar-panel__title {
+      margin-bottom: 3px;
+    }
+    .sidebar-actions .btn-arcade {
+      padding: 5px 10px;
+    }
+}
+
+/* Short boards: tighten the operator rail so all buttons stay reachable */
+@media (max-height: 700px) {
+    .op-rail {
+      gap: 5px;
+      padding: 5px 4px;
+    }
+    .op-rail__group {
+      gap: 3px;
+    }
+    .op-square {
+      width: 36px;
+      height: 36px;
+    }
+    .op-square__sym {
+      font-size: 0.88rem;
+    }
+}
+
 /* Board overlays shrink with the screen; kept last so they beat the base sizes */
 @media (max-width: 1000px) {
-    .felt-table {
-      min-height: 420px;
-    }
     /* Narrow boards: wrap the rail into two columns so no operator hides behind a scrollbar */
     .op-rail {
       width: auto;

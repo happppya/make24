@@ -1,11 +1,12 @@
 import {
   applyBinaryOperator,
   applyUnaryOperator,
-  calculateScore,
+  calculateScoreBreakdown,
   checkTargetAcceptance,
   formatExpressionLhs,
   formatFullEquation,
   isUnaryOperator,
+  type ForbiddenMoveRules,
 } from './math'
 import type {
   BinaryOperator,
@@ -14,6 +15,7 @@ import type {
   ExprNode,
   GroupPosition,
   OperatorId,
+  SolutionScoringMode,
   UnaryOperator,
   WorkspaceSnapshot,
   WorkspaceState,
@@ -24,8 +26,9 @@ export const DEFAULT_CARD_SPACING_X = 148
 export const DEFAULT_CARD_SPACING_Y = 168
 /** Dealt cards wrap onto a new row after this many, instead of one endless row. */
 export const DEFAULT_CARDS_PER_ROW = 6
-export const DEFAULT_CANVAS_CENTER_X = 480
-export const DEFAULT_CANVAS_CENTER_Y = 130
+/** A bare card's on-felt footprint, used to centre the grid by its visible edges. */
+export const DEFAULT_CARD_SLOT_WIDTH = 96
+export const DEFAULT_CARD_SLOT_HEIGHT = 141
 
 /** Vertical stagger applied to the right-hand piece when a group is split apart. */
 export const UNGROUP_STAGGER_Y = 34
@@ -54,9 +57,14 @@ const UNGROUP_MIN_GAP_Y = 150
  * Slides a split piece sideways until it no longer covers an existing group.
  * Without this, a freshly separated card can land right on top of a neighbour
  * that was already resting at the default slot, which reads as a lost card.
- * Horizontal hops are preferred because the felt is much wider than it is tall.
+ * Hops follow the side the split is fanning towards, so dodging a neighbour
+ * never throws the piece back across the parent.
  */
-function findFreeSpot(base: GroupPosition, occupied: GroupPosition[]): GroupPosition {
+function findFreeSpot(
+  base: GroupPosition,
+  occupied: GroupPosition[],
+  direction: 1 | -1
+): GroupPosition {
   let candidate = base
   for (let attempt = 0; attempt < 8; attempt++) {
     const overlaps = occupied.some(
@@ -65,7 +73,7 @@ function findFreeSpot(base: GroupPosition, occupied: GroupPosition[]): GroupPosi
         Math.abs(spot.y - candidate.y) < UNGROUP_MIN_GAP_Y
     )
     if (!overlaps) return candidate
-    candidate = { x: candidate.x + 132, y: candidate.y + 12 }
+    candidate = { x: candidate.x + 132 * direction, y: candidate.y + 12 }
   }
   return candidate
 }
@@ -127,14 +135,15 @@ export function createInitialPositions(groups: ExprNode[]): Record<string, Group
     rows.push(groups.slice(i, i + DEFAULT_CARDS_PER_ROW))
   }
 
-  // Rows are stacked downward and centred on the same resting point a single
-  // row used, so small hands look unchanged while big ones stay inside the viewport.
+  // Rows are stacked downward and centred on the workspace origin. Centring the
+  // full card boxes (not just their top-left corners) keeps the deal symmetric
+  // around the origin the camera resets to.
   const blockHeight = Math.max(0, (rows.length - 1) * DEFAULT_CARD_SPACING_Y)
-  const startY = Math.round(DEFAULT_CANVAS_CENTER_Y - blockHeight / 2)
+  const startY = Math.round(-(blockHeight + DEFAULT_CARD_SLOT_HEIGHT) / 2)
 
   rows.forEach((row, rowIdx) => {
     const totalWidth = Math.max(0, (row.length - 1) * DEFAULT_CARD_SPACING_X)
-    const startX = Math.round(DEFAULT_CANVAS_CENTER_X - totalWidth / 2)
+    const startX = Math.round(-(totalWidth + DEFAULT_CARD_SLOT_WIDTH) / 2)
     row.forEach((g, colIdx) => {
       positions[g.id] = {
         x: startX + colIdx * DEFAULT_CARD_SPACING_X,
@@ -150,6 +159,8 @@ export interface TidyGridOptions {
   columns?: number
   spacingX?: number
   spacingY?: number
+  /** Measured group boxes, so the grid is centred by its visible edges. */
+  slotSizes?: Record<string, { width: number; height: number }>
 }
 
 /**
@@ -179,6 +190,33 @@ export function tidyWorkspaceGroups(
       y: Math.round(row * spacingY - blockHeight / 2),
     }
   })
+
+  // A slot's position is its top-left corner. When the caller can measure the
+  // slots, shift the whole grid so the union of the card boxes (not the corners)
+  // is centred on the origin. Without sizes, the corner grid is centred instead.
+  let minX = Infinity
+  let maxX = -Infinity
+  let minY = Infinity
+  let maxY = -Infinity
+  for (const group of ws.groups) {
+    const pos = next[group.id]!
+    const size = options.slotSizes?.[group.id]
+    minX = Math.min(minX, pos.x)
+    maxX = Math.max(maxX, pos.x + (size?.width ?? 0))
+    minY = Math.min(minY, pos.y)
+    maxY = Math.max(maxY, pos.y + (size?.height ?? 0))
+  }
+  if (Number.isFinite(minX) && Number.isFinite(minY)) {
+    const shiftX = Math.round((minX + maxX) / 2)
+    const shiftY = Math.round((minY + maxY) / 2)
+    if (shiftX !== 0 || shiftY !== 0) {
+      for (const group of ws.groups) {
+        const pos = next[group.id]!
+        pos.x -= shiftX
+        pos.y -= shiftY
+      }
+    }
+  }
 
   const alreadyTidy =
     Object.keys(ws.positions).length === count &&
@@ -219,6 +257,7 @@ export function createWorkspace(index: number, hand: Card[]): WorkspaceState {
     index,
     groups,
     positions: createInitialPositions(groups),
+    stackOrder: groups.map((group) => group.id),
     panX: 0,
     panY: 0,
     selectedGroupId: null,
@@ -254,8 +293,8 @@ export function getGroupPosition(ws: WorkspaceState, groupId: string, fallbackIn
   const row = Math.floor(fallbackIndex / DEFAULT_CARDS_PER_ROW)
   const col = fallbackIndex % DEFAULT_CARDS_PER_ROW
   return {
-    x: 120 + col * DEFAULT_CARD_SPACING_X,
-    y: DEFAULT_CANVAS_CENTER_Y + row * DEFAULT_CARD_SPACING_Y,
+    x: Math.round(col * DEFAULT_CARD_SPACING_X - DEFAULT_CARD_SLOT_WIDTH / 2),
+    y: Math.round(row * DEFAULT_CARD_SPACING_Y - DEFAULT_CARD_SLOT_HEIGHT / 2),
   }
 }
 
@@ -271,6 +310,34 @@ export function setGroupPosition(
 export function setWorkspacePan(ws: WorkspaceState, panX: number, panY: number): void {
   ws.panX = Math.round(panX)
   ws.panY = Math.round(panY)
+}
+
+/**
+ * Lifts a group to the top of the board's stacking order. Selecting a card or
+ * picking it up calls this, so the piece being handled always covers its
+ * neighbours — and keeps covering them after it is dropped.
+ */
+export function bringGroupToFront(ws: WorkspaceState, groupId: string): void {
+  const live = new Set(ws.groups.map((group) => group.id))
+  // Dropping ids for groups that were merged away keeps the order from growing.
+  ws.stackOrder = ws.stackOrder.filter((id) => live.has(id) && id !== groupId)
+  if (live.has(groupId)) ws.stackOrder.push(groupId)
+}
+
+/** Ascending render rank; 0 is the bottom-most piece. */
+export function getGroupStackRank(ws: WorkspaceState, groupId: string): number {
+  const rank = ws.stackOrder.indexOf(groupId)
+  return rank === -1 ? ws.stackOrder.length : rank
+}
+
+/** Re-adds any groups the stacking order has not seen yet (e.g. after undo). */
+function syncStackOrder(ws: WorkspaceState): void {
+  const live = new Set(ws.groups.map((group) => group.id))
+  const next = ws.stackOrder.filter((id) => live.has(id))
+  for (const group of ws.groups) {
+    if (!next.includes(group.id)) next.push(group.id)
+  }
+  ws.stackOrder = next
 }
 
 /**
@@ -290,6 +357,9 @@ export function selectGroupInWorkspace(
   if (targetIdx === -1) {
     return { changed: false, error: 'Card group not found.' }
   }
+
+  // Whatever the player reached for now sits on top of the board.
+  bringGroupToFront(ws, groupId)
 
   // Case 1: Nothing selected yet -> select this group
   if (!ws.selectedGroupId) {
@@ -364,6 +434,7 @@ export function selectGroupInWorkspace(
 
   ws.positions[newGroup.id] = { x: leftPos.x, y: leftPos.y }
   ws.groups = nextGroups
+  bringGroupToFront(ws, newGroup.id)
   ws.selectedGroupId = newGroup.id
   ws.pendingOperator = null
   pushUndoSnapshot(ws, snap)
@@ -418,6 +489,7 @@ export function applyOperatorInWorkspace(
     nextGroups[idx] = wrapped
     ws.positions[wrapped.id] = { x: prevPos.x, y: prevPos.y }
     ws.groups = nextGroups
+    bringGroupToFront(ws, wrapped.id)
     ws.selectedGroupId = wrapped.id
     ws.pendingOperator = null
     pushUndoSnapshot(ws, snap)
@@ -474,6 +546,7 @@ export function ungroupInWorkspace(
     const nextGroups = [...ws.groups]
     nextGroups[idx] = operand
     ws.groups = nextGroups
+    bringGroupToFront(ws, operand.id)
     ws.selectedGroupId = operand.id
     ws.pendingOperator = null
     pushUndoSnapshot(ws, snap)
@@ -484,30 +557,41 @@ export function ungroupInWorkspace(
   const leftNode = cloneExprNode(node.left)
   const rightNode = cloneExprNode(node.right)
 
-  // Fan the halves apart: left near the group's old spot, right offset down-right,
-  // each with a small random nudge so repeated splits never stack exactly.
+  // Fan the halves apart: one stays near the group's old spot, the other kicks
+  // out to a randomly chosen side, each with a small random nudge so repeated
+  // splits never stack exactly. Always kicking right walked the board — and the
+  // camera that frames it — further sideways with every split, so the side is
+  // a coin flip instead.
+  const fanRight = Math.random() >= 0.5
+  const fanDirection: 1 | -1 = fanRight ? 1 : -1
+  const fanDistance = fanDirection * DEFAULT_CARD_SPACING_X
+  const anchorNode = fanRight ? leftNode : rightNode
+  const fannedNode = fanRight ? rightNode : leftNode
+
   const occupied = ws.groups
     .filter((_, groupIdx) => groupIdx !== idx)
     .map((group, groupIdx) => getGroupPosition(ws, group.id, groupIdx))
 
-  const leftScatter = ungroupScatter()
-  const leftSpot = findFreeSpot(
-    { x: parentPos.x + leftScatter.x, y: parentPos.y + leftScatter.y },
-    occupied
+  const anchorScatter = ungroupScatter()
+  const anchorSpot = findFreeSpot(
+    { x: parentPos.x + anchorScatter.x, y: parentPos.y + anchorScatter.y },
+    occupied,
+    fanDirection
   )
-  occupied.push(leftSpot)
+  occupied.push(anchorSpot)
 
-  const rightScatter = ungroupScatter()
-  const rightSpot = findFreeSpot(
+  const fannedScatter = ungroupScatter()
+  const fannedSpot = findFreeSpot(
     {
-      x: parentPos.x + DEFAULT_CARD_SPACING_X + rightScatter.x,
-      y: parentPos.y + UNGROUP_STAGGER_Y + rightScatter.y,
+      x: parentPos.x + fanDistance + fannedScatter.x,
+      y: parentPos.y + UNGROUP_STAGGER_Y + fannedScatter.y,
     },
-    occupied
+    occupied,
+    fanDirection
   )
 
-  ws.positions[leftNode.id] = leftSpot
-  ws.positions[rightNode.id] = rightSpot
+  ws.positions[anchorNode.id] = anchorSpot
+  ws.positions[fannedNode.id] = fannedSpot
 
   const nextGroups: ExprNode[] = []
   for (let i = 0; i < ws.groups.length; i++) {
@@ -519,6 +603,9 @@ export function ungroupInWorkspace(
   }
 
   ws.groups = nextGroups
+  // The freshly split pieces were the ones just handled, so they sit on top.
+  bringGroupToFront(ws, leftNode.id)
+  bringGroupToFront(ws, rightNode.id)
   ws.selectedGroupId = leftNode.id
   ws.pendingOperator = null
   pushUndoSnapshot(ws, snap)
@@ -534,6 +621,7 @@ export function undoWorkspace(ws: WorkspaceState): boolean {
   ws.positions = clonePositions(prevSnap.positions)
   ws.selectedGroupId = prevSnap.selectedGroupId
   ws.pendingOperator = prevSnap.pendingOperator
+  syncStackOrder(ws)
   return true
 }
 
@@ -546,6 +634,7 @@ export function redoWorkspace(ws: WorkspaceState): boolean {
   ws.positions = clonePositions(nextSnap.positions)
   ws.selectedGroupId = nextSnap.selectedGroupId
   ws.pendingOperator = nextSnap.pendingOperator
+  syncStackOrder(ws)
   return true
 }
 
@@ -554,6 +643,7 @@ export function resetWorkspaceToHand(ws: WorkspaceState, hand: Card[]): boolean 
   const initialGroups = createInitialGroupsFromHand(hand)
   ws.groups = initialGroups
   ws.positions = createInitialPositions(initialGroups)
+  ws.stackOrder = initialGroups.map((group) => group.id)
   ws.panX = 0
   ws.panY = 0
   ws.selectedGroupId = null
@@ -578,7 +668,9 @@ export interface WorkspaceSolutionEvaluation {
 export function evaluateWorkspaceSolution(
   ws: WorkspaceState,
   target: number,
-  approximationPercent: number
+  approximationPercent: number,
+  scoringMode: SolutionScoringMode = 'cost-first',
+  forbidden?: ForbiddenMoveRules
 ): WorkspaceSolutionEvaluation {
   const baseCheck = checkTargetAcceptance(NaN, target, approximationPercent)
   if (ws.groups.length !== 1) {
@@ -598,7 +690,15 @@ export function evaluateWorkspaceSolution(
 
   const root = ws.groups[0]!
   const check = checkTargetAcceptance(root.value, target, approximationPercent)
-  const score = calculateScore(root)
+  const score = calculateScoreBreakdown(
+    root,
+    {
+      errorPercent: check.errorPercent,
+      approximationPercent,
+      mode: scoringMode,
+    },
+    forbidden
+  ).total
   const lhs = formatExpressionLhs(root)
   const equation = formatFullEquation(root)
 

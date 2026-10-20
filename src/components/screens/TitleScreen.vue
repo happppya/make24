@@ -80,7 +80,6 @@ void tutorialTriggerRef
     >
       <span class="title-guide__icon" aria-hidden="true">?</span>
       <span class="title-guide__label">Tutorial</span>
-      <span class="title-guide__hint">Every rule, on one page</span>
     </button>
   </div>
 </main>

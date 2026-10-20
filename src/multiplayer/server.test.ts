@@ -371,10 +371,53 @@ describe('multiplayer server — playing a round', () => {
     expect(roundTwo.room.round!.solutions).toHaveLength(0)
 
     host.send({ t: 'submit', solution })
+    // The deciding round still gets its solution screen before the series ends.
+    const finalRound = await guest.waitFor(
+      'state',
+      (m) => m.room.phase === 'round-end' && m.room.round!.number === 2
+    )
+    expect(finalRound.room.matchWinnerIds).toEqual([welcomeHost.selfId])
+    expect(finalRound.room.players.find((p) => p.id === welcomeHost.selfId)!.points).toBe(2)
+    expect(finalRound.room.players.find((p) => p.id === welcomeGuest.selfId)!.points).toBe(0)
+
+    host.send({ t: 'next-round' })
     const matchOver = await guest.waitFor('state', (m) => m.room.phase === 'game-over')
     expect(matchOver.room.matchWinnerIds).toEqual([welcomeHost.selfId])
-    expect(matchOver.room.players.find((p) => p.id === welcomeHost.selfId)!.points).toBe(2)
-    expect(matchOver.room.players.find((p) => p.id === welcomeGuest.selfId)!.points).toBe(0)
+  })
+
+  it('lets the host return everyone to the lobby for a rematch', async () => {
+    const { host, guest, welcomeHost } = await seatTwo()
+    host.send({
+      t: 'update-settings',
+      settings: { ...welcomeHost.room.settings, firstToPoints: 1, numCards: 6 },
+    })
+    await guest.waitFor('state', (m) => m.room.settings.firstToPoints === 1)
+
+    host.send({ t: 'start-match' })
+    await guest.waitFor('state', (m) => m.room.phase === 'playing')
+    host.send({ t: 'submit', solution })
+    await guest.waitFor('state', (m) => m.room.phase === 'round-end')
+    host.send({ t: 'next-round' })
+    await guest.waitFor('state', (m) => m.room.phase === 'game-over')
+
+    guest.send({ t: 'return-to-lobby' })
+    const refused = await guest.waitFor('error')
+    expect(refused.code).toBe('not-host')
+
+    host.send({ t: 'return-to-lobby' })
+    const backInLobby = await guest.waitFor('state', (m) => m.room.phase === 'lobby')
+    expect(backInLobby.room.round).toBeNull()
+    expect(backInLobby.room.matchWinnerIds).toEqual([])
+    // The rules survive so the host can tweak them before dealing again.
+    expect(backInLobby.room.settings.numCards).toBe(6)
+    expect(backInLobby.room.settings.firstToPoints).toBe(1)
+
+    host.send({ t: 'start-match' })
+    const newMatch = await guest.waitFor(
+      'state',
+      (m) => m.room.phase === 'playing' && m.room.round!.number === 1
+    )
+    expect(newMatch.room.round!.hand).toHaveLength(6)
   })
 
   it('expires a timed round on the server clock', async () => {

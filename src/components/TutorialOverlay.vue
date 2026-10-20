@@ -155,15 +155,19 @@ const sections: Section[] = [
     blocks: [
       {
         t: 'p',
-        text: 'Score is a price. Each binary operator costs 10. Unary layers cost 10, then 20, then 30 as they stack, and a binary in between resets the ladder. A factorial sitting directly on an inverse gamma adds 200, and so does the reverse.',
+        text: 'Score is a price. Each binary operator costs 10. Unary layers cost 10, then 20, then 30 as they stack, and a binary in between resets the ladder. The host can also forbid shortcut moves — a factorial sitting directly on an inverse gamma, and 1 raised to a power — each costing a penalty that is 200 by default and set in the lobby.',
       },
       {
         t: 'p',
-        text: 'The sidebar adds it all up and itemises the binary, unary and nesting costs. When two boards both hit the target, the lower total wins.',
+        text: 'The score ticks up as you build: binary, unary and forbidden-move costs are billed immediately across every group on the board, and accuracy joins the total once the cards form one group. When two boards both hit the target, the lower total wins.',
       },
       {
         t: 'p',
-        text: 'Accuracy is only a filter: with the band at 1%, anything within 1% of the target counts as a hit.',
+        text: 'Accuracy starts as a filter: with the band at 1%, anything within 1% of the target counts as a hit. The host can also make closeness matter, choosing cost-first, balanced or accuracy-first so a nearer board pays a smaller accuracy penalty.',
+      },
+      {
+        t: 'p',
+        text: 'After a round, the winning board is replayed in card form beneath its equation, so you can see which cards were grouped and which operators produced each value.',
       },
       { t: 'shot', shot: 'hud' },
     ],
@@ -175,7 +179,7 @@ const sections: Section[] = [
     blocks: [
       {
         t: 'p',
-        text: 'Settings live in the lobby. The host sets the mode, the cards dealt, the target (a fixed 24, a range, or an exact number), the error band, the deck pool, the operator sets and the points that win the match.',
+        text: 'Settings live in the lobby. The host sets the mode, the cards dealt, the target (a fixed 24, a range, or an exact number), the error band, the deck pool, the operator sets, the forbidden moves and their penalty, and the points that win the match.',
       },
       {
         t: 'p',

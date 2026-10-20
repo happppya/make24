@@ -12,7 +12,7 @@ const {
   matchWinnerNames,
   matchWinnerIds,
   multiplayerHost,
-  startMatchFromLobby,
+  playAgainFromGameOver,
   goToLobby,
 } = useGameContext()
 </script>
@@ -58,7 +58,7 @@ const {
         type="button"
         class="btn-arcade btn-arcade--gold"
         :disabled="settings.isMultiplayer && !multiplayerHost"
-        @click="startMatchFromLobby"
+        @click="playAgainFromGameOver"
       >
         Play Again
       </button>

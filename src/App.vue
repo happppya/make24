@@ -17,7 +17,11 @@ void shellRef
 </script>
 
 <template>
-  <div ref="shellRef" class="app-shell" :class="impactKind ? `impact--${impactKind}` : ''">
+  <div
+    ref="shellRef"
+    class="app-shell"
+    :class="[impactKind ? `impact--${impactKind}` : '', { 'app-shell--playing': phase === 'playing' }]"
+  >
     <!-- One screen per phase; each one injects the shared game context. -->
     <TitleScreen v-if="phase === 'title'" />
     <LobbyBrowserScreen v-else-if="phase === 'lobby-select'" />
@@ -36,6 +40,15 @@ void shellRef
   min-height: 100vh;
   display: flex;
   flex-direction: column;
+}
+
+/* The table screen owns the viewport: a definite height stops short screens
+   from growing the page into a scrollbar. Other screens keep natural height. */
+.app-shell--playing {
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
 }
 
 /* Target-hit flash on the shell */

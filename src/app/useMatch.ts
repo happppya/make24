@@ -1,9 +1,10 @@
 import { computed, ref, watch, type Ref } from 'vue'
 import { playSfx } from '../audio/sfx'
 import { dealHand, generateTargetNumber } from '../engine/deck'
-import { calculateScoreBreakdown } from '../engine/math'
+import { calculateBoardBreakdown } from '../engine/math'
 import {
   WORKSPACE_COUNT,
+  cloneExprNode,
   createAllWorkspaces,
   evaluateWorkspaceSolution,
 } from '../engine/workspace'
@@ -74,14 +75,35 @@ export function useMatch(deps: {
   const currentEvaluation = computed(() => {
     const ws = activeWorkspace.value
     if (!ws) return null
-    return evaluateWorkspaceSolution(ws, currentTarget.value, settings.approximationPercent)
+    return evaluateWorkspaceSolution(
+      ws,
+      currentTarget.value,
+      settings.approximationPercent,
+      settings.scoringMode,
+      { moves: settings.forbiddenMoves, penalty: settings.forbiddenMovePenalty }
+    )
   })
 
-  /** Where the current solution's cost comes from, once the cards are in one group. */
+  /**
+   * What the board has cost so far, summed across every group. Accuracy is only
+   * part of the bill once the cards are in a single, finished group.
+   */
   const costBreakdown = computed(() => {
+    const ws = activeWorkspace.value
+    if (!ws) return null
     const evaluation = currentEvaluation.value
-    if (!evaluation?.isSingleGroup || !evaluation.rootNode) return null
-    return calculateScoreBreakdown(evaluation.rootNode)
+    const accuracy =
+      evaluation?.isSingleGroup && evaluation.rootNode
+        ? {
+            errorPercent: evaluation.errorPercent ?? 0,
+            approximationPercent: settings.approximationPercent,
+            mode: settings.scoringMode,
+          }
+        : undefined
+    return calculateBoardBreakdown(ws.groups, accuracy, {
+      moves: settings.forbiddenMoves,
+      penalty: settings.forbiddenMovePenalty,
+    })
   })
 
   function sortedLocalSolutions(): SubmittedSolution[] {
@@ -191,9 +213,16 @@ export function useMatch(deps: {
 
   function recordPlayerSolutionFromWorkspace(): SubmittedSolution | null {
     const evalRes = currentEvaluation.value
-    if (!evalRes || !evalRes.isSingleGroup || !evalRes.acceptable || evalRes.score === null) {
+    if (
+      !evalRes ||
+      !evalRes.isSingleGroup ||
+      !evalRes.rootNode ||
+      !evalRes.acceptable ||
+      evalRes.score === null
+    ) {
       return null
     }
+    const board = evalRes.rootNode
 
     // Multiplayer scores live on the server; this player only reports the board.
     if (settings.isMultiplayer) {
@@ -201,7 +230,7 @@ export function useMatch(deps: {
       if (awaitingNextDeal.value) return null
       // The evaluation watcher fires on every board mutation, so only report when
       // the board itself changed — otherwise each nudge re-sends the same solution.
-      const signature = `${activeWorkspaceIdx.value}|${evalRes.lhs}|${evalRes.score}`
+      const signature = `${activeWorkspaceIdx.value}|${evalRes.lhs}|${evalRes.score}|${JSON.stringify(board)}`
       if (signature === lastReportedBoard) return null
       lastReportedBoard = signature
       sendToRoom({
@@ -213,6 +242,7 @@ export function useMatch(deps: {
           score: evalRes.score,
           errorPercent: evalRes.errorPercent ?? 0,
           workspaceIndex: activeWorkspaceIdx.value + 1,
+          expression: cloneExprNode(board),
         },
       })
       return null
@@ -234,6 +264,7 @@ export function useMatch(deps: {
       errorPercent: evalRes.errorPercent ?? 0,
       timestampMs: Date.now() - roundStartTimestamp,
       workspaceIndex: activeWorkspaceIdx.value + 1,
+      expression: cloneExprNode(board),
     }
 
     if (existingIdx === -1) {
