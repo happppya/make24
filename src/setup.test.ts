@@ -73,12 +73,14 @@ describe('Make 24 Remastered — Math & Operators Engine', () => {
     expect(applyBinaryOperator('add', 4, 3)).toEqual({
       ok: true,
       value: 7,
+      exactValue: '7',
       headerText: '4 + 3 = 7',
     })
     // Spec: selecting 3 then selecting 5 with subtraction results in 3 - 5
     expect(applyBinaryOperator('sub', 3, 5)).toEqual({
       ok: true,
       value: -2,
+      exactValue: '-2',
       headerText: '3 - 5 = -2',
     })
     expect(applyBinaryOperator('mult', 6, 4).value).toBe(24)
@@ -115,6 +117,7 @@ describe('Make 24 Remastered — Math & Operators Engine', () => {
     expect(fact4).toEqual({
       ok: true,
       value: 24,
+      exactValue: '24',
       headerText: '4! = 24',
     })
   })
@@ -136,6 +139,7 @@ describe('Make 24 Remastered — Math & Operators Engine', () => {
     expect(applyUnaryOperator('invgamma', 24)).toEqual({
       ok: true,
       value: 5,
+      exactValue: '5',
       headerText: 'Γ⁻¹(24) = 5',
     })
     expect(applyUnaryOperator('invgamma', 0.5).ok).toBe(false)
@@ -146,6 +150,7 @@ describe('Make 24 Remastered — Math & Operators Engine', () => {
     expect(sin90).toEqual({
       ok: true,
       value: 1,
+      exactValue: '1',
       headerText: 'sin(90 deg) = 1',
     })
     expect(applyUnaryOperator('cos', 0).value).toBe(1)
@@ -165,6 +170,7 @@ describe('Make 24 Remastered — Math & Operators Engine', () => {
     expect(lshiftRes).toEqual({
       ok: true,
       value: 40,
+      exactValue: '40',
       headerText: 'LSHIFT(5, 3) = 40',
     })
     expect(applyBinaryOperator('lshift', 2.5, 1).ok).toBe(false)
@@ -173,6 +179,7 @@ describe('Make 24 Remastered — Math & Operators Engine', () => {
     expect(applyBinaryOperator('bitand', 12, 10)).toEqual({
       ok: true,
       value: 8,
+      exactValue: '8',
       headerText: 'AND(12, 10) = 8',
     })
     expect(applyBinaryOperator('bitor', 12, 10).value).toBe(14)
@@ -187,6 +194,7 @@ describe('Make 24 Remastered — Math & Operators Engine', () => {
     expect(applyUnaryOperator('bitnot', 5)).toEqual({
       ok: true,
       value: -6,
+      exactValue: '-6',
       headerText: 'NOT(5) = -6',
     })
     expect(applyUnaryOperator('bitnot', -1).value).toBe(0)
@@ -197,6 +205,7 @@ describe('Make 24 Remastered — Math & Operators Engine', () => {
     expect(applyBinaryOperator('concat', 6, 10)).toEqual({
       ok: true,
       value: 610,
+      exactValue: '610',
       headerText: '6 || 10 = 610',
     })
     // Order matters: the first selection is the left operand.
@@ -313,10 +322,17 @@ describe('Make 24 Remastered — Math & Operators Engine', () => {
     expect(applyUnaryOperator('subfact', 2.5).ok).toBe(false)
     expect(applyUnaryOperator('subfact', -1).ok).toBe(false)
 
-    // Results outside the exact integer range are refused rather than rounded.
+    // Combinatorics still guards its BigInt result range, while the Decimal
+    // engine carries larger double-factorials and derangements exactly.
     expect(applyBinaryOperator('comb', 1000, 500).ok).toBe(false)
-    expect(applyUnaryOperator('dfact', 30).ok).toBe(false)
-    expect(applyUnaryOperator('subfact', 30).ok).toBe(false)
+    expect(applyUnaryOperator('dfact', 30)).toMatchObject({
+      ok: true,
+      exactValue: '42849873690624000',
+    })
+    expect(applyUnaryOperator('subfact', 30)).toMatchObject({
+      ok: true,
+      exactValue: '97581073836835777732377428235481',
+    })
   })
 
   it('prints analysis and combinatorics operators in readable equation form', () => {
@@ -443,14 +459,26 @@ describe('Make 24 Remastered — Math & Operators Engine', () => {
     expect(opKeyLabel(10)).toBe('')
   })
 
-  it('formats numbers at full double precision, including small values', () => {
-    expect(formatNumber(Math.PI)).toBe('3.141592653589793')
+  it('shows five decimal places by default and can reveal 32', () => {
+    expect(formatNumber(Math.PI)).toBe('3.14159')
     expect(cleanFloat(Math.PI)).toBe(Math.PI)
-    expect(formatNumber(0.000123456789012345)).toBe('0.000123456789012345')
-    expect(formatNumber(1.23456789012345e-7)).toBe('1.23456789012345e-7')
-    // Floating noise still snaps away.
+    expect(formatNumber(0.000123456789012345)).toBe('0.00012')
+    expect(formatNumber(1.23456789012345e-7)).toBe('1.23457e-7')
+    // Floating noise still snaps away, and width is a separate display choice.
     expect(formatNumber(0.1 + 0.2)).toBe('0.3')
+    // At full width a double's binary noise is visible; the engine never invents
+    // digits that the caller did not supply.
+    expect(formatNumber(0.1 + 0.2, 32)).toBe('0.30000000000000004')
+    expect(formatNumber('0.1', 32)).toBe('0.1')
     expect(cleanFloat(0.1 + 0.2)).toBe(0.3)
+
+    expect(
+      formatNumber('1.2345678901234567890123456789012345', 32)
+    ).toBe('1.23456789012345678901234567890123')
+    expect(formatNumber('0.3333333333333333333333333333333333', 5)).toBe('0.33333')
+    expect(formatNumber('0.3333333333333333333333333333333333', 32)).toBe(
+      '0.33333333333333333333333333333333'
+    )
 
     // HUD scores and percentages stay short enough for their columns.
     expect(formatScore(38.5)).toBe('38.5')
@@ -1565,6 +1593,33 @@ describe('Make 24 Remastered — Playable UI Flow (App.vue)', () => {
     wrapper.unmount()
   })
 
+  it('forms locked dragon binds at the deal when enabled in the lobby', async () => {
+    const wrapper = mount(App)
+    await wrapper.find('[data-testid="enter-singleplayer"]').trigger('click')
+
+    await wrapper.find('#setting-num-cards').setValue('10')
+    await wrapper.find('[data-testid="toggle-bind-dragon"]').setValue(true)
+    await wrapper.find('[data-testid="bind-dragon-required"]').setValue('2')
+    await wrapper.find('[data-testid="bind-max"]').setValue('3')
+    expect(wrapper.find('[data-testid="bind-summary"]').text()).toContain('Dragon 2+')
+
+    await wrapper.find('[data-testid="start-round-btn"]').trigger('click')
+    await nextTick()
+
+    // Ten cards cannot avoid a consecutive pair, so at least one dragon must form.
+    const bindRoots = wrapper.findAll('.expr-node--root.expr-node--bind')
+    expect(bindRoots.length).toBeGreaterThan(0)
+    expect(wrapper.findAll('.draggable-group-slot').length).toBeLessThan(10)
+    expect(bindRoots[0]!.text()).toContain('DRAGON')
+
+    await bindRoots[0]!.trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-testid="inline-ungroup-btn"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="ungroup-btn"]').attributes('disabled')).toBeDefined()
+
+    wrapper.unmount()
+  })
+
   it('shows the winning board in card form on the round-end screen', async () => {
     const wrapper = mount(App)
     await wrapper.find('[data-testid="enter-singleplayer"]').trigger('click')
@@ -1639,6 +1694,25 @@ describe('Make 24 Remastered — Playable UI Flow (App.vue)', () => {
     await nextTick()
     expect(wrapper.find('[data-testid="target-display"]').text()).toBe('84')
     expect(wrapper.find('.blind-card__marquee').text()).toContain('ROUND 2')
+
+    wrapper.unmount()
+  })
+
+  it('keeps a typed high-precision target exact for acceptance', async () => {
+    const wrapper = mount(App)
+    await wrapper.find('[data-testid="enter-singleplayer"]').trigger('click')
+
+    await wrapper.find('#setting-target').setValue('manual')
+    await wrapper.find('#setting-approx').setValue('2')
+    await wrapper.find('[data-testid="start-round-btn"]').trigger('click')
+
+    const exact = '3.1415926535897932384626433832795'
+    await wrapper.find('[data-testid="target-choice-input"]').setValue(exact)
+    await wrapper.find('[data-testid="target-choice-form"]').trigger('submit')
+    await nextTick()
+
+    expect(wrapper.findComponent(ScorePanel).props('targetExact')).toBe(exact)
+    expect(wrapper.find('[data-testid="target-display"]').text()).toBe('3.14159')
 
     wrapper.unmount()
   })

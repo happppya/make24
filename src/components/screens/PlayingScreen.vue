@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, watch } from 'vue'
 import { useGameContext } from '../../app/context'
+import { decimalPlaces } from '../../app/displayPrecision'
 import { formatScore, formatTimer, opKeyLabel } from '../../app/labels'
 import CardGroupNode from '../CardGroupNode.vue'
 import PuzzlePlayHeader from './PuzzlePlayHeader.vue'
 import ScorePanel from '../ScorePanel.vue'
+import { formatFullEquation } from '../../engine/math'
 import { getGroupPosition, getGroupStackRank } from '../../engine/workspace'
 
 /** Accessible name for a rail button, including its digit key when it has one. */
@@ -25,6 +27,7 @@ const {
   exitPuzzleToHub,
   roundNumber,
   currentTarget,
+  currentTargetExact,
   currentConstant,
   currentEvaluation,
   costBreakdown,
@@ -68,6 +71,13 @@ const {
   particleBursts,
   glideToGroups,
 } = useGameContext()
+
+/** The ribbon follows the same display width as the target and board headers. */
+const equationText = computed(() => {
+  const evaluation = currentEvaluation.value
+  if (!evaluation?.rootNode) return evaluation?.equation ?? ''
+  return formatFullEquation(evaluation.rootNode, decimalPlaces.value)
+})
 
 /* Frame the dealt cards whenever the hand or workspace changes, and after the
    felt is resized (orientation change, HUD reflow). The board is pannable, but
@@ -121,6 +131,7 @@ void [feltRef, sidebarRef, viewportRef]
       <ScorePanel
         :round-number="roundNumber"
         :target="currentTarget"
+        :target-exact="currentTargetExact"
         :constant="currentConstant"
         :approximation-percent="settings.approximationPercent"
         :scoring-mode="settings.scoringMode"
@@ -236,7 +247,7 @@ void [feltRef, sidebarRef, viewportRef]
         <span class="equation-ribbon__tag">
           {{ currentEvaluation.acceptable ? 'ACCEPTABLE' : 'NOT ACCEPTABLE' }}
         </span>
-        <span class="equation-ribbon__eq">{{ currentEvaluation.equation }}</span>
+        <span class="equation-ribbon__eq">{{ equationText }}</span>
         <span class="equation-ribbon__score">{{ formatScore(currentEvaluation.score) }} pts</span>
       </div>
       <div v-else class="equation-ribbon equation-ribbon--idle" data-testid="solution-status-incomplete">

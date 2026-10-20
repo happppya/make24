@@ -99,6 +99,14 @@ function rankLabel(index: number): string {
       <div class="puzzle-card__tags" aria-label="Allowed operator groups">
         <span v-for="label in dailyPuzzle.operatorGroupLabels" :key="label">{{ label }}</span>
       </div>
+      <div
+        v-if="dailyPuzzle.bindLabels.length"
+        class="puzzle-card__tags puzzle-card__tags--binds"
+        aria-label="Opening binds"
+      >
+        <span class="puzzle-card__tags-title">BINDS</span>
+        <span v-for="label in dailyPuzzle.bindLabels" :key="label">{{ label }}</span>
+      </div>
 
       <div class="puzzle-board-head">
         <h3>Top 3 scores</h3>
@@ -148,6 +156,14 @@ function rankLabel(index: number): string {
       <p class="puzzle-card__note">{{ weeklyPuzzle.difficultyNote }}</p>
       <div class="puzzle-card__tags" aria-label="Allowed operator groups">
         <span v-for="label in weeklyPuzzle.operatorGroupLabels" :key="label">{{ label }}</span>
+      </div>
+      <div
+        v-if="weeklyPuzzle.bindLabels.length"
+        class="puzzle-card__tags puzzle-card__tags--binds"
+        aria-label="Opening binds"
+      >
+        <span class="puzzle-card__tags-title">BINDS</span>
+        <span v-for="label in weeklyPuzzle.bindLabels" :key="label">{{ label }}</span>
       </div>
 
       <div class="puzzle-board-head">
@@ -418,6 +434,22 @@ function rankLabel(index: number): string {
   border: 1px solid rgba(114, 239, 221, 0.28);
   background: rgba(114, 239, 221, 0.06);
   padding: 2px 6px;
+}
+
+.puzzle-card__tags--binds span {
+  color: #b8f5c8;
+  border-color: rgba(111, 214, 138, 0.34);
+  background: rgba(111, 214, 138, 0.08);
+}
+
+.puzzle-card__tags--binds .puzzle-card__tags-title {
+  color: #6fd68a;
+  border-color: transparent;
+  background: transparent;
+  padding-left: 0;
+  font-family: var(--font-pixel);
+  font-size: 0.46rem;
+  letter-spacing: 0.1em;
 }
 
 .puzzle-card--weekly .puzzle-card__tags span {

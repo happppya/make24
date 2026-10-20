@@ -1,3 +1,5 @@
+import { createBoundGroups } from './binds'
+import type { NumericInput } from './decimal'
 import {
   applyBinaryOperator,
   applyUnaryOperator,
@@ -6,10 +8,12 @@ import {
   formatExpressionLhs,
   formatFullEquation,
   isUnaryOperator,
+  nodeExactValue,
   type ForbiddenMoveRules,
 } from './math'
 import type {
   BinaryOperator,
+  BindRulesConfig,
   Card,
   CardLeafNode,
   ExprNode,
@@ -95,6 +99,18 @@ export function cloneExprNode(node: ExprNode): ExprNode {
       id: node.id,
       card: { ...node.card },
       value: node.value,
+      exactValue: nodeExactValue(node),
+    }
+  }
+  if (node.kind === 'bind') {
+    return {
+      kind: 'bind',
+      id: node.id,
+      bind: node.bind,
+      cards: node.cards.map((card) => cloneExprNode(card) as CardLeafNode),
+      value: node.value,
+      exactValue: nodeExactValue(node),
+      headerText: node.headerText,
     }
   }
   if (node.kind === 'unary') {
@@ -104,6 +120,7 @@ export function cloneExprNode(node: ExprNode): ExprNode {
       operator: node.operator,
       operand: cloneExprNode(node.operand),
       value: node.value,
+      exactValue: nodeExactValue(node),
       headerText: node.headerText,
     }
   }
@@ -114,6 +131,7 @@ export function cloneExprNode(node: ExprNode): ExprNode {
     left: cloneExprNode(node.left),
     right: cloneExprNode(node.right),
     value: node.value,
+    exactValue: nodeExactValue(node),
     headerText: node.headerText,
   }
 }
@@ -128,6 +146,22 @@ export function clonePositions(
   return copy
 }
 
+/** How much of each overlapped card a fan reveals beside the one before it. */
+export const BIND_CARD_REVEAL = 30
+const BIND_HEADER_HEIGHT = 38
+const INITIAL_GAP_X = DEFAULT_CARD_SPACING_X - DEFAULT_CARD_SLOT_WIDTH
+const INITIAL_GAP_Y = DEFAULT_CARD_SPACING_Y - DEFAULT_CARD_SLOT_HEIGHT
+
+function initialSlotSize(group: ExprNode): { width: number; height: number } {
+  if (group.kind === 'bind') {
+    return {
+      width: DEFAULT_CARD_SLOT_WIDTH + (group.cards.length - 1) * BIND_CARD_REVEAL + 8,
+      height: DEFAULT_CARD_SLOT_HEIGHT + BIND_HEADER_HEIGHT,
+    }
+  }
+  return { width: DEFAULT_CARD_SLOT_WIDTH, height: DEFAULT_CARD_SLOT_HEIGHT }
+}
+
 export function createInitialPositions(groups: ExprNode[]): Record<string, GroupPosition> {
   const positions: Record<string, GroupPosition> = {}
   const rows: ExprNode[][] = []
@@ -137,19 +171,29 @@ export function createInitialPositions(groups: ExprNode[]): Record<string, Group
 
   // Rows are stacked downward and centred on the workspace origin. Centring the
   // full card boxes (not just their top-left corners) keeps the deal symmetric
-  // around the origin the camera resets to.
-  const blockHeight = Math.max(0, (rows.length - 1) * DEFAULT_CARD_SPACING_Y)
-  const startY = Math.round(-(blockHeight + DEFAULT_CARD_SLOT_HEIGHT) / 2)
+  // around the origin the camera resets to. A bind's fan is wider than one card,
+  // so its slot gets the room it needs instead of colliding with a neighbour.
+  const rowSizes = rows.map((row) => {
+    const slots = row.map(initialSlotSize)
+    return {
+      slots,
+      width: slots.reduce((sum, size) => sum + size.width, 0) + INITIAL_GAP_X * (row.length - 1),
+      height: Math.max(...slots.map((size) => size.height)),
+    }
+  })
+  const blockHeight =
+    rowSizes.reduce((sum, row) => sum + row.height, 0) + INITIAL_GAP_Y * Math.max(0, rows.length - 1)
+  const startY = Math.round(-blockHeight / 2)
 
+  let rowTop = startY
   rows.forEach((row, rowIdx) => {
-    const totalWidth = Math.max(0, (row.length - 1) * DEFAULT_CARD_SPACING_X)
-    const startX = Math.round(-(totalWidth + DEFAULT_CARD_SLOT_WIDTH) / 2)
-    row.forEach((g, colIdx) => {
-      positions[g.id] = {
-        x: startX + colIdx * DEFAULT_CARD_SPACING_X,
-        y: startY + rowIdx * DEFAULT_CARD_SPACING_Y,
-      }
+    const rowSize = rowSizes[rowIdx]!
+    let x = Math.round(-rowSize.width / 2)
+    row.forEach((group, colIdx) => {
+      positions[group.id] = { x, y: rowTop }
+      x += Math.round(rowSize.slots[colIdx]!.width + INITIAL_GAP_X)
     })
+    rowTop += rowSize.height + INITIAL_GAP_Y
   })
   return positions
 }
@@ -242,17 +286,28 @@ export function createSnapshot(ws: WorkspaceState): WorkspaceSnapshot {
   }
 }
 
-export function createInitialGroupsFromHand(hand: Card[]): CardLeafNode[] {
-  return hand.map((card) => ({
-    kind: 'card',
-    id: `leaf-${card.id}`,
-    card: { ...card },
-    value: card.value,
-  }))
+export function createInitialGroupsFromHand(
+  hand: Card[],
+  bindRules?: BindRulesConfig
+): ExprNode[] {
+  if (!bindRules) {
+    return hand.map((card) => ({
+      kind: 'card' as const,
+      id: `leaf-${card.id}`,
+      card: { ...card },
+      value: card.value,
+      exactValue: String(card.value),
+    }))
+  }
+  return createBoundGroups(hand, bindRules)
 }
 
-export function createWorkspace(index: number, hand: Card[]): WorkspaceState {
-  const groups = createInitialGroupsFromHand(hand)
+export function createWorkspace(
+  index: number,
+  hand: Card[],
+  bindRules?: BindRulesConfig
+): WorkspaceState {
+  const groups = createInitialGroupsFromHand(hand, bindRules)
   return {
     index,
     groups,
@@ -267,10 +322,13 @@ export function createWorkspace(index: number, hand: Card[]): WorkspaceState {
   }
 }
 
-export function createAllWorkspaces(hand: Card[]): WorkspaceState[] {
+export function createAllWorkspaces(
+  hand: Card[],
+  bindRules?: BindRulesConfig
+): WorkspaceState[] {
   const list: WorkspaceState[] = []
   for (let i = 0; i < WORKSPACE_COUNT; i++) {
-    list.push(createWorkspace(i, hand))
+    list.push(createWorkspace(i, hand, bindRules))
   }
   return list
 }
@@ -403,7 +461,11 @@ export function selectGroupInWorkspace(
   const rightNode = ws.groups[targetIdx]!
   const op = ws.pendingOperator
 
-  const evalRes = applyBinaryOperator(op, leftNode.value, rightNode.value)
+  const evalRes = applyBinaryOperator(
+    op,
+    nodeExactValue(leftNode),
+    nodeExactValue(rightNode)
+  )
   if (!evalRes.ok) {
     return { changed: false, error: evalRes.error ?? 'Invalid binary operation.' }
   }
@@ -417,6 +479,7 @@ export function selectGroupInWorkspace(
     left: cloneExprNode(leftNode),
     right: cloneExprNode(rightNode),
     value: evalRes.value,
+    exactValue: evalRes.exactValue,
     headerText: evalRes.headerText,
   }
 
@@ -469,7 +532,10 @@ export function applyOperatorInWorkspace(
   const selectedNode = ws.groups[idx]!
 
   if (isUnaryOperator(operator)) {
-    const evalRes = applyUnaryOperator(operator as UnaryOperator, selectedNode.value)
+    const evalRes = applyUnaryOperator(
+      operator as UnaryOperator,
+      nodeExactValue(selectedNode)
+    )
     if (!evalRes.ok) {
       return { changed: false, error: evalRes.error ?? 'Invalid unary operation.' }
     }
@@ -482,6 +548,7 @@ export function applyOperatorInWorkspace(
       operator: operator as UnaryOperator,
       operand: cloneExprNode(selectedNode),
       value: evalRes.value,
+      exactValue: evalRes.exactValue,
       headerText: evalRes.headerText,
     }
 
@@ -535,6 +602,9 @@ export function ungroupInWorkspace(
   const node = ws.groups[idx]!
   if (node.kind === 'card') {
     return { changed: false, error: 'Single cards cannot be ungrouped.' }
+  }
+  if (node.kind === 'bind') {
+    return { changed: false, error: 'Binds are locked together and cannot be split.' }
   }
 
   const snap = createSnapshot(ws)
@@ -638,9 +708,13 @@ export function redoWorkspace(ws: WorkspaceState): boolean {
   return true
 }
 
-export function resetWorkspaceToHand(ws: WorkspaceState, hand: Card[]): boolean {
+export function resetWorkspaceToHand(
+  ws: WorkspaceState,
+  hand: Card[],
+  bindRules?: BindRulesConfig
+): boolean {
   const snap = createSnapshot(ws)
-  const initialGroups = createInitialGroupsFromHand(hand)
+  const initialGroups = createInitialGroupsFromHand(hand, bindRules)
   ws.groups = initialGroups
   ws.positions = createInitialPositions(initialGroups)
   ws.stackOrder = initialGroups.map((group) => group.id)
@@ -656,6 +730,8 @@ export interface WorkspaceSolutionEvaluation {
   isSingleGroup: boolean
   rootNode: ExprNode | null
   finalValue: number | null
+  /** Canonical high-precision value of the finished board. */
+  finalValueExact: string | null
   acceptable: boolean
   score: number | null
   errorPercent: number | null
@@ -667,7 +743,7 @@ export interface WorkspaceSolutionEvaluation {
 
 export function evaluateWorkspaceSolution(
   ws: WorkspaceState,
-  target: number,
+  target: NumericInput,
   approximationPercent: number,
   scoringMode: SolutionScoringMode = 'cost-first',
   forbidden?: ForbiddenMoveRules
@@ -678,6 +754,7 @@ export function evaluateWorkspaceSolution(
       isSingleGroup: false,
       rootNode: null,
       finalValue: null,
+      finalValueExact: null,
       acceptable: false,
       score: null,
       errorPercent: null,
@@ -689,7 +766,8 @@ export function evaluateWorkspaceSolution(
   }
 
   const root = ws.groups[0]!
-  const check = checkTargetAcceptance(root.value, target, approximationPercent)
+  const exact = nodeExactValue(root)
+  const check = checkTargetAcceptance(exact, target, approximationPercent)
   const score = calculateScoreBreakdown(
     root,
     {
@@ -706,6 +784,7 @@ export function evaluateWorkspaceSolution(
     isSingleGroup: true,
     rootNode: root,
     finalValue: root.value,
+    finalValueExact: exact,
     acceptable: check.acceptable,
     score,
     errorPercent: check.errorPercent,
@@ -718,6 +797,7 @@ export function evaluateWorkspaceSolution(
 
 export function countCardsInNode(node: ExprNode): number {
   if (node.kind === 'card') return 1
+  if (node.kind === 'bind') return node.cards.length
   if (node.kind === 'unary') return countCardsInNode(node.operand)
   return countCardsInNode(node.left) + countCardsInNode(node.right)
 }

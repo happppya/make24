@@ -24,6 +24,9 @@ const {
         <span class="puzzle-play-header__sub">
           {{ activePuzzle.key }} · use all {{ activePuzzle.settings.numCards }} cards
         </span>
+        <span v-if="activePuzzle.bindLabels.length" class="puzzle-play-header__binds">
+          Binds: {{ activePuzzle.bindLabels.join(' · ') }}
+        </span>
       </div>
     </div>
 
@@ -105,6 +108,15 @@ const {
   font-family: var(--font-mono);
   font-size: 0.83rem;
   color: var(--ink-muted);
+}
+
+.puzzle-play-header__binds {
+  display: block;
+  margin-top: 2px;
+  font-family: var(--font-pixel);
+  font-size: 0.46rem;
+  letter-spacing: 0.06em;
+  color: #6fd68a;
 }
 
 .puzzle-play-header__board {

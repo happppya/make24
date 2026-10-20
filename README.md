@@ -4,7 +4,11 @@ A pixel-art twist on the Make 24 numbers game. Cards are dealt, you merge them
 with operators until one group hits the target, and the **cheapest** board wins
 the round — every operator costs points, so the elegant route beats the long one.
 Playable solo or online against friends in real time, with a deterministic
-medium daily puzzle and an extreme weekly puzzle on shared leaderboards.
+medium daily puzzle and an extreme weekly puzzle on shared leaderboards. Optional
+opening **binds** fuse consecutive ranks or duplicate cards into free locked
+groups before play starts. Numbers run on a 50-digit decimal engine; the board,
+target and results show five decimal places by default, and a gameplay slider
+reveals up to 32 decimal places (the engine keeps 50 significant digits).
 
 ## Running it
 
@@ -43,7 +47,7 @@ and clients mirror it.
 | --- | --- |
 | [src/app/](src/app) | Game state and actions (Vue composables) |
 | [src/components/](src/components) | Board, HUD and the per-phase screens |
-| [src/engine/](src/engine) | The rules: operators, deck, workspaces, scoring |
+| [src/engine/](src/engine) | The rules: operators, deck, binds, workspaces, scoring |
 | [src/multiplayer/](src/multiplayer) | Wire protocol, room reducer, client session |
 | [src/audio/](src/audio) | Synthesized sound effects (no audio files) |
 | [server/](server) | `node:http` + `ws` host for the room reducer |

@@ -15,8 +15,8 @@ Each phase screen:
 | [TitleScreen.vue](TitleScreen.vue) | `title` | Solo/multiplayer entry, Daily & Weekly entry, and the tutorial button |
 | [PuzzleHubScreen.vue](PuzzleHubScreen.vue) | `puzzles` | Current daily/weekly cards, names, rules and top-three boards |
 | [LobbyBrowserScreen.vue](LobbyBrowserScreen.vue) | `lobby-select` | Name, public lobby list, create public/private, join by code |
-| [LobbySetupScreen.vue](LobbySetupScreen.vue) | `lobby` | Seats, ready-up, and the full table settings (host-only) |
-| [PlayingScreen.vue](PlayingScreen.vue) | `playing` | HUD sidebar, felt board, operator rails, board tools; swaps to puzzle submit/quit controls |
+| [LobbySetupScreen.vue](LobbySetupScreen.vue) | `lobby` | Seats, ready-up, and the full table settings including bind toggles (host-only) |
+| [PlayingScreen.vue](PlayingScreen.vue) | `playing` | HUD sidebar (with the decimal-precision slider), felt board, operator rails, board tools; swaps to puzzle submit/quit controls |
 | [RoundEndScreen.vue](RoundEndScreen.vue) | `round-end` | Round result, submitted boards, winning card replay, standings |
 | [PuzzleResultScreen.vue](PuzzleResultScreen.vue) | `puzzle-result` | Puzzle score, rank, local/offline note and top scores |
 | [GameOverScreen.vue](GameOverScreen.vue) | `game-over` | Series winner, final standings, host-run rematch via the lobby |

@@ -1,6 +1,13 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import {
+  DEFAULT_DECIMAL_PLACES,
+  MAX_DECIMAL_PLACES,
+  decimalPlaces,
+  resetDecimalPlaces,
+} from '../app/displayPrecision'
 import { fittedFontSize, formatPercent, formatScore, scoringModeLabel } from '../app/labels'
+import { toDecimal } from '../engine/decimal'
 import { formatNumber, type ScoreBreakdown } from '../engine/math'
 import type { ConstantInfo } from '../engine/constants'
 import type { SolutionScoringMode } from '../engine/types'
@@ -8,6 +15,8 @@ import type { SolutionScoringMode } from '../engine/types'
 const props = defineProps<{
   roundNumber: number
   target: number
+  /** Canonical target string; constants carry more digits than `target`. */
+  targetExact?: string | null
   /** Named famous constant behind the target, when the table deals one. */
   constant?: ConstantInfo | null
   approximationPercent: number
@@ -64,7 +73,8 @@ function useTweenedNumber(source: () => number, duration = 380) {
   return shown
 }
 
-const targetText = computed(() => formatNumber(props.target))
+const exactTarget = computed(() => props.targetExact ?? String(props.target))
+const targetText = computed(() => formatNumber(exactTarget.value, decimalPlaces.value))
 const targetRef = ref<HTMLElement | null>(null)
 
 /**
@@ -103,11 +113,13 @@ const shownAccuracy = useTweenedNumber(() => accuracy.value, 460)
 
 const meterWidth = computed(() => `${Math.max(0, Math.min(100, accuracy.value))}%`)
 const rangeLabel = computed(() => {
-  if (props.approximationPercent > 0 && props.target !== 0) {
-    const spread = (Math.abs(props.target) * props.approximationPercent) / 100
+  const target = toDecimal(exactTarget.value)
+  if (props.approximationPercent > 0 && !target.isZero()) {
+    const spread = target.abs().mul(props.approximationPercent).div(100)
     return `±${props.approximationPercent}% · ${formatNumber(
-      props.target - spread
-    )}–${formatNumber(props.target + spread)}`
+      target.minus(spread),
+      decimalPlaces.value
+    )}–${formatNumber(target.add(spread), decimalPlaces.value)}`
   }
   return 'EXACT MATCH · 0% ERROR'
 })
@@ -187,6 +199,41 @@ onBeforeUnmount(() => {
         <span class="blind-card__constant-desc">{{ constant.description }}</span>
       </div>
       <div class="blind-card__range">{{ rangeLabel }}</div>
+    </div>
+
+    <!-- Display precision: the engine always carries full precision, this
+         reveals as much of it as the player wants to inspect. -->
+    <div class="precision-panel" data-testid="precision-panel">
+      <div class="precision-panel__head">
+        <span class="precision-panel__title">DECIMALS</span>
+        <span class="precision-panel__value" data-testid="precision-value">
+          {{ decimalPlaces >= MAX_DECIMAL_PLACES ? 'ALL 32' : decimalPlaces }}
+        </span>
+      </div>
+      <input
+        v-model.number="decimalPlaces"
+        class="precision-slider"
+        data-testid="decimal-slider"
+        type="range"
+        min="0"
+        :max="MAX_DECIMAL_PLACES"
+        step="1"
+        aria-label="Decimal places shown"
+      />
+      <div class="precision-panel__scale">
+        <span>0</span>
+        <button
+          v-if="decimalPlaces !== DEFAULT_DECIMAL_PLACES"
+          type="button"
+          class="precision-panel__reset"
+          data-testid="reset-decimals"
+          @click="resetDecimalPlaces"
+        >
+          {{ DEFAULT_DECIMAL_PLACES }} DEFAULT
+        </button>
+        <span v-else class="precision-panel__default">DEFAULT</span>
+        <span>32</span>
+      </div>
     </div>
 
     <!-- Accuracy readout plus an itemised breakdown of the solution's cost -->
@@ -424,6 +471,119 @@ onBeforeUnmount(() => {
   line-height: 1.15;
   text-align: center;
   color: var(--ink-cream);
+}
+
+/* ---------------- Display precision ---------------- */
+.precision-panel {
+  background: #13111c;
+  border: 3px solid #3a3550;
+  outline: 3px solid #09080f;
+  box-shadow:
+    inset 0 2px 0 rgba(255, 255, 255, 0.08),
+    0 4px 0 #09080f;
+  padding: 8px 10px 7px;
+}
+
+.precision-panel__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.precision-panel__title {
+  font-family: var(--font-pixel);
+  font-size: 0.56rem;
+  letter-spacing: 0.22em;
+  color: var(--ink-muted);
+}
+
+.precision-panel__value {
+  min-width: 54px;
+  padding: 3px 5px 2px;
+  border: 2px solid #09080f;
+  background: var(--gold);
+  color: #241703;
+  font-family: var(--font-pixel);
+  font-size: 0.54rem;
+  letter-spacing: 0.08em;
+  text-align: center;
+  box-shadow: inset 0 -2px 0 rgba(0, 0, 0, 0.24);
+}
+
+.precision-slider {
+  display: block;
+  width: 100%;
+  height: 12px;
+  appearance: none;
+  -webkit-appearance: none;
+  background: linear-gradient(90deg, #2d5a46 0%, #4f8f70 100%);
+  border: 2px solid #09080f;
+  box-shadow: inset 0 2px 0 rgba(0, 0, 0, 0.45);
+  cursor: pointer;
+}
+
+.precision-slider:focus-visible {
+  outline: 2px solid var(--gold-bright);
+  outline-offset: 3px;
+}
+
+.precision-slider::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 15px;
+  height: 20px;
+  margin-top: -6px;
+  background: var(--gold-bright);
+  border: 2px solid #09080f;
+  box-shadow:
+    inset 0 -4px 0 rgba(0, 0, 0, 0.25),
+    0 2px 0 #09080f;
+  cursor: grab;
+}
+
+.precision-slider::-moz-range-thumb {
+  width: 15px;
+  height: 20px;
+  border: 2px solid #09080f;
+  border-radius: 0;
+  background: var(--gold-bright);
+  box-shadow:
+    inset 0 -4px 0 rgba(0, 0, 0, 0.25),
+    0 2px 0 #09080f;
+  cursor: grab;
+}
+
+.precision-panel__scale {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 3px;
+  font-family: var(--font-pixel);
+  font-size: 0.46rem;
+  letter-spacing: 0.08em;
+  color: var(--ink-muted);
+}
+
+.precision-panel__default {
+  opacity: 0.65;
+}
+
+.precision-panel__reset {
+  padding: 2px 4px 1px;
+  border: 1px solid rgba(255, 190, 11, 0.4);
+  background: transparent;
+  color: var(--gold-bright);
+  font: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+}
+
+.precision-panel__reset:hover,
+.precision-panel__reset:focus-visible {
+  background: rgba(255, 190, 11, 0.12);
+  outline: none;
 }
 
 /* ---------------- Score cluster ---------------- */

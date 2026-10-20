@@ -11,6 +11,7 @@ import {
 } from './room'
 import type { ClientMessage, RoomState } from './protocol'
 import { createCard } from '../engine/deck'
+import { applyBinaryOperator } from '../engine/math'
 import type { Card, ExprNode, GameSettings } from '../engine/types'
 
 function seat(room: RoomState, id: string, name: string): void {
@@ -161,6 +162,48 @@ describe('multiplayer room — seating and lobby', () => {
       },
     })
     expect(room.settings.allowedOperators.concat).toBe(true)
+  })
+
+  it('clamps bind toggles, requirements and the shared cap', () => {
+    const room = createRoomState('binds')
+    seat(room, 'p1', 'Host')
+
+    const wild = {
+      ...room.settings,
+      binds: {
+        dragon: { enabled: 'yes', required: 99 },
+        rook: { enabled: true, required: 1 },
+        maxBinds: 50,
+      },
+    } as unknown as GameSettings
+    expect(sanitizeSettings(wild, room.settings).binds).toEqual({
+      dragon: { enabled: false, required: 6 },
+      rook: { enabled: true, required: 2 },
+      maxBinds: 6,
+    })
+    expect(
+      sanitizeSettings(
+        { ...room.settings, binds: { ...room.settings.binds, maxBinds: -1 } },
+        room.settings
+      ).binds.maxBinds
+    ).toBe(0)
+
+    handleClientMessage(room, 'p1', {
+      t: 'update-settings',
+      settings: {
+        ...room.settings,
+        binds: {
+          dragon: { enabled: true, required: 4 },
+          rook: { enabled: false, required: 3 },
+          maxBinds: 2,
+        },
+      },
+    })
+    expect(room.settings.binds).toEqual({
+      dragon: { enabled: true, required: 4 },
+      rook: { enabled: false, required: 3 },
+      maxBinds: 2,
+    })
   })
 
   it('deals a constant target, records which constant, and sanitises the choice', () => {
@@ -329,6 +372,99 @@ describe('multiplayer room — rounds', () => {
     ).toBeUndefined()
     expect(room.round?.number).toBe(2)
     expect(room.round?.target).toBe(84)
+  })
+
+  it('keeps every digit of a high-precision manual target', () => {
+    const room = createRoomState('precise')
+    seat(room, 'p1', 'Host')
+    handleClientMessage(room, 'p1', {
+      t: 'update-settings',
+      settings: { ...room.settings, targetPreset: 'manual' },
+    })
+
+    expect(
+      handleClientMessage(room, 'p1', { t: 'start-match', target: 'not a number' }, 1_000)
+        .error?.code
+    ).toBe('target-required')
+
+    const exact = '3.1415926535897932384626433832795'
+    expect(
+      handleClientMessage(room, 'p1', { t: 'start-match', target: exact }, 1_000).error
+    ).toBeUndefined()
+    expect(room.round?.targetExact).toBe(exact)
+    expect(room.round?.target).toBe(Number(exact))
+  })
+
+  it('accepts a board that matches the full digits of a manual target', () => {
+    const room = createRoomState('precise-board')
+    seat(room, 'p1', 'Host')
+    handleClientMessage(room, 'p1', {
+      t: 'update-settings',
+      settings: { ...room.settings, targetPreset: 'manual', approximationPercent: 0 },
+    })
+
+    const third = applyBinaryOperator('div', 1, 3)
+    expect(handleClientMessage(room, 'p1', { t: 'start-match', target: third.exactValue }, 1_000).error)
+      .toBeUndefined()
+
+    const hand = [
+      createCard(1, 'clubs', 'precise-1'),
+      createCard(3, 'hearts', 'precise-3'),
+      createCard(2, 'spades', 'precise-2a'),
+      createCard(2, 'diamonds', 'precise-2b'),
+    ]
+    room.round!.hand = hand
+    const leaf = (card: Card): ExprNode => ({
+      kind: 'card',
+      id: `leaf-${card.id}`,
+      card,
+      value: card.value,
+    })
+    const expression: ExprNode = {
+      kind: 'binary',
+      id: 'precise-sum',
+      operator: 'add',
+      left: {
+        kind: 'binary',
+        id: 'precise-third',
+        operator: 'div',
+        left: leaf(hand[0]!),
+        right: leaf(hand[1]!),
+        value: third.value,
+        headerText: '',
+      },
+      right: {
+        kind: 'binary',
+        id: 'precise-zero',
+        operator: 'sub',
+        left: leaf(hand[2]!),
+        right: leaf(hand[3]!),
+        value: 0,
+        headerText: '',
+      },
+      value: third.value,
+      headerText: '',
+    }
+
+    const result = handleClientMessage(
+      room,
+      'p1',
+      {
+        t: 'submit',
+        solution: {
+          equation: '1 ÷ 3 + 2 - 2 = 0.333…',
+          lhs: '1 ÷ 3 + 2 - 2',
+          finalValue: third.value,
+          score: 0,
+          errorPercent: 0,
+          workspaceIndex: 1,
+          expression,
+        },
+      },
+      2_000
+    )
+    expect(result.error).toBeUndefined()
+    expect(room.round?.solutions[0]?.finalValueExact).toBe(third.exactValue)
   })
 
   it('gives timed modes a deadline the server can expire', () => {
@@ -653,6 +789,7 @@ describe('multiplayer room — rounds', () => {
     const hand = room.round!.hand
     const board = addTree(hand)
     room.round!.target = board.value
+    room.round!.targetExact = String(board.value)
 
     const result = handleClientMessage(
       room,
@@ -682,6 +819,83 @@ describe('multiplayer room — rounds', () => {
     expect(solution.finalValue).toBe(board.value)
   })
 
+  it('accepts a locked bind board and scores its product for free', () => {
+    const room = createRoomState('binds')
+    seat(room, 'p1', 'Host')
+    room.settings.mode = 'best-1m'
+    room.settings.binds = {
+      dragon: { enabled: true, required: 3 },
+      rook: { enabled: false, required: 2 },
+      maxBinds: 1,
+    }
+    startMatch(room)
+
+    const hand = [
+      createCard(1, 'clubs', 'bind-1'),
+      createCard(2, 'hearts', 'bind-2'),
+      createCard(3, 'spades', 'bind-3'),
+    ]
+    room.round!.hand = hand
+    room.round!.target = 6
+    room.round!.targetExact = '6'
+    const bind: ExprNode = {
+      kind: 'bind',
+      id: 'bind-dragon-bind-1',
+      bind: 'dragon',
+      cards: hand.map((card) => ({
+        kind: 'card',
+        id: `leaf-${card.id}`,
+        card,
+        value: card.value,
+      })),
+      value: 6,
+      headerText: '1 × 2 × 3 = 6',
+    }
+
+    const accepted = handleClientMessage(
+      room,
+      'p1',
+      {
+        t: 'submit',
+        solution: {
+          equation: 'claimed',
+          lhs: 'claimed',
+          finalValue: 6,
+          score: 0,
+          errorPercent: 0,
+          workspaceIndex: 1,
+          expression: bind,
+        },
+      },
+      2_000
+    )
+    expect(accepted.error).toBeUndefined()
+    expect(room.round!.solutions[0]!.score).toBe(0)
+    expect(room.round!.solutions[0]!.lhs).toBe('1 × 2 × 3')
+
+    // The same cards cannot be submitted as loose leaves after the deal fused
+    // them; that would dodge the forced product.
+    const split = addTree(hand)
+    const rejected = handleClientMessage(
+      room,
+      'p1',
+      {
+        t: 'submit',
+        solution: {
+          equation: split.value.toString(),
+          lhs: '1 + 2 + 3',
+          finalValue: split.value,
+          score: 20,
+          errorPercent: 0,
+          workspaceIndex: 1,
+          expression: split,
+        },
+      },
+      2_100
+    )
+    expect(rejected.error?.code).toBe('bad-message')
+  })
+
   it('prices forbidden moves from the host rules on submitted boards', () => {
     const priceOfOneToPower = (patch: Partial<GameSettings>): number => {
       const room = createRoomState('test')
@@ -694,6 +908,7 @@ describe('multiplayer room — rounds', () => {
       const five = createCard(5, 'hearts', 'forbidden-five')
       room.round!.hand = [one, five]
       room.round!.target = 1
+      room.round!.targetExact = '1'
       const board: ExprNode = {
         kind: 'binary',
         id: 'pow-one',
@@ -741,6 +956,7 @@ describe('multiplayer room — rounds', () => {
 
     const pair = addTree(room.round!.hand.slice(0, 2))
     room.round!.target = pair.value
+    room.round!.targetExact = String(pair.value)
 
     const result = handleClientMessage(
       room,

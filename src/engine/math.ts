@@ -1,3 +1,25 @@
+import type { Decimal } from 'decimal.js'
+import {
+  DEFAULT_DECIMAL_PLACES,
+  D,
+  GAMMA_MIN_VALUE_EXACT,
+  GAMMA_MIN_X_EXACT,
+  decimalCosDegrees,
+  decimalFactorial,
+  decimalGamma,
+  decimalInverseGamma,
+  decimalIsFinite,
+  decimalIsSafeInteger,
+  decimalSinDegrees,
+  decimalTanDegrees,
+  decimalToNumber,
+  formatNumber as formatDecimalNumber,
+  normalizeDecimal,
+  targetEpsilon,
+  toDecimal,
+  wholeDecimal,
+  type NumericInput,
+} from './decimal'
 import type {
   AllowedOperatorsConfig,
   BinaryOperator,
@@ -345,34 +367,20 @@ export function isUnaryOperator(op: OperatorId): op is UnaryOperator {
   )
 }
 
-const LANCZOS_G = 7
-const LANCZOS_COEFFS = [
-  0.99999999999980993,
-  676.5203681218851,
-  -1259.1392167224028,
-  771.32342877765313,
-  -176.61502916214059,
-  12.507343278686905,
-  -0.13857109526572012,
-  9.9843695780195716e-6,
-  1.5056327351493116e-7,
-]
-
 const EPSILON = 1e-11
 /** Doubles carry ~16 significant decimal digits; keep all of them when snapping noise. */
 const SNAPPED_SIGNIFICANT_DIGITS = 16
-/** Scientific notation keeps 15 significant digits (14 after the leading one). */
-const SCIENTIFIC_DECIMALS = 14
 
+/**
+ * Compatibility helper for the old double-based API. Engine evaluation no
+ * longer calls this, so it only cleans caller-supplied numbers.
+ */
 export function cleanFloat(n: number): number {
   if (!Number.isFinite(n)) return n
   const rounded = Math.round(n)
   if (Math.abs(n - rounded) < EPSILON) {
     return Object.is(rounded, -0) ? 0 : rounded
   }
-  // Snap away double-precision noise without throwing away real precision.
-  // Rounding to a fixed number of decimal places (the old 9) made small values
-  // coarser than the doubles underneath them; significant digits do not.
   const snapped = Number(n.toPrecision(SNAPPED_SIGNIFICANT_DIGITS))
   if (Number.isFinite(snapped) && Math.abs(n - snapped) < EPSILON) {
     return Object.is(snapped, -0) ? 0 : snapped
@@ -380,70 +388,39 @@ export function cleanFloat(n: number): number {
   return Object.is(n, -0) ? 0 : n
 }
 
-function formatScientific(n: number): string {
-  const [mantissa, exponent] = n.toExponential(SCIENTIFIC_DECIMALS).split('e')
-  return `${Number(mantissa)}e${Number(exponent)}`
+/** Display formatting; defaults to five decimal places from the Decimal engine. */
+export function formatNumber(value: NumericInput, decimalPlaces = DEFAULT_DECIMAL_PLACES): string {
+  return formatDecimalNumber(value, decimalPlaces)
 }
 
-export function formatNumber(n: number): string {
-  if (!Number.isFinite(n)) return 'Undefined'
-  const clean = cleanFloat(n)
-  if (Number.isInteger(clean)) {
-    return String(clean)
-  }
-  const abs = Math.abs(clean)
-  if (abs >= 1e7 || abs < 1e-4) {
-    return formatScientific(clean)
-  }
-  return String(clean)
+/** Canonical exact value of a node, tolerating older trees without `exactValue`. */
+export function nodeExactValue(node: ExprNode): string {
+  if (typeof node.exactValue === 'string') return node.exactValue
+  return Number.isFinite(node.value) ? String(node.value) : 'NaN'
 }
 
+export function formatNodeValue(
+  node: ExprNode,
+  decimalPlaces = DEFAULT_DECIMAL_PLACES
+): string {
+  return formatNumber(nodeExactValue(node), decimalPlaces)
+}
+
+/** Gamma and factorial keep the historical number API, computed at 50 digits. */
 export function realGamma(z: number): number | null {
-  if (!Number.isFinite(z)) return null
-  // Poles at non-positive integers: 0, -1, -2, ...
-  if (z <= 0 && Math.abs(z - Math.round(z)) < 1e-9) {
-    return null
-  }
-  // Exact small positive integers: Gamma(n) = (n - 1)!
-  const rounded = Math.round(z)
-  if (rounded >= 1 && rounded <= 21 && Math.abs(z - rounded) < 1e-9) {
-    let prod = 1
-    for (let i = 1; i < rounded; i++) {
-      prod *= i
-    }
-    return prod
-  }
-  if (z > 171.6) {
-    return null // Overflows double precision
-  }
-  if (z < 0.5) {
-    const sinTerm = Math.sin(Math.PI * z)
-    if (Math.abs(sinTerm) < 1e-12) return null
-    const reflected = realGamma(1 - z)
-    if (reflected === null) return null
-    const res = Math.PI / (sinTerm * reflected)
-    return Number.isFinite(res) ? cleanFloat(res) : null
-  }
-
-  const shifted = z - 1
-  let x = LANCZOS_COEFFS[0]!
-  for (let i = 1; i < LANCZOS_COEFFS.length; i++) {
-    x += LANCZOS_COEFFS[i]! / (shifted + i)
-  }
-  const t = shifted + LANCZOS_G + 0.5
-  const result = Math.sqrt(2 * Math.PI) * Math.pow(t, shifted + 0.5) * Math.exp(-t) * x
-  if (!Number.isFinite(result)) return null
-  return cleanFloat(result)
+  const result = decimalGamma(z)
+  return result ? decimalToNumber(result) : null
 }
 
 export function realFactorial(x: number): number | null {
   if (!Number.isFinite(x)) return null
-  return realGamma(x + 1)
+  const result = decimalFactorial(x)
+  return result ? decimalToNumber(result) : null
 }
 
 /** Where Γ bottoms out on the positive axis: Γ(1.46163214…) ≈ 0.88560319. */
-export const GAMMA_MIN_X = 1.4616321449683623
-export const GAMMA_MIN_VALUE = 0.8856031944108887
+export const GAMMA_MIN_X = decimalToNumber(GAMMA_MIN_X_EXACT)
+export const GAMMA_MIN_VALUE = decimalToNumber(GAMMA_MIN_VALUE_EXACT)
 
 /**
  * Inverse gamma: the x with Γ(x) = y.
@@ -455,50 +432,18 @@ export const GAMMA_MIN_VALUE = 0.8856031944108887
  * inputs, have no solution on that branch.
  */
 export function realInverseGamma(y: number): number | null {
-  if (!Number.isFinite(y) || y <= 0) return null
-  if (y < GAMMA_MIN_VALUE - 1e-12) return null
-  if (y <= GAMMA_MIN_VALUE + 1e-12) return cleanFloat(GAMMA_MIN_X)
-
-  // Bracket the root on the increasing half, widening until Γ overtakes y.
-  let lo = GAMMA_MIN_X
-  let hi = GAMMA_MIN_X + 1
-  for (let i = 0; i < 64; i++) {
-    const val = realGamma(hi)
-    // A null here means Γ already overflowed double precision, so it is above y.
-    if (val === null || val >= y) break
-    lo = hi
-    hi = GAMMA_MIN_X + (hi - GAMMA_MIN_X) * 2
-  }
-
-  // Bisection is slower than Newton but needs no derivative and cannot diverge.
-  for (let i = 0; i < 200; i++) {
-    const mid = (lo + hi) / 2
-    const val = realGamma(mid)
-    if (val === null || val >= y) hi = mid
-    else lo = mid
-    if (hi - lo < 1e-13) break
-  }
-
-  // realGamma snaps arguments within 1e-9 of an integer to the exact value, which
-  // leaves a thin flat band around roots like Γ⁻¹(24) = 5. Prefer the integer
-  // whenever it really solves the equation.
-  const root = (lo + hi) / 2
-  const nearestInt = Math.round(root)
-  if (Math.abs(root - nearestInt) < 1e-6) {
-    const check = realGamma(nearestInt)
-    if (check !== null && Math.abs(check - y) <= Math.abs(y) * 1e-9) return nearestInt
-  }
-  return cleanFloat(root)
+  const result = decimalInverseGamma(y)
+  return result ? decimalToNumber(result) : null
 }
 
 const MAX_COMBINATORICS_INPUT = 1_000
 const MAX_STIRLING_INPUT = 200
 
 /** A whole number close enough to its rounded value, for combinatorial inputs. */
-function wholeNumber(value: number): number | null {
-  if (!Number.isFinite(value)) return null
-  const rounded = Math.round(value)
-  return Math.abs(value - rounded) <= 1e-9 ? rounded : null
+function wholeNumber(value: NumericInput): number | null {
+  const rounded = wholeDecimal(value)
+  if (!rounded || !decimalIsSafeInteger(rounded)) return null
+  return rounded.toNumber()
 }
 
 function safeBigInt(value: bigint): number | null {
@@ -539,235 +484,224 @@ function stirlingSecondBigInt(n: number, k: number): bigint {
 
 export interface EvalResult {
   ok: boolean
+  /** Double mirror for older consumers; `exactValue` is authoritative. */
   value: number
+  exactValue: string
   headerText: string
   error?: string
 }
 
-export function applyUnaryOperator(op: UnaryOperator, x: number): EvalResult {
-  const xStr = formatNumber(x)
+function evalFailure(error: string): EvalResult {
+  return { ok: false, value: NaN, exactValue: 'NaN', headerText: '', error }
+}
+
+function evalSuccess(value: NumericInput, headerText: string): EvalResult {
+  const exact = normalizeDecimal(toDecimal(value))
+  const mirror = decimalToNumber(exact)
+  // The exact string stays authoritative, but a value outside the double range
+  // cannot be shown or compared consistently by older consumers.
+  if (!Number.isFinite(mirror)) return evalFailure('That result is too large to use as a number.')
+  return {
+    ok: true,
+    value: mirror,
+    exactValue: exact.toString(),
+    headerText,
+  }
+}
+
+/** Rebuilds an operator header at any display width from the exact operands. */
+export function formatUnaryHeader(
+  op: UnaryOperator,
+  x: NumericInput,
+  value: NumericInput,
+  decimalPlaces = DEFAULT_DECIMAL_PLACES
+): string {
+  const xStr = formatNumber(x, decimalPlaces)
+  const val = formatNumber(value, decimalPlaces)
+  switch (op) {
+    case 'fact':
+      return `${xStr}! = ${val}`
+    case 'gamma':
+      return `Γ(${xStr}) = ${val}`
+    case 'invgamma':
+      return `Γ⁻¹(${xStr}) = ${val}`
+    case 'sin':
+      return `sin(${xStr} deg) = ${val}`
+    case 'cos':
+      return `cos(${xStr} deg) = ${val}`
+    case 'tan':
+      return `tan(${xStr} deg) = ${val}`
+    case 'inv':
+      return `1 / ${xStr} = ${val}`
+    case 'bitnot':
+      return `NOT(${xStr}) = ${val}`
+    case 'exp':
+      return `e^(${xStr}) = ${val}`
+    case 'ln':
+      return `ln(${xStr}) = ${val}`
+    case 'dfact':
+      return `${xStr}!! = ${val}`
+    case 'subfact':
+      return `!${xStr} = ${val}`
+  }
+}
+
+/** Rebuilds a binary node's header at any display width. */
+export function formatBinaryHeader(
+  op: BinaryOperator,
+  a: NumericInput,
+  b: NumericInput,
+  value: NumericInput,
+  decimalPlaces = DEFAULT_DECIMAL_PLACES
+): string {
+  const aStr = formatNumber(a, decimalPlaces)
+  const bStr = formatNumber(b, decimalPlaces)
+  const val = formatNumber(value, decimalPlaces)
+  switch (op) {
+    case 'add':
+      return `${aStr} + ${bStr} = ${val}`
+    case 'sub':
+      return `${aStr} - ${bStr} = ${val}`
+    case 'mult':
+      return `${aStr} × ${bStr} = ${val}`
+    case 'div':
+      return `${aStr} ÷ ${bStr} = ${val}`
+    case 'pow':
+      return `${aStr} ^ ${bStr} = ${val}`
+    case 'root':
+      return `${aStr} root ${bStr} = ${val}`
+    case 'lshift':
+      return `LSHIFT(${aStr}, ${bStr}) = ${val}`
+    case 'bitand':
+      return `AND(${aStr}, ${bStr}) = ${val}`
+    case 'bitor':
+      return `OR(${aStr}, ${bStr}) = ${val}`
+    case 'bitxor':
+      return `XOR(${aStr}, ${bStr}) = ${val}`
+    case 'log':
+      return `log(${aStr}, ${bStr}) = ${val}`
+    case 'comb':
+      return `COMB(${aStr}, ${bStr}) = ${val}`
+    case 'perm':
+      return `PERM(${aStr}, ${bStr}) = ${val}`
+    case 'stirling2':
+      return `STR2(${aStr}, ${bStr}) = ${val}`
+    case 'concat':
+      return `${aStr} || ${bStr} = ${val}`
+  }
+}
+
+/** Header text for any board node, recalculated for the current display width. */
+export function formatNodeHeader(
+  node: ExprNode,
+  decimalPlaces = DEFAULT_DECIMAL_PLACES
+): string {
+  if (node.kind === 'card') return String(node.card.value)
+  if (node.kind === 'bind') {
+    return `${node.cards.map((card) => card.card.value).join(' × ')} = ${formatNumber(
+      nodeExactValue(node),
+      decimalPlaces
+    )}`
+  }
+  if (node.kind === 'unary') {
+    return formatUnaryHeader(
+      node.operator,
+      nodeExactValue(node.operand),
+      nodeExactValue(node),
+      decimalPlaces
+    )
+  }
+  return formatBinaryHeader(
+    node.operator,
+    nodeExactValue(node.left),
+    nodeExactValue(node.right),
+    nodeExactValue(node),
+    decimalPlaces
+  )
+}
+
+export function applyUnaryOperator(
+  op: UnaryOperator,
+  x: NumericInput
+): EvalResult {
+  const xd = toDecimal(x)
+  const xStr = formatNumber(xd)
   switch (op) {
     case 'fact': {
-      const val = realFactorial(x)
-      if (val === null) {
-        return {
-          ok: false,
-          value: NaN,
-          headerText: '',
-          error: `Factorial of ${xStr} is undefined or overflows.`,
-        }
-      }
-      return {
-        ok: true,
-        value: val,
-        headerText: `${xStr}! = ${formatNumber(val)}`,
-      }
+      const val = decimalFactorial(xd)
+      if (val === null) return evalFailure(`Factorial of ${xStr} is undefined or overflows.`)
+      return evalSuccess(val, formatUnaryHeader(op, xd, val))
     }
     case 'gamma': {
-      const val = realGamma(x)
-      if (val === null) {
-        return {
-          ok: false,
-          value: NaN,
-          headerText: '',
-          error: `Γ(${xStr}) is undefined or overflows.`,
-        }
-      }
-      return {
-        ok: true,
-        value: val,
-        headerText: `Γ(${xStr}) = ${formatNumber(val)}`,
-      }
+      const val = decimalGamma(xd)
+      if (val === null) return evalFailure(`Γ(${xStr}) is undefined or overflows.`)
+      return evalSuccess(val, formatUnaryHeader(op, xd, val))
     }
     case 'invgamma': {
-      const val = realInverseGamma(x)
-      if (val === null) {
-        return {
-          ok: false,
-          value: NaN,
-          headerText: '',
-          error: `Γ⁻¹(${xStr}) is undefined.`,
-        }
-      }
-      return {
-        ok: true,
-        value: val,
-        headerText: `Γ⁻¹(${xStr}) = ${formatNumber(val)}`,
-      }
+      const val = decimalInverseGamma(xd)
+      if (val === null) return evalFailure(`Γ⁻¹(${xStr}) is undefined.`)
+      return evalSuccess(val, formatUnaryHeader(op, xd, val))
     }
     case 'sin': {
-      const rad = (x * Math.PI) / 180
-      const val = cleanFloat(Math.sin(rad))
-      return {
-        ok: true,
-        value: val,
-        headerText: `sin(${xStr} deg) = ${formatNumber(val)}`,
-      }
+      const val = decimalSinDegrees(xd)
+      return evalSuccess(val, formatUnaryHeader(op, xd, val))
     }
     case 'cos': {
-      const rad = (x * Math.PI) / 180
-      const val = cleanFloat(Math.cos(rad))
-      return {
-        ok: true,
-        value: val,
-        headerText: `cos(${xStr} deg) = ${formatNumber(val)}`,
-      }
+      const val = decimalCosDegrees(xd)
+      return evalSuccess(val, formatUnaryHeader(op, xd, val))
     }
     case 'tan': {
-      // Check odd multiples of 90 deg where cos(x) = 0
-      const mod180 = ((x % 180) + 180) % 180
-      if (Math.abs(mod180 - 90) < 1e-9) {
-        return {
-          ok: false,
-          value: NaN,
-          headerText: '',
-          error: `tan(${xStr} deg) is undefined.`,
-        }
+      const val = decimalTanDegrees(xd)
+      if (val === null || !decimalIsFinite(val)) {
+        return evalFailure(`tan(${xStr} deg) is undefined.`)
       }
-      const rad = (x * Math.PI) / 180
-      const val = cleanFloat(Math.tan(rad))
-      if (!Number.isFinite(val)) {
-        return {
-          ok: false,
-          value: NaN,
-          headerText: '',
-          error: `tan(${xStr} deg) is undefined.`,
-        }
-      }
-      return {
-        ok: true,
-        value: val,
-        headerText: `tan(${xStr} deg) = ${formatNumber(val)}`,
-      }
+      return evalSuccess(val, formatUnaryHeader(op, xd, val))
     }
     case 'inv': {
-      if (Math.abs(x) < 1e-12) {
-        return {
-          ok: false,
-          value: NaN,
-          headerText: '',
-          error: 'Cannot take the inverse of 0.',
-        }
-      }
-      const val = cleanFloat(1 / x)
-      return {
-        ok: true,
-        value: val,
-        headerText: `1 / ${xStr} = ${formatNumber(val)}`,
-      }
+      if (xd.isZero()) return evalFailure('Cannot take the inverse of 0.')
+      const val = D(1).div(xd)
+      return evalSuccess(val, formatUnaryHeader(op, xd, val))
     }
     case 'bitnot': {
-      if (!Number.isSafeInteger(x)) {
-        return {
-          ok: false,
-          value: NaN,
-          headerText: '',
-          error: 'NOT needs a whole number.',
-        }
-      }
-      const val = Number(~BigInt(x))
-      if (!Number.isSafeInteger(val)) {
-        return {
-          ok: false,
-          value: NaN,
-          headerText: '',
-          error: `NOT(${xStr}) is too large.`,
-        }
-      }
-      return {
-        ok: true,
-        value: val,
-        headerText: `NOT(${xStr}) = ${formatNumber(val)}`,
-      }
+      const whole = wholeDecimal(xd)
+      if (!whole || !decimalIsSafeInteger(whole)) return evalFailure('NOT needs a whole number.')
+      const raw = Number(~BigInt(whole.toFixed(0)))
+      if (!Number.isSafeInteger(raw)) return evalFailure(`NOT(${xStr}) is too large.`)
+      return evalSuccess(raw, formatUnaryHeader(op, xd, raw))
     }
     case 'exp': {
-      const raw = Math.exp(x)
-      if (!Number.isFinite(raw)) {
-        return {
-          ok: false,
-          value: NaN,
-          headerText: '',
-          error: `e^(${xStr}) is undefined or overflows.`,
-        }
-      }
-      const val = cleanFloat(raw)
-      return {
-        ok: true,
-        value: val,
-        headerText: `e^(${xStr}) = ${formatNumber(val)}`,
-      }
+      const val = xd.exp()
+      if (!decimalIsFinite(val)) return evalFailure(`e^(${xStr}) is undefined or overflows.`)
+      return evalSuccess(val, formatUnaryHeader(op, xd, val))
     }
     case 'ln': {
-      if (!(x > 0)) {
-        return {
-          ok: false,
-          value: NaN,
-          headerText: '',
-          error: `ln(${xStr}) is undefined for values at or below 0.`,
-        }
+      if (!xd.gt(0)) {
+        return evalFailure(`ln(${xStr}) is undefined for values at or below 0.`)
       }
-      const val = cleanFloat(Math.log(x))
-      return {
-        ok: true,
-        value: val,
-        headerText: `ln(${xStr}) = ${formatNumber(val)}`,
-      }
+      const val = xd.ln()
+      return evalSuccess(val, formatUnaryHeader(op, xd, val))
     }
     case 'dfact': {
-      const n = wholeNumber(x)
-      if (n === null || n < 0) {
-        return {
-          ok: false,
-          value: NaN,
-          headerText: '',
-          error: 'Double factorial needs a whole number, zero or higher.',
-        }
+      const n = wholeDecimal(xd)
+      if (!n || n.isNeg()) {
+        return evalFailure('Double factorial needs a whole number, zero or higher.')
       }
-      let val = 1
-      for (let i = n; i > 1; i -= 2) {
-        val *= i
-        if (!Number.isSafeInteger(val)) {
-          return {
-            ok: false,
-            value: NaN,
-            headerText: '',
-            error: `${xStr}!! is too large to use as a number.`,
-          }
-        }
-      }
-      return {
-        ok: true,
-        value: val,
-        headerText: `${xStr}!! = ${formatNumber(val)}`,
-      }
+      if (n.gt(300)) return evalFailure(`${xStr}!! is too large to use as a number.`)
+      let val = D(1)
+      for (let i = n.toNumber(); i > 1; i -= 2) val = val.mul(i)
+      return evalSuccess(val, formatUnaryHeader(op, xd, val))
     }
     case 'subfact': {
-      const n = wholeNumber(x)
-      if (n === null || n < 0) {
-        return {
-          ok: false,
-          value: NaN,
-          headerText: '',
-          error: 'Subfactorial needs a whole number, zero or higher.',
-        }
+      const n = wholeDecimal(xd)
+      if (!n || n.isNeg()) {
+        return evalFailure('Subfactorial needs a whole number, zero or higher.')
       }
-      let val = 1
-      for (let i = 1; i <= n; i++) {
-        val = i * val + (i % 2 === 0 ? 1 : -1)
-        if (!Number.isSafeInteger(val)) {
-          return {
-            ok: false,
-            value: NaN,
-            headerText: '',
-            error: `!${xStr} is too large to use as a number.`,
-          }
-        }
+      if (n.gt(170)) return evalFailure(`!${xStr} is too large to use as a number.`)
+      let val = D(1)
+      for (let i = 1; i <= n.toNumber(); i += 1) {
+        val = val.mul(i).add(i % 2 === 0 ? 1 : -1)
       }
-      return {
-        ok: true,
-        value: val,
-        headerText: `!${xStr} = ${formatNumber(val)}`,
-      }
+      return evalSuccess(val, formatUnaryHeader(op, xd, val))
     }
   }
 }
@@ -778,219 +712,134 @@ export function applyUnaryOperator(op: UnaryOperator, x: number): EvalResult {
  */
 function applyBitwiseBinary(
   op: 'bitand' | 'bitor' | 'bitxor',
-  a: number,
-  b: number
+  a: NumericInput,
+  b: NumericInput
 ): EvalResult {
-  const aStr = formatNumber(a)
-  const bStr = formatNumber(b)
-  if (!Number.isSafeInteger(a) || !Number.isSafeInteger(b)) {
-    return {
-      ok: false,
-      value: NaN,
-      headerText: '',
-      error: 'Bitwise operators need whole numbers.',
-    }
+  const ad = toDecimal(a)
+  const bd = toDecimal(b)
+  const aWhole = wholeDecimal(ad)
+  const bWhole = wholeDecimal(bd)
+  if (!aWhole || !bWhole || !decimalIsSafeInteger(aWhole) || !decimalIsSafeInteger(bWhole)) {
+    return evalFailure('Bitwise operators need whole numbers.')
   }
-  const left = BigInt(a)
-  const right = BigInt(b)
+  const left = BigInt(aWhole.toFixed(0))
+  const right = BigInt(bWhole.toFixed(0))
   const raw = op === 'bitand' ? left & right : op === 'bitor' ? left | right : left ^ right
-  const val = Number(raw)
-  if (!Number.isSafeInteger(val)) {
-    return {
-      ok: false,
-      value: NaN,
-      headerText: '',
-      error: 'That bitwise result is too large.',
-    }
-  }
-  const name = op === 'bitand' ? 'AND' : op === 'bitor' ? 'OR' : 'XOR'
-  return {
-    ok: true,
-    value: val,
-    headerText: `${name}(${aStr}, ${bStr}) = ${formatNumber(val)}`,
-  }
+  const result = Number(raw)
+  if (!Number.isSafeInteger(result)) return evalFailure('That bitwise result is too large.')
+  return evalSuccess(result, formatBinaryHeader(op, ad, bd, result))
 }
 
-export function applyBinaryOperator(op: BinaryOperator, a: number, b: number): EvalResult {
-  const aStr = formatNumber(a)
-  const bStr = formatNumber(b)
+export function applyBinaryOperator(
+  op: BinaryOperator,
+  a: NumericInput,
+  b: NumericInput
+): EvalResult {
+  const ad = toDecimal(a)
+  const bd = toDecimal(b)
+  const aStr = formatNumber(ad)
+  const bStr = formatNumber(bd)
   switch (op) {
     case 'add': {
-      const val = cleanFloat(a + b)
-      return { ok: true, value: val, headerText: `${aStr} + ${bStr} = ${formatNumber(val)}` }
+      const val = ad.add(bd)
+      return evalSuccess(val, formatBinaryHeader(op, ad, bd, val))
     }
     case 'sub': {
-      const val = cleanFloat(a - b)
-      return { ok: true, value: val, headerText: `${aStr} - ${bStr} = ${formatNumber(val)}` }
+      const val = ad.sub(bd)
+      return evalSuccess(val, formatBinaryHeader(op, ad, bd, val))
     }
     case 'mult': {
-      const val = cleanFloat(a * b)
-      return { ok: true, value: val, headerText: `${aStr} × ${bStr} = ${formatNumber(val)}` }
+      const val = ad.mul(bd)
+      return evalSuccess(val, formatBinaryHeader(op, ad, bd, val))
     }
     case 'div': {
-      if (Math.abs(b) < 1e-12) {
-        return {
-          ok: false,
-          value: NaN,
-          headerText: '',
-          error: 'Cannot divide by 0.',
-        }
-      }
-      const val = cleanFloat(a / b)
-      return { ok: true, value: val, headerText: `${aStr} ÷ ${bStr} = ${formatNumber(val)}` }
+      if (bd.isZero()) return evalFailure('Cannot divide by 0.')
+      const val = ad.div(bd)
+      return evalSuccess(val, formatBinaryHeader(op, ad, bd, val))
     }
     case 'pow': {
-      if (Math.abs(a) < 1e-12 && b < 0) {
-        return {
-          ok: false,
-          value: NaN,
-          headerText: '',
-          error: '0 cannot be raised to a negative power.',
-        }
+      if (ad.isZero() && bd.isNeg()) {
+        return evalFailure('0 cannot be raised to a negative power.')
       }
-      const raw = Math.pow(a, b)
-      if (!Number.isFinite(raw) || Number.isNaN(raw)) {
-        return {
-          ok: false,
-          value: NaN,
-          headerText: '',
-          error: `${aStr} ^ ${bStr} is undefined or overflows.`,
-        }
+      let val: Decimal
+      try {
+        val = ad.pow(bd)
+      } catch {
+        return evalFailure(`${aStr} ^ ${bStr} is undefined or overflows.`)
       }
-      const val = cleanFloat(raw)
-      return { ok: true, value: val, headerText: `${aStr} ^ ${bStr} = ${formatNumber(val)}` }
+      if (!decimalIsFinite(val)) {
+        return evalFailure(`${aStr} ^ ${bStr} is undefined or overflows.`)
+      }
+      return evalSuccess(val, formatBinaryHeader(op, ad, bd, val))
     }
     case 'root': {
-      if (Math.abs(b) < 1e-12) {
-        return {
-          ok: false,
-          value: NaN,
-          headerText: '',
-          error: 'Cannot take the 0th root.',
-        }
-      }
-      let raw: number
-      if (a < 0) {
-        const bInt = Math.round(b)
-        if (Math.abs(b - bInt) < 1e-9 && Math.abs(bInt % 2) === 1) {
-          raw = -Math.pow(-a, 1 / bInt)
-        } else {
-          return {
-            ok: false,
-            value: NaN,
-            headerText: '',
-            error: `Real ${bStr}-th root of negative number ${aStr} is undefined.`,
+      if (bd.isZero()) return evalFailure('Cannot take the 0th root.')
+      let val: Decimal
+      try {
+        if (ad.isNeg()) {
+          const bWhole = wholeDecimal(bd)
+          if (!bWhole || !bWhole.isInteger() || bWhole.mod(2).abs().eq(0)) {
+            return evalFailure(
+              `Real ${bStr}-th root of negative number ${aStr} is undefined.`
+            )
           }
+          val = ad.abs().pow(new D(1).div(bWhole)).neg()
+        } else {
+          val = ad.pow(new D(1).div(bd))
         }
-      } else {
-        raw = Math.pow(a, 1 / b)
+      } catch {
+        return evalFailure(`${aStr} root ${bStr} is undefined or overflows.`)
       }
-      if (!Number.isFinite(raw) || Number.isNaN(raw)) {
-        return {
-          ok: false,
-          value: NaN,
-          headerText: '',
-          error: `${aStr} root ${bStr} is undefined or overflows.`,
-        }
+      if (!decimalIsFinite(val)) {
+        return evalFailure(`${aStr} root ${bStr} is undefined or overflows.`)
       }
-      const val = cleanFloat(raw)
-      return {
-        ok: true,
-        value: val,
-        headerText: `${aStr} root ${bStr} = ${formatNumber(val)}`,
-      }
+      return evalSuccess(val, formatBinaryHeader(op, ad, bd, val))
     }
     case 'lshift': {
-      const aInt = Math.round(a)
-      const bInt = Math.round(b)
-      if (Math.abs(a - aInt) > 1e-9 || Math.abs(b - bInt) > 1e-9) {
-        return {
-          ok: false,
-          value: NaN,
-          headerText: '',
-          error: 'Bit shifting requires integer values.',
-        }
+      const aWhole = wholeDecimal(ad)
+      const bWhole = wholeDecimal(bd)
+      if (!aWhole || !bWhole) return evalFailure('Bit shifting requires integer values.')
+      const shift = bWhole.toNumber()
+      if (shift < 0 || shift > 52) {
+        return evalFailure('Shift amount must be between 0 and 52.')
       }
-      if (bInt < 0 || bInt > 52) {
-        return {
-          ok: false,
-          value: NaN,
-          headerText: '',
-          error: 'Shift amount must be between 0 and 52.',
-        }
-      }
-      const val = cleanFloat(aInt * Math.pow(2, bInt))
-      return {
-        ok: true,
-        value: val,
-        headerText: `LSHIFT(${aInt}, ${bInt}) = ${formatNumber(val)}`,
-      }
+      const val = aWhole.mul(new D(2).pow(shift))
+      return evalSuccess(
+        val,
+        formatBinaryHeader(op, aWhole, shift, val)
+      )
     }
     case 'bitand':
     case 'bitor':
     case 'bitxor':
-      return applyBitwiseBinary(op, a, b)
+      return applyBitwiseBinary(op, ad, bd)
     case 'log': {
-      if (a <= 0 || Math.abs(a - 1) < 1e-12 || b <= 0) {
-        return {
-          ok: false,
-          value: NaN,
-          headerText: '',
-          error: 'Log needs a positive base other than 1, and a positive argument.',
-        }
+      if (ad.lte(0) || ad.eq(1) || bd.lte(0)) {
+        return evalFailure('Log needs a positive base other than 1, and a positive argument.')
       }
-      const raw = Math.log(b) / Math.log(a)
-      if (!Number.isFinite(raw)) {
-        return {
-          ok: false,
-          value: NaN,
-          headerText: '',
-          error: 'That logarithm is undefined or overflows.',
-        }
+      const val = bd.ln().div(ad.ln())
+      if (!decimalIsFinite(val)) {
+        return evalFailure('That logarithm is undefined or overflows.')
       }
-      const val = cleanFloat(raw)
-      return {
-        ok: true,
-        value: val,
-        headerText: `log(${aStr}, ${bStr}) = ${formatNumber(val)}`,
-      }
+      return evalSuccess(val, formatBinaryHeader(op, ad, bd, val))
     }
     case 'comb':
     case 'perm':
     case 'stirling2': {
-      const n = wholeNumber(a)
-      const k = wholeNumber(b)
+      const n = wholeNumber(ad)
+      const k = wholeNumber(bd)
       const name = op === 'comb' ? 'COMB' : op === 'perm' ? 'PERM' : 'STR2'
       if (n === null || k === null || n < 0 || k < 0) {
-        return {
-          ok: false,
-          value: NaN,
-          headerText: '',
-          error: `${name} needs two whole numbers, zero or higher.`,
-        }
+        return evalFailure(`${name} needs two whole numbers, zero or higher.`)
       }
       if (op !== 'stirling2' && k > n) {
-        return {
-          ok: false,
-          value: NaN,
-          headerText: '',
-          error: `${name} needs k between 0 and n.`,
-        }
+        return evalFailure(`${name} needs k between 0 and n.`)
       }
       if (op === 'stirling2' && k > n) {
-        return {
-          ok: true,
-          value: 0,
-          headerText: `${name}(${aStr}, ${bStr}) = 0`,
-        }
+        return evalSuccess(0, formatBinaryHeader(op, ad, bd, 0))
       }
       if (n > (op === 'stirling2' ? MAX_STIRLING_INPUT : MAX_COMBINATORICS_INPUT)) {
-        return {
-          ok: false,
-          value: NaN,
-          headerText: '',
-          error: `${name} input is too large to compute exactly.`,
-        }
+        return evalFailure(`${name} input is too large to compute exactly.`)
       }
       const raw =
         op === 'comb'
@@ -1000,46 +849,32 @@ export function applyBinaryOperator(op: BinaryOperator, a: number, b: number): E
             : stirlingSecondBigInt(n, k)
       const val = safeBigInt(raw)
       if (val === null) {
-        return {
-          ok: false,
-          value: NaN,
-          headerText: '',
-          error: `${name}(${aStr}, ${bStr}) is too large to use as a number.`,
-        }
+        return evalFailure(`${name}(${aStr}, ${bStr}) is too large to use as a number.`)
       }
-      return {
-        ok: true,
-        value: val,
-        headerText: `${name}(${aStr}, ${bStr}) = ${formatNumber(val)}`,
-      }
+      return evalSuccess(val, formatBinaryHeader(op, ad, bd, val))
     }
     case 'concat': {
       // Only exact, non-negative integers have an unambiguous digit string;
       // numbers above 2^53 would round, and `String()` would switch to exponent
       // notation, so both sides and the result stay inside the safe range.
-      if (!Number.isSafeInteger(a) || !Number.isSafeInteger(b) || a < 0 || b < 0) {
-        return {
-          ok: false,
-          value: NaN,
-          headerText: '',
-          error: 'Concat needs two whole numbers, zero or higher.',
-        }
+      const aWhole = wholeDecimal(ad)
+      const bWhole = wholeDecimal(bd)
+      if (
+        !aWhole ||
+        !bWhole ||
+        !decimalIsSafeInteger(aWhole) ||
+        !decimalIsSafeInteger(bWhole) ||
+        aWhole.isNeg() ||
+        bWhole.isNeg()
+      ) {
+        return evalFailure('Concat needs two whole numbers, zero or higher.')
       }
-      const digits = `${a}${b}`
+      const digits = `${aWhole.toFixed(0)}${bWhole.toFixed(0)}`
       const val = Number(digits)
       if (!Number.isSafeInteger(val)) {
-        return {
-          ok: false,
-          value: NaN,
-          headerText: '',
-          error: 'That concatenation is too long to use as a number.',
-        }
+        return evalFailure('That concatenation is too long to use as a number.')
       }
-      return {
-        ok: true,
-        value: val,
-        headerText: `${aStr} || ${bStr} = ${formatNumber(val)}`,
-      }
+      return evalSuccess(val, formatBinaryHeader(op, ad, bd, val))
     }
   }
 }
@@ -1052,51 +887,53 @@ export interface TargetCheckResult {
 }
 
 export function checkTargetAcceptance(
-  value: number,
-  target: number,
+  value: NumericInput,
+  target: NumericInput,
   approximationPercent: number
 ): TargetCheckResult {
-  if (!Number.isFinite(value)) {
+  const val = toDecimal(value)
+  const targetValue = toDecimal(target)
+  const targetNumber = decimalToNumber(targetValue)
+  if (!decimalIsFinite(val) || !decimalIsFinite(targetValue)) {
     return {
       acceptable: false,
-      minAcceptable: target,
-      maxAcceptable: target,
+      minAcceptable: targetNumber,
+      maxAcceptable: targetNumber,
       errorPercent: Infinity,
     }
   }
-  const cleanTarget = cleanFloat(target)
-  const cleanVal = cleanFloat(value)
 
-  // Target of 0 just has 0 tolerable error
-  if (Math.abs(cleanTarget) < 1e-12 || approximationPercent <= 0) {
-    const diff = Math.abs(cleanVal - cleanTarget)
-    const acceptable = diff < 1e-7
-    const errorPercent =
-      Math.abs(cleanTarget) < 1e-12
-        ? acceptable
-          ? 0
-          : 100
-        : (diff / Math.abs(cleanTarget)) * 100
+  const diff = val.minus(targetValue).abs()
+  const percent = (difference: Decimal): number =>
+    difference.div(targetValue.abs()).mul(100).toNumber()
+
+  // Target of 0 just has 0 tolerable error. The tolerance is far below display
+  // precision, so a board only reads as exact when the engine really says so.
+  if (targetValue.isZero() || approximationPercent <= 0) {
+    const acceptable = diff.lte(targetEpsilon)
+    const errorPercent = targetValue.isZero()
+      ? acceptable
+        ? 0
+        : 100
+      : percent(diff)
     return {
       acceptable,
-      minAcceptable: cleanTarget,
-      maxAcceptable: cleanTarget,
-      errorPercent: cleanFloat(errorPercent),
+      minAcceptable: targetNumber,
+      maxAcceptable: targetNumber,
+      errorPercent,
     }
   }
 
-  const band = Math.abs(cleanTarget) * (approximationPercent / 100)
-  const minAcceptable = cleanFloat(cleanTarget - band)
-  const maxAcceptable = cleanFloat(cleanTarget + band)
-  const acceptable =
-    cleanVal >= minAcceptable - 1e-7 && cleanVal <= maxAcceptable + 1e-7
-  const errorPercent = (Math.abs(cleanVal - cleanTarget) / Math.abs(cleanTarget)) * 100
+  const band = targetValue.abs().mul(approximationPercent).div(100)
+  const minimum = targetValue.minus(band)
+  const maximum = targetValue.add(band)
+  const acceptable = val.gte(minimum) && val.lte(maximum)
 
   return {
     acceptable,
-    minAcceptable,
-    maxAcceptable,
-    errorPercent: cleanFloat(errorPercent),
+    minAcceptable: decimalToNumber(minimum),
+    maxAcceptable: decimalToNumber(maximum),
+    errorPercent: percent(diff),
   }
 }
 
@@ -1152,7 +989,11 @@ function isFactorialInvgammaPair(outer: UnaryOperator, inner: UnaryOperator): bo
 
 /** A power whose base evaluates to 1, however that 1 was made. */
 function isOneToPower(operator: BinaryOperator, base: ExprNode): boolean {
-  return operator === 'pow' && base.value === 1
+  if (operator !== 'pow') return false
+  // Decimal division keeps guard digits, so (1 / 3) * 3 lands one ulp below 1.
+  // Use the same exactness tolerance as target acceptance so the house rule
+  // still recognises a base the player legitimately made equal to 1.
+  return toDecimal(nodeExactValue(base)).minus(1).abs().lte(targetEpsilon)
 }
 
 /**
@@ -1204,6 +1045,10 @@ export function calculateScoreBreakdown(
 
   function walk(curr: ExprNode, unaryDepthAbove: number): void {
     if (curr.kind === 'card') {
+      return
+    }
+    // A bind is a free opening group: its product costs no operator points.
+    if (curr.kind === 'bind') {
       return
     }
     if (curr.kind === 'binary') {
@@ -1375,6 +1220,10 @@ export function formatExpressionLhs(node: ExprNode): string {
     return String(node.card.value)
   }
 
+  if (node.kind === 'bind') {
+    return node.cards.map((card) => String(card.card.value)).join(' × ')
+  }
+
   if (node.kind === 'unary') {
     const inner = formatExpressionLhs(node.operand)
     const needsParens = node.operand.kind !== 'card'
@@ -1409,6 +1258,9 @@ export function formatExpressionLhs(node: ExprNode): string {
   // Binary
   const leftStr = formatExpressionLhs(node.left)
   const rightStr = formatExpressionLhs(node.right)
+  const groupLike = (child: ExprNode): boolean => child.kind === 'binary' || child.kind === 'bind'
+  const precedenceOf = (child: ExprNode): number | null =>
+    child.kind === 'binary' ? getBinaryPrecedence(child.operator) : child.kind === 'bind' ? 3 : null
 
   if (node.operator === 'lshift') {
     return `LSHIFT(${leftStr}, ${rightStr})`
@@ -1435,15 +1287,15 @@ export function formatExpressionLhs(node: ExprNode): string {
     return `STR2(${leftStr}, ${rightStr})`
   }
   if (node.operator === 'root') {
-    const leftWrapped = node.left.kind === 'binary' ? `(${leftStr})` : leftStr
-    return `${leftWrapped} ^ (1 / ${node.right.kind === 'binary' ? `(${rightStr})` : rightStr})`
+    const leftWrapped = groupLike(node.left) ? `(${leftStr})` : leftStr
+    return `${leftWrapped} ^ (1 / ${groupLike(node.right) ? `(${rightStr})` : rightStr})`
   }
 
   // `6 + 4 || 2` reads two ways, so any arithmetic operand of a concat is
   // always bracketed: `(6 + 4) || 2`.
   if (node.operator === 'concat') {
-    const leftWrapped = node.left.kind === 'binary' ? `(${leftStr})` : leftStr
-    const rightWrapped = node.right.kind === 'binary' ? `(${rightStr})` : rightStr
+    const leftWrapped = groupLike(node.left) ? `(${leftStr})` : leftStr
+    const rightWrapped = groupLike(node.right) ? `(${rightStr})` : rightStr
     return `${leftWrapped} || ${rightWrapped}`
   }
 
@@ -1458,18 +1310,24 @@ export function formatExpressionLhs(node: ExprNode): string {
     op === 'perm' ||
     op === 'stirling2'
 
+  const leftPrec = precedenceOf(node.left)
+  const rightPrec = precedenceOf(node.right)
+  const leftWord =
+    node.left.kind === 'binary' ? wordStyle(node.left.operator) : false
+  const rightWord =
+    node.right.kind === 'binary' ? wordStyle(node.right.operator) : false
+
   const wrapLeft =
-    node.left.kind === 'binary' &&
-    !wordStyle(node.left.operator) &&
-    (getBinaryPrecedence(node.left.operator) < prec ||
-      (node.operator === 'pow' && getBinaryPrecedence(node.left.operator) <= prec))
+    leftPrec !== null &&
+    !leftWord &&
+    (leftPrec < prec || (node.operator === 'pow' && leftPrec <= prec))
 
   const wrapRight =
-    node.right.kind === 'binary' &&
-    !wordStyle(node.right.operator) &&
-    (getBinaryPrecedence(node.right.operator) < prec ||
+    rightPrec !== null &&
+    !rightWord &&
+    (rightPrec < prec ||
       ((node.operator === 'sub' || node.operator === 'div' || node.operator === 'pow') &&
-        getBinaryPrecedence(node.right.operator) === prec))
+        rightPrec === prec))
 
   const lFinal = wrapLeft ? `(${leftStr})` : leftStr
   const rFinal = wrapRight ? `(${rightStr})` : rightStr
@@ -1500,6 +1358,9 @@ export function formatExpressionLhs(node: ExprNode): string {
   return `${lFinal} ${symbolMap[node.operator]} ${rFinal}`
 }
 
-export function formatFullEquation(node: ExprNode): string {
-  return `${formatExpressionLhs(node)} = ${formatNumber(node.value)}`
+export function formatFullEquation(
+  node: ExprNode,
+  decimalPlaces = DEFAULT_DECIMAL_PLACES
+): string {
+  return `${formatExpressionLhs(node)} = ${formatNumber(nodeExactValue(node), decimalPlaces)}`
 }

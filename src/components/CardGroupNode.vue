@@ -1,7 +1,9 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { assetUrl } from '../assetUrl'
+import { decimalPlaces } from '../app/displayPrecision'
 import type { ExprNode } from '../engine/types'
-import { formatNumber } from '../engine/math'
+import { formatNodeHeader, formatNodeValue } from '../engine/math'
 
 const props = defineProps<{
   node: ExprNode
@@ -26,6 +28,18 @@ function onUngroupClick(event: MouseEvent): void {
   emit('ungroup', props.node.id)
 }
 
+function rootAriaLabel(node: ExprNode): string {
+  const bindName =
+    node.kind === 'bind' ? `${node.bind === 'dragon' ? 'Dragon' : 'Rook'} bind, ` : ''
+  return `${bindName}card group worth ${formatNodeValue(node, decimalPlaces.value)}`
+}
+
+const visibleHeader = computed(() => formatNodeHeader(props.node, decimalPlaces.value))
+const headerClass = computed(() => ({
+  'group-header-eq--long': visibleHeader.value.length > 30,
+  'group-header-eq--very-long': visibleHeader.value.length > 45,
+}))
+
 </script>
 
 <template>
@@ -37,25 +51,27 @@ function onUngroupClick(event: MouseEvent): void {
       'expr-node--selected': isRoot && selected,
       'expr-node--unary': node.kind === 'unary',
       'expr-node--binary': node.kind === 'binary',
+      'expr-node--bind': node.kind === 'bind',
+      'expr-node--bind-rook': node.kind === 'bind' && node.bind === 'rook',
       'expr-node--leaf': node.kind === 'card',
     }"
     :data-group-id="isRoot ? node.id : undefined"
     :role="isRoot ? 'button' : undefined"
     :tabindex="isRoot ? 0 : undefined"
     :aria-pressed="isRoot ? !!selected : undefined"
-    :aria-label="isRoot ? `Card group worth ${formatNumber(node.value)}` : undefined"
+    :aria-label="isRoot ? rootAriaLabel(node) : undefined"
     @click="onNodeClick"
     @keydown.enter.prevent="onNodeClick"
     @keydown.space.prevent="onNodeClick"
   >
     <!-- Root value badge & pending binary operator chip -->
     <div v-if="isRoot && pendingSymbol && selected" class="pending-op-chip">
-      <span>{{ formatNumber(node.value) }} {{ pendingSymbol }} ?</span>
+      <span>{{ formatNodeValue(node, decimalPlaces) }} {{ pendingSymbol }} ?</span>
     </div>
 
     <!-- Floating ungroup action pill when a merged group is selected -->
     <button
-      v-if="isRoot && selected && node.kind !== 'card'"
+      v-if="isRoot && selected && node.kind !== 'card' && node.kind !== 'bind'"
       type="button"
       class="ungroup-pill"
       data-testid="inline-ungroup-btn"
@@ -66,11 +82,35 @@ function onUngroupClick(event: MouseEvent): void {
       ✂ UNGROUP
     </button>
 
+    <!-- Bind: a locked, free group of cards fanned out like an open hand -->
+    <template v-if="node.kind === 'bind'">
+      <div
+        class="group-rect group-rect--bind"
+        :class="node.bind === 'rook' ? 'group-rect--bind-rook' : 'group-rect--bind-dragon'"
+        :data-testid="`bind-group-${node.bind}`"
+      >
+        <div class="group-header group-header--bind">
+          <span class="bind-tag">{{ node.bind === 'dragon' ? 'DRAGON' : 'ROOK' }}</span>
+          <span class="group-header-eq" :class="headerClass">{{ visibleHeader }}</span>
+        </div>
+        <div class="group-body group-body--bind">
+          <div
+            v-for="(card, index) in node.cards"
+            :key="card.id"
+            class="bind-card"
+            :style="{ zIndex: index + 1 }"
+          >
+            <CardGroupNode :node="card" :is-root="false" />
+          </div>
+        </div>
+      </div>
+    </template>
+
     <!-- Unary wrapper: semi-transparent rectangle with header above operand -->
-    <template v-if="node.kind === 'unary'">
+    <template v-else-if="node.kind === 'unary'">
       <div class="group-rect group-rect--unary">
         <div class="group-header group-header--unary">
-          <span class="group-header-eq">{{ node.headerText }}</span>
+          <span class="group-header-eq" :class="headerClass">{{ visibleHeader }}</span>
         </div>
         <div class="group-body">
           <CardGroupNode :node="node.operand" :is-root="false" />
@@ -82,7 +122,7 @@ function onUngroupClick(event: MouseEvent): void {
     <template v-else-if="node.kind === 'binary'">
       <div class="group-rect group-rect--binary">
         <div class="group-header group-header--binary">
-          <span class="group-header-eq">{{ node.headerText }}</span>
+          <span class="group-header-eq" :class="headerClass">{{ visibleHeader }}</span>
         </div>
         <div class="group-body group-body--stack">
           <div class="stack-item stack-item--top">
@@ -210,6 +250,67 @@ function onUngroupClick(event: MouseEvent): void {
   border-color: #2ec4b6;
 }
 
+.group-rect--bind {
+  border-color: #6fd68a;
+  background: rgba(12, 27, 20, 0.8);
+}
+
+.group-rect--bind-rook {
+  border-color: #c3a6ff;
+  background: rgba(24, 18, 35, 0.82);
+}
+
+.group-header--bind {
+  justify-content: flex-start;
+  gap: 6px;
+  border-color: rgba(111, 214, 138, 0.7);
+  padding: 3px 5px;
+}
+
+.group-rect--bind-rook .group-header--bind {
+  border-color: rgba(195, 166, 255, 0.7);
+}
+
+.bind-tag {
+  flex: none;
+  font-family: var(--font-pixel);
+  font-size: 0.46rem;
+  letter-spacing: 0.08em;
+  color: #b8f5c8;
+  background: rgba(111, 214, 138, 0.16);
+  border: 1px solid rgba(111, 214, 138, 0.6);
+  padding: 2px 4px;
+}
+
+.group-rect--bind-rook .bind-tag {
+  color: #e4d6ff;
+  background: rgba(195, 166, 255, 0.16);
+  border-color: rgba(195, 166, 255, 0.6);
+}
+
+/* Two classes so this wins over the later base `.group-body` column rule. */
+.group-body.group-body--bind {
+  flex-direction: row;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 0 2px 2px;
+}
+
+.bind-card {
+  position: relative;
+  flex: none;
+}
+
+/* Each card starts 30px after the one before, so the rank/suit corner stays
+   readable while the fanned stack keeps a bind compact on the felt. */
+.bind-card + .bind-card {
+  margin-left: -66px;
+}
+
+.bind-card:nth-child(even) {
+  margin-top: 5px;
+}
+
 .expr-node--selected > .group-rect {
   border-color: #fff;
   background: rgba(24, 34, 48, 0.82);
@@ -246,6 +347,17 @@ function onUngroupClick(event: MouseEvent): void {
 
 .group-header--unary .group-header-eq {
   color: #72efdd;
+}
+
+/* Full-precision headers can be fifty characters wide; shrink them instead of
+   spilling across the felt or stretching the group rectangle. */
+.group-header-eq--long {
+  font-size: 0.68rem;
+  letter-spacing: 0;
+}
+
+.group-header-eq--very-long {
+  font-size: 0.52rem;
 }
 
 .group-body {

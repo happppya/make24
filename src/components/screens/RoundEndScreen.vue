@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { useGameContext } from '../../app/context'
+import { decimalPlaces } from '../../app/displayPrecision'
 import { formatPercent, formatScore } from '../../app/labels'
-import { formatNumber } from '../../engine/math'
+import { formatFullEquation, formatNumber } from '../../engine/math'
 import SolutionBoard from '../SolutionBoard.vue'
 
 const {
@@ -11,7 +12,7 @@ const {
   settings,
   players,
   roundNumber,
-  currentTarget,
+  currentTargetExact,
   currentConstant,
   roundWinnerIds,
   roundWinnerNames,
@@ -34,7 +35,7 @@ const {
     <div class="results-marquee">
       <span class="results-marquee__round">ROUND {{ roundNumber }}</span>
       <span class="results-marquee__target">
-        TARGET <strong>{{ formatNumber(currentTarget) }}</strong>
+        TARGET <strong>{{ formatNumber(currentTargetExact, decimalPlaces) }}</strong>
       </span>
     </div>
 
@@ -89,7 +90,7 @@ const {
           <span class="sol-ws">Workspace {{ sol.workspaceIndex }}</span>
         </div>
         <div class="sol-equation" data-testid="round-end-equation">
-          {{ sol.equation }}
+          {{ sol.expression ? formatFullEquation(sol.expression, decimalPlaces) : sol.equation }}
         </div>
         <div class="sol-score">
           <span class="score-pill">{{ formatScore(sol.score) }} pts</span>

@@ -1,3 +1,4 @@
+import { createDefaultBindRules } from '../engine/binds'
 import { DEFAULT_FORBIDDEN_MOVES, DEFAULT_FORBIDDEN_MOVE_PENALTY } from '../engine/math'
 import type { GameSettings } from '../engine/types'
 
@@ -29,6 +30,7 @@ export function createDefaultSettings(): GameSettings {
     },
     forbiddenMoves: { ...DEFAULT_FORBIDDEN_MOVES },
     forbiddenMovePenalty: DEFAULT_FORBIDDEN_MOVE_PENALTY,
+    binds: createDefaultBindRules(),
     firstToPoints: 3,
   }
 }

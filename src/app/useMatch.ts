@@ -2,6 +2,7 @@ import { computed, ref, watch, type Ref } from 'vue'
 import { playSfx } from '../audio/sfx'
 import { dealHand, generateTargetNumber, resolveConstantTarget } from '../engine/deck'
 import { constantById, constantByValue, type ConstantInfo } from '../engine/constants'
+import { decimalString } from '../engine/decimal'
 import { calculateBoardBreakdown } from '../engine/math'
 import {
   WORKSPACE_COUNT,
@@ -50,6 +51,8 @@ export function useMatch(deps: {
   const localMatchWinner = ref<PlayerInfo | null>(null)
 
   const currentTarget = ref(24)
+  /** Canonical target value; constants carry more digits than the number mirror. */
+  const currentTargetExact = ref('24')
   const currentConstant = ref<ConstantInfo | null>(null)
   /** A daily/weekly run has its own submission screen, not round-end flow. */
   const puzzleMode = ref(false)
@@ -82,7 +85,7 @@ export function useMatch(deps: {
     if (!ws) return null
     return evaluateWorkspaceSolution(
       ws,
-      currentTarget.value,
+      currentTargetExact.value,
       settings.approximationPercent,
       settings.scoringMode,
       { moves: settings.forbiddenMoves, penalty: settings.forbiddenMovePenalty }
@@ -120,7 +123,7 @@ export function useMatch(deps: {
 
   /* ------------------------------ round flow ------------------------------ */
 
-  function startNewRound(targetOverride?: number): void {
+  function startNewRound(targetOverride?: number | string): void {
     puzzleMode.value = false
     stopDeadlineClock()
     actionError.value = null
@@ -131,10 +134,16 @@ export function useMatch(deps: {
 
     const constant = targetOverride === undefined ? resolveConstantTarget(settings) : null
     currentConstant.value = constant
-    currentTarget.value =
-      targetOverride ?? constant?.value ?? generateTargetNumber(settings)
+    const target = targetOverride ?? constant?.value ?? generateTargetNumber(settings)
+    currentTarget.value = Number(target)
+    currentTargetExact.value =
+      targetOverride !== undefined
+        ? typeof targetOverride === 'string'
+          ? decimalString(targetOverride)
+          : String(targetOverride)
+        : constant?.exactValue ?? String(target)
     currentHand.value = dealHand(settings.numCards, settings.cardPool)
-    workspaces.value = createAllWorkspaces(currentHand.value)
+    workspaces.value = createAllWorkspaces(currentHand.value, settings.binds)
     activeWorkspaceIdx.value = 0
     for (const p of localPlayers.value) {
       p.bestRoundScore = null
@@ -163,8 +172,9 @@ export function useMatch(deps: {
     lastReportedBoard = null
     currentConstant.value = null
     currentTarget.value = puzzle.target
+    currentTargetExact.value = puzzle.targetExact ?? String(puzzle.target)
     currentHand.value = puzzle.hand.map((card) => ({ ...card }))
-    workspaces.value = createAllWorkspaces(currentHand.value)
+    workspaces.value = createAllWorkspaces(currentHand.value, settings.binds)
     activeWorkspaceIdx.value = 0
     remainingSeconds.value = null
     roundStartTimestamp = Date.now()
@@ -213,7 +223,7 @@ export function useMatch(deps: {
     phase.value = 'round-end'
   }
 
-  function advanceAfterRoundEnd(targetOverride?: number): void {
+  function advanceAfterRoundEnd(targetOverride?: number | string): void {
     if (settings.isMultiplayer) {
       if (isRoomHost.value && multiplayer.room?.phase === 'round-end') {
         sendToRoom({ t: 'next-round', target: targetOverride })
@@ -290,6 +300,7 @@ export function useMatch(deps: {
       equation: evalRes.equation,
       lhs: evalRes.lhs,
       finalValue: evalRes.finalValue!,
+      finalValueExact: evalRes.finalValueExact ?? undefined,
       score: evalRes.score,
       errorPercent: evalRes.errorPercent ?? 0,
       timestampMs: Date.now() - roundStartTimestamp,
@@ -377,13 +388,16 @@ export function useMatch(deps: {
         sawAcceptable = false
         lastReportedBoard = null
         currentTarget.value = room.round.target
-        currentConstant.value = room.round.constantId
+        const dealtConstant = room.round.constantId
           ? constantById(room.round.constantId)
           : settings.targetPreset === 'constant'
             ? constantByValue(room.round.target)
             : null
+        currentTargetExact.value =
+          room.round.targetExact ?? dealtConstant?.exactValue ?? String(room.round.target)
+        currentConstant.value = dealtConstant
         currentHand.value = room.round.hand
-        workspaces.value = createAllWorkspaces(room.round.hand)
+        workspaces.value = createAllWorkspaces(room.round.hand, room.settings.binds)
         activeWorkspaceIdx.value = 0
         phase.value = 'playing'
         playSfx('deal')
@@ -428,6 +442,7 @@ export function useMatch(deps: {
     localRoundWinnerId,
     localMatchWinner,
     currentTarget,
+    currentTargetExact,
     currentConstant,
     puzzleMode,
     currentHand,

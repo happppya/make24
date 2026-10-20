@@ -11,8 +11,16 @@ const {
   cancelTargetPrompt,
 } = useGameContext()
 
-const value = ref<string | number>(targetPromptInitial.value)
+const value = ref(String(targetPromptInitial.value))
 const error = ref('')
+
+/**
+ * A number input casts through a double on its own, which would round a typed
+ * target after 16 digits. Read the field's text instead and keep every digit.
+ */
+function handleInput(event: Event): void {
+  value.value = (event.target as HTMLInputElement).value
+}
 const inputRef = ref<HTMLInputElement | null>(null)
 
 onMounted(() => {
@@ -21,7 +29,7 @@ onMounted(() => {
 })
 
 function submit(): void {
-  const raw = typeof value.value === 'string' ? value.value.trim() : value.value
+  const raw = value.value.trim()
   const target = Number(raw)
   if (raw === '' || !Number.isFinite(target)) {
     error.value = 'Enter a number for the target.'
@@ -32,7 +40,9 @@ function submit(): void {
     return
   }
   error.value = ''
-  confirmTargetChoice(target)
+  // Send the typed text, not the rounded double, so targets beyond 16 digits
+  // stay exact and can actually be hit by the decimal engine.
+  confirmTargetChoice(raw)
 }
 </script>
 
@@ -68,8 +78,9 @@ function submit(): void {
       <input
         id="target-choice-input"
         ref="inputRef"
-        v-model="value"
+        :value="value"
         type="number"
+        @input="handleInput"
         inputmode="decimal"
         step="any"
         :min="MANUAL_TARGET_MIN"

@@ -108,6 +108,24 @@ export interface ForbiddenMovesConfig {
   oneToPower: boolean
 }
 
+/** Automatic opening groups that fuse cards before play starts. */
+export type BindKind = 'dragon' | 'rook'
+
+export interface BindRule {
+  enabled: boolean
+  /** Minimum cards needed to form this bind. */
+  required: number
+}
+
+export interface BindRulesConfig {
+  /** Priority 1: consecutive ranks, one card from each rank. */
+  dragon: BindRule
+  /** Priority 2: every copy of one rank. */
+  rook: BindRule
+  /** Total binds formed per deal across both kinds. */
+  maxBinds: number
+}
+
 export interface GameSettings {
   isMultiplayer: boolean
   mode: GameMode
@@ -127,6 +145,8 @@ export interface GameSettings {
   forbiddenMoves: ForbiddenMovesConfig
   /** Points added for each forbidden move in a solution. */
   forbiddenMovePenalty: number
+  /** Automatic opening groups formed from the dealt hand. */
+  binds: BindRulesConfig
   firstToPoints: number
 }
 
@@ -135,6 +155,8 @@ export interface CardLeafNode {
   id: string
   card: Card
   value: number
+  /** Canonical high-precision value; absent only on legacy payloads. */
+  exactValue?: string
 }
 
 export interface UnaryGroupNode {
@@ -143,6 +165,7 @@ export interface UnaryGroupNode {
   operator: UnaryOperator
   operand: ExprNode
   value: number
+  exactValue?: string
   headerText: string
 }
 
@@ -153,10 +176,25 @@ export interface BinaryGroupNode {
   left: ExprNode
   right: ExprNode
   value: number
+  exactValue?: string
   headerText: string
 }
 
-export type ExprNode = CardLeafNode | UnaryGroupNode | BinaryGroupNode
+/**
+ * A free opening group created by a bind. Its cards cannot be split apart; the
+ * value is their product and no operator cost is charged.
+ */
+export interface BindGroupNode {
+  kind: 'bind'
+  id: string
+  bind: BindKind
+  cards: CardLeafNode[]
+  value: number
+  exactValue?: string
+  headerText: string
+}
+
+export type ExprNode = CardLeafNode | UnaryGroupNode | BinaryGroupNode | BindGroupNode
 
 export interface GroupPosition {
   x: number
@@ -195,6 +233,8 @@ export interface SubmittedSolution {
   equation: string
   lhs: string
   finalValue: number
+  /** Full-precision board value, when the submission carried a card tree. */
+  finalValueExact?: string
   score: number
   errorPercent: number
   timestampMs: number

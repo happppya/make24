@@ -10,6 +10,7 @@ import {
   type ConstantChoice,
   type ConstantId,
 } from '../engine/constants'
+import { decimalString, toDecimal } from '../engine/decimal'
 import {
   DEFAULT_FORBIDDEN_MOVES,
   DEFAULT_FORBIDDEN_MOVE_PENALTY,
@@ -30,6 +31,14 @@ import type {
   SubmittedSolution,
   TargetPreset,
 } from '../engine/types'
+import {
+  DRAGON_REQUIRED_MAX,
+  DRAGON_REQUIRED_MIN,
+  MAX_BINDS_LIMIT,
+  ROOK_REQUIRED_MAX,
+  ROOK_REQUIRED_MIN,
+  createDefaultBindRules,
+} from '../engine/binds'
 import { sanitizeSolutionTree } from './solutionTree'
 import {
   MAX_ROOM_PLAYERS,
@@ -82,6 +91,7 @@ export function createDefaultSettings(): GameSettings {
     },
     forbiddenMoves: { ...DEFAULT_FORBIDDEN_MOVES },
     forbiddenMovePenalty: DEFAULT_FORBIDDEN_MOVE_PENALTY,
+    binds: createDefaultBindRules(),
     firstToPoints: 3,
   }
 }
@@ -117,20 +127,30 @@ function clampNumber(value: unknown, min: number, max: number, fallback: number)
   return Math.min(max, Math.max(min, num))
 }
 
-/** Client-supplied settings are never trusted: clamp everything into a playable range. */
-/** Returns the host's chosen exact target, or null when it is absent or unusable. */
-function readManualTarget(value: number | undefined): number | null {
+/** Returns the host's chosen target as both a numeric mirror and exact digits. */
+function readManualTarget(value: unknown): { value: number; exact: string } | null {
+  if (typeof value !== 'number' && typeof value !== 'string') return null
+  const raw = typeof value === 'string' ? value.trim() : value
+  if (raw === '') return null
+  let exact: string
+  try {
+    exact = decimalString(raw)
+  } catch {
+    return null
+  }
+  if (exact === 'NaN') return null
+  const targetValue = toDecimal(exact)
   if (
-    typeof value !== 'number' ||
-    !Number.isFinite(value) ||
-    value < MANUAL_TARGET_MIN ||
-    value > MANUAL_TARGET_MAX
+    !targetValue.isFinite() ||
+    targetValue.lt(MANUAL_TARGET_MIN) ||
+    targetValue.gt(MANUAL_TARGET_MAX)
   ) {
     return null
   }
-  return value
+  return { value: targetValue.toNumber(), exact }
 }
 
+/** Client-supplied settings are never trusted: clamp everything into a playable range. */
 export function sanitizeSettings(input: unknown, base: GameSettings): GameSettings {
   const raw = (input ?? {}) as Partial<GameSettings>
   const operators = (raw.allowedOperators ?? base.allowedOperators) as unknown as Record<
@@ -147,6 +167,9 @@ export function sanitizeSettings(input: unknown, base: GameSettings): GameSettin
     string,
     unknown
   >
+  const binds = (raw.binds ?? base.binds) as unknown as Record<string, unknown>
+  const dragon = (binds.dragon ?? base.binds.dragon) as unknown as Record<string, unknown>
+  const rook = (binds.rook ?? base.binds.rook) as unknown as Record<string, unknown>
   return {
     isMultiplayer: true,
     mode: pick(raw.mode, GAME_MODES, base.mode),
@@ -182,6 +205,29 @@ export function sanitizeSettings(input: unknown, base: GameSettings): GameSettin
     forbiddenMovePenalty: Math.round(
       clampNumber(raw.forbiddenMovePenalty, 0, 9_999, base.forbiddenMovePenalty)
     ),
+    binds: {
+      dragon: {
+        enabled:
+          typeof dragon.enabled === 'boolean' ? dragon.enabled : base.binds.dragon.enabled,
+        required: Math.round(
+          clampNumber(
+            dragon.required,
+            DRAGON_REQUIRED_MIN,
+            DRAGON_REQUIRED_MAX,
+            base.binds.dragon.required
+          )
+        ),
+      },
+      rook: {
+        enabled: typeof rook.enabled === 'boolean' ? rook.enabled : base.binds.rook.enabled,
+        required: Math.round(
+          clampNumber(rook.required, ROOK_REQUIRED_MIN, ROOK_REQUIRED_MAX, base.binds.rook.required)
+        ),
+      },
+      maxBinds: Math.round(
+        clampNumber(binds.maxBinds, 0, MAX_BINDS_LIMIT, base.binds.maxBinds)
+      ),
+    },
     firstToPoints: Math.round(clampNumber(raw.firstToPoints, 1, 25, base.firstToPoints)),
   }
 }
@@ -323,13 +369,19 @@ function computeWinnerIds(solutions: SubmittedSolution[]): string[] {
   return winners
 }
 
-function dealRound(room: RoomState, now: number, targetOverride?: number): void {
+function dealRound(
+  room: RoomState,
+  now: number,
+  manualTarget?: { value: number; exact: string }
+): void {
   const roundNumber = (room.round?.number ?? 0) + 1
   const duration = modeDurationSeconds(room.settings.mode)
-  const constant = targetOverride === undefined ? resolveConstantTarget(room.settings) : null
+  const constant = manualTarget === undefined ? resolveConstantTarget(room.settings) : null
+  const target = manualTarget?.value ?? constant?.value ?? generateTargetNumber(room.settings)
   const round: RoundState = {
     number: roundNumber,
-    target: targetOverride ?? constant?.value ?? generateTargetNumber(room.settings),
+    target,
+    targetExact: manualTarget?.exact ?? constant?.exactValue ?? String(target),
     constantId: (constant?.id as ConstantId | undefined) ?? null,
     hand: dealHand(room.settings.numCards, room.settings.cardPool),
     startedAt: now,
@@ -425,19 +477,28 @@ function applySubmit(
   // displayed cards, equation and score.
   let expression: ExprNode | undefined
   let finalValue = payload.finalValue
+  let finalValueExact: string | undefined
   if (payload.expression !== undefined) {
-    const sanitized = sanitizeSolutionTree(payload.expression, round.hand)
+    const sanitized = sanitizeSolutionTree(
+      payload.expression,
+      round.hand,
+      room.settings.binds
+    )
     if (!sanitized) return fail('bad-message', 'That card board does not use the dealt hand.')
     expression = sanitized
     finalValue = sanitized.value
+    finalValueExact = sanitized.exactValue
   }
 
   // The board itself is the server's business: the value has to land in the
   // round's acceptance band. Error percent is recomputed here rather than
   // trusted, so a padded payload cannot win a round it does not deserve.
+  // Every round carries canonical target digits: constants and typed manual
+  // targets can both carry more precision than a double.
+  const target = round.targetExact ?? round.target
   const check = checkTargetAcceptance(
-    finalValue,
-    round.target,
+    finalValueExact ?? finalValue,
+    target,
     room.settings.approximationPercent
   )
   if (!check.acceptable) {
@@ -466,6 +527,7 @@ function applySubmit(
     equation: expression ? formatFullEquation(expression) : payload.equation,
     lhs: expression ? formatExpressionLhs(expression) : payload.lhs,
     finalValue,
+    finalValueExact,
     score,
     errorPercent: check.errorPercent,
     timestampMs: Math.max(0, now - round.startedAt),

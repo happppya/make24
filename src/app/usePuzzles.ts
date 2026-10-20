@@ -89,9 +89,13 @@ export function usePuzzles(deps: {
 
   const missingCards = computed(() => {
     const puzzle = activePuzzle.value
-    const root = match.currentEvaluation.value?.rootNode
-    if (!puzzle || !root) return puzzle?.hand.length ?? 0
-    return Math.max(0, puzzle.hand.length - countCardsInNode(root))
+    const workspace = match.activeWorkspace.value
+    if (!puzzle || !workspace) return puzzle?.hand.length ?? 0
+    const onBoard = workspace.groups.reduce(
+      (total, group) => total + countCardsInNode(group),
+      0
+    )
+    return Math.max(0, puzzle.hand.length - onBoard)
   })
 
   const canSubmit = computed(() => {

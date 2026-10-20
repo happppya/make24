@@ -1,3 +1,5 @@
+import { approxBinary, approxUnary, type ApproxResult } from './approxMath'
+import { bindRuleLabels, createBoundGroups, createDefaultBindRules } from './binds'
 import { dealHand } from './deck'
 import {
   DEFAULT_FORBIDDEN_MOVES,
@@ -12,11 +14,13 @@ import {
   formatFullEquation,
   getEnabledOperators,
   isOperatorEnabled,
+  nodeExactValue,
 } from './math'
 import { sanitizeSolutionTree } from '../multiplayer/solutionTree'
 import type {
   AllowedOperatorsConfig,
   BinaryOperator,
+  BindRulesConfig,
   Card,
   CardPoolMode,
   ExprNode,
@@ -47,11 +51,15 @@ export interface PuzzleDefinition {
   startsAt: number
   endsAt: number
   target: number
+  /** Canonical target for generated fractional puzzles; integers omit it. */
+  targetExact?: string
   hand: Card[]
   settings: GameSettings
   /** Effective groups, in catalog order, for a compact rules summary. */
   operatorGroups: OperatorCategory[]
   operatorGroupLabels: string[]
+  /** Enabled opening binds, e.g. `Dragon 3+` / `Rook 2+`. */
+  bindLabels: string[]
   /**
    * A deterministic solution generated alongside the target. It is used to
    * prove the puzzle is playable and is never shown by the UI before submission.
@@ -92,10 +100,84 @@ interface PuzzleRecipe {
   forbiddenMoves: ForbiddenMovesConfig
   forbiddenMovePenalty: number
   disabledOperators?: OperatorId[]
+  binds?: BindRulesConfig
+  /** A bind-themed recipe only accepts hands that actually produce one. */
+  requireBind?: boolean
 }
 
 const DAY_MS = 86_400_000
 const WEEK_MS = 7 * DAY_MS
+
+/**
+ * The deterministic search evaluates the same operand pairs over and over.
+ * Caching pure operator results keeps weekly generation fast now that each
+ * operation runs at Decimal precision.
+ */
+const unaryEvalCache = new Map<string, ApproxResult>()
+const binaryEvalCache = new Map<string, ApproxResult>()
+const EVAL_CACHE_LIMIT = 50_000
+
+function cachedUnary(op: UnaryOperator, node: ExprNode): ApproxResult {
+  const key = `${op}|${node.value}`
+  const cached = unaryEvalCache.get(key)
+  if (cached) return cached
+  if (unaryEvalCache.size >= EVAL_CACHE_LIMIT) unaryEvalCache.clear()
+  const result = approxUnary(op, node.value)
+  unaryEvalCache.set(key, result)
+  return result
+}
+
+function cachedBinary(op: BinaryOperator, left: ExprNode, right: ExprNode): ApproxResult {
+  const key = `${op}|${left.value}|${right.value}`
+  const cached = binaryEvalCache.get(key)
+  if (cached) return cached
+  if (binaryEvalCache.size >= EVAL_CACHE_LIMIT) binaryEvalCache.clear()
+  const result = approxBinary(op, left.value, right.value)
+  binaryEvalCache.set(key, result)
+  return result
+}
+
+/** Replays the search's winning tree through the exact Decimal operators. */
+function exactifyNode(node: ExprNode): ExprNode | null {
+  if (node.kind === 'card') {
+    return { ...node, exactValue: nodeExactValue(node) }
+  }
+  if (node.kind === 'bind') return node
+  if (node.kind === 'unary') {
+    const operand = exactifyNode(node.operand)
+    if (!operand) return null
+    const result = applyUnaryOperator(node.operator, nodeExactValue(operand))
+    if (!result.ok) return null
+    return {
+      kind: 'unary',
+      id: node.id,
+      operator: node.operator,
+      operand,
+      value: result.value,
+      exactValue: result.exactValue,
+      headerText: result.headerText,
+    }
+  }
+  const left = exactifyNode(node.left)
+  const right = exactifyNode(node.right)
+  if (!left || !right) return null
+  const result = applyBinaryOperator(
+    node.operator,
+    nodeExactValue(left),
+    nodeExactValue(right)
+  )
+  if (!result.ok) return null
+  return {
+    kind: 'binary',
+    id: node.id,
+    operator: node.operator,
+    left,
+    right,
+    value: result.value,
+    exactValue: result.exactValue,
+    headerText: result.headerText,
+  }
+}
 const MAX_TARGET_MAGNITUDE = 1e9
 const MAX_HAND_ATTEMPTS = 14
 const MAX_EXPRESSION_ATTEMPTS = 28
@@ -114,6 +196,12 @@ const DAILY_RECIPES: PuzzleRecipe[] = [
     scoringMode: 'cost-first',
     forbiddenMoves: { ...DEFAULT_FORBIDDEN_MOVES },
     forbiddenMovePenalty: DEFAULT_FORBIDDEN_MOVE_PENALTY,
+    binds: {
+      dragon: { enabled: true, required: 3 },
+      rook: { enabled: false, required: 2 },
+      maxBinds: 1,
+    },
+    requireBind: true,
   },
   {
     label: 'Factorials',
@@ -128,6 +216,12 @@ const DAILY_RECIPES: PuzzleRecipe[] = [
     scoringMode: 'cost-first',
     forbiddenMoves: { ...DEFAULT_FORBIDDEN_MOVES },
     forbiddenMovePenalty: DEFAULT_FORBIDDEN_MOVE_PENALTY,
+    binds: {
+      dragon: { enabled: false, required: 3 },
+      rook: { enabled: true, required: 2 },
+      maxBinds: 1,
+    },
+    requireBind: true,
   },
   {
     label: 'Analysis',
@@ -158,6 +252,12 @@ const DAILY_RECIPES: PuzzleRecipe[] = [
     forbiddenMoves: { ...DEFAULT_FORBIDDEN_MOVES },
     forbiddenMovePenalty: DEFAULT_FORBIDDEN_MOVE_PENALTY,
     disabledOperators: ['bitnot'],
+    binds: {
+      dragon: { enabled: true, required: 3 },
+      rook: { enabled: false, required: 2 },
+      maxBinds: 1,
+    },
+    requireBind: true,
   },
   {
     label: 'Combinatorics',
@@ -176,6 +276,12 @@ const DAILY_RECIPES: PuzzleRecipe[] = [
     },
     forbiddenMovePenalty: DEFAULT_FORBIDDEN_MOVE_PENALTY,
     disabledOperators: ['subfact'],
+    binds: {
+      dragon: { enabled: true, required: 3 },
+      rook: { enabled: true, required: 2 },
+      maxBinds: 2,
+    },
+    requireBind: true,
   },
 ]
 
@@ -204,6 +310,12 @@ const WEEKLY_RECIPES: PuzzleRecipe[] = [
     forbiddenMoves: { factorialInvgamma: true, oneToPower: true },
     forbiddenMovePenalty: 300,
     disabledOperators: ['tan'],
+    binds: {
+      dragon: { enabled: true, required: 3 },
+      rook: { enabled: true, required: 2 },
+      maxBinds: 3,
+    },
+    requireBind: true,
   },
   {
     label: 'Deep end',
@@ -228,6 +340,12 @@ const WEEKLY_RECIPES: PuzzleRecipe[] = [
     forbiddenMoves: { factorialInvgamma: true, oneToPower: false },
     forbiddenMovePenalty: 250,
     disabledOperators: ['gamma'],
+    binds: {
+      dragon: { enabled: true, required: 3 },
+      rook: { enabled: true, required: 2 },
+      maxBinds: 2,
+    },
+    requireBind: true,
   },
 ]
 
@@ -342,9 +460,15 @@ export function puzzleLeaderboardKey(puzzle: Pick<PuzzleDefinition, 'kind' | 'ke
   return `${puzzle.kind}:${puzzle.key}`
 }
 
+/** One deterministic board per period; screens can mount without a re-search. */
+const puzzleCache = new Map<string, PuzzleDefinition>()
+
 /** Builds the puzzle for one UTC period. The result is fully deterministic. */
 export function createPuzzle(kind: PuzzleKind, now: Date = new Date()): PuzzleDefinition {
   const period = puzzlePeriod(kind, now)
+  const cacheKey = `${kind}:${period.key}`
+  const cached = puzzleCache.get(cacheKey)
+  if (cached) return cached
   const seed = hashSeed(`make24:${kind}:${period.key}`)
   const rng = mulberry32(seed)
   const recipes = kind === 'daily' ? DAILY_RECIPES : WEEKLY_RECIPES
@@ -354,27 +478,53 @@ export function createPuzzle(kind: PuzzleKind, now: Date = new Date()): PuzzleDe
   const cardCount = recipe.cardCounts[Math.floor(rng() * recipe.cardCounts.length)]!
   const cardPool = recipe.cardPools[Math.floor(rng() * recipe.cardPools.length)]!
   const allowedOperators = buildAllowedOperators(recipe.groups, recipe.disabledOperators)
+  const bindRules = recipe.binds ?? createDefaultBindRules()
+  // Bind recipes keep re-dealing until the opening groups actually appear; the
+  // deterministic RNG makes this reproducible, and a bindless fallback is only
+  // a last resort for a future recipe that makes the search impossible.
+  const maxHandAttempts = recipe.requireBind ? 160 : MAX_HAND_ATTEMPTS
 
   let hand: Card[] = []
+  let startingNodes: ExprNode[] = []
   let referenceSolution: ExprNode | null = null
   let target = 0
 
-  for (let handAttempt = 0; handAttempt < MAX_HAND_ATTEMPTS && !referenceSolution; handAttempt += 1) {
+  for (let handAttempt = 0; handAttempt < maxHandAttempts && !referenceSolution; handAttempt += 1) {
     hand = dealHand(cardCount, cardPool, rng)
+    startingNodes = createBoundGroups(hand, bindRules)
+    const bindCount = startingNodes.filter((group) => group.kind === 'bind').length
+    if (recipe.requireBind && bindCount === 0) continue
+    // A bind does the work of several merges without spending operators, so the
+    // recipe's difficulty floor drops for the hands it fuses at the deal.
+    const requiredOperators = Math.max(1, recipe.minOperators - bindCount * 2)
     for (let attempt = 0; attempt < MAX_EXPRESSION_ATTEMPTS; attempt += 1) {
-      const candidate = buildExpression(hand, allowedOperators, recipe, rng)
+      const candidate = buildExpression(startingNodes, allowedOperators, recipe, rng)
       if (!candidate) continue
-      const value = candidate.value
+      const approxValue = candidate.value
+      if (
+        !Number.isFinite(approxValue) ||
+        !Number.isInteger(approxValue) ||
+        Math.abs(approxValue) < recipe.targetMin ||
+        Math.abs(approxValue) > recipe.targetMax ||
+        countOperators(candidate) < requiredOperators
+      ) {
+        continue
+      }
+
+      // The search runs on fast doubles; only an accepted tree is replayed at
+      // full Decimal precision and becomes the puzzle's reference solution.
+      const rebuilt = exactifyNode(candidate)
+      if (!rebuilt) continue
+      const value = rebuilt.value
       if (
         !Number.isFinite(value) ||
         !Number.isInteger(value) ||
         Math.abs(value) < recipe.targetMin ||
-        Math.abs(value) > recipe.targetMax ||
-        countOperators(candidate) < recipe.minOperators
+        Math.abs(value) > recipe.targetMax
       ) {
         continue
       }
-      referenceSolution = candidate
+      referenceSolution = rebuilt
       target = value
       break
     }
@@ -384,18 +534,25 @@ export function createPuzzle(kind: PuzzleKind, now: Date = new Date()): PuzzleDe
     // The deterministic search is deliberately generous, but a future recipe
     // change must never make the mode unplayable. A simple all-cards fold is a
     // valid last resort and still gives every card a role.
-    const fallback = buildFallbackExpression(hand, allowedOperators)
+    const fallback = buildFallbackExpression(createBoundGroups(hand, bindRules), allowedOperators)
     referenceSolution = fallback
     target = fallback.value
   }
 
-  const settings = settingsForPuzzle(recipe, hand.length, cardPool, allowedOperators, target)
+  const settings = settingsForPuzzle(
+    recipe,
+    hand.length,
+    cardPool,
+    allowedOperators,
+    target,
+    bindRules
+  )
   const enabled = getEnabledOperators(allowedOperators)
   const operatorGroups = OPERATOR_GROUPS.filter((group) =>
     enabled.some((op) => op.category === group.id)
   ).map((group) => group.id)
 
-  return {
+  const puzzle: PuzzleDefinition = {
     kind,
     key: period.key,
     name: puzzleName(kind, period),
@@ -410,8 +567,11 @@ export function createPuzzle(kind: PuzzleKind, now: Date = new Date()): PuzzleDe
     operatorGroupLabels: OPERATOR_GROUPS.filter((group) => operatorGroups.includes(group.id)).map(
       (group) => group.label
     ),
+    bindLabels: bindRuleLabels(bindRules),
     referenceSolution,
   }
+  puzzleCache.set(cacheKey, puzzle)
+  return puzzle
 }
 
 /**
@@ -423,7 +583,7 @@ export function validatePuzzleAttempt(
   puzzle: Pick<PuzzleDefinition, 'hand' | 'target' | 'settings'>,
   rawExpression: unknown
 ): PuzzleAttempt {
-  const expression = sanitizeSolutionTree(rawExpression, puzzle.hand)
+  const expression = sanitizeSolutionTree(rawExpression, puzzle.hand, puzzle.settings.binds)
   if (!expression) {
     return {
       ok: false,
@@ -477,7 +637,7 @@ export function sortPuzzleLeaderboard(
 /* --------------------------- expression generation --------------------------- */
 
 function buildExpression(
-  hand: Card[],
+  startingNodes: ExprNode[],
   allowed: AllowedOperatorsConfig,
   recipe: PuzzleRecipe,
   rng: () => number
@@ -490,7 +650,9 @@ function buildExpression(
     .map((op) => op.id as UnaryOperator)
   if (binaryOps.length === 0) return null
 
-  let nodes = hand.map(cardNode)
+  // Binds are already fused by the deal, so the generator builds on top of the
+  // actual starting groups instead of pretending the hand is still loose cards.
+  let nodes = [...startingNodes]
   const targetLead = recipe.targetMin > 1000 ? 0.35 : 0.55
 
   // A few cards get a head start with a unary operator. This breaks the "plain
@@ -512,7 +674,7 @@ function buildExpression(
       const right = nodes[rightIdx]!
 
       for (const op of shuffled(binaryOps, rng)) {
-        const result = applyBinaryOperator(op, left.value, right.value)
+        const result = cachedBinary(op, left, right)
         if (!result.ok || !acceptableValue(result.value)) continue
         next = {
           kind: 'binary',
@@ -521,7 +683,8 @@ function buildExpression(
           left,
           right,
           value: result.value,
-          headerText: result.headerText,
+          exactValue: String(result.value),
+          headerText: '',
         }
         const high = Math.max(leftIdx, rightIdx)
         const low = Math.min(leftIdx, rightIdx)
@@ -548,27 +711,27 @@ function tryUnary(
   rng: () => number
 ): ExprNode | null {
   for (const op of shuffled(unaryOps, rng)) {
-    const result = applyUnaryOperator(op, node.value)
+    const result = cachedUnary(op, node)
     if (!result.ok || !acceptableValue(result.value)) continue
-    const value = result.value
-    if (value === node.value) continue
+    if (result.value === node.value) continue
     return {
       kind: 'unary',
       id: `puzzle-unary-${op}-${node.id}`,
       operator: op,
       operand: node,
-      value,
-      headerText: result.headerText,
+      value: result.value,
+      exactValue: String(result.value),
+      headerText: '',
     }
   }
   return null
 }
 
 function buildFallbackExpression(
-  hand: Card[],
+  startingNodes: ExprNode[],
   allowed: AllowedOperatorsConfig
 ): ExprNode {
-  const nodes = hand.map(cardNode)
+  const nodes = [...startingNodes]
   const binaryOps = getEnabledOperators(allowed).filter((op) => op.arity === 'binary')
   if (nodes.length === 0) {
     // Defensive only: every recipe deals at least four cards.
@@ -577,6 +740,7 @@ function buildFallbackExpression(
       id: 'puzzle-empty',
       card: { id: 'empty', rank: 1, suit: 'clubs', value: 1, label: 'A', spritePath: '' },
       value: 1,
+      exactValue: '1',
     }
   }
   const preferred: BinaryOperator[] = ['mult', 'add']
@@ -585,7 +749,11 @@ function buildFallbackExpression(
     let current = nodes[0]!
     let valid = true
     for (let i = 1; i < nodes.length; i += 1) {
-      const result = applyBinaryOperator(wanted, current.value, nodes[i]!.value)
+      const result = applyBinaryOperator(
+        wanted,
+        nodeExactValue(current),
+        nodeExactValue(nodes[i]!)
+      )
       if (!result.ok || !acceptableValue(result.value)) {
         valid = false
         break
@@ -597,6 +765,7 @@ function buildFallbackExpression(
         left: current,
         right: nodes[i]!,
         value: result.value,
+        exactValue: result.exactValue,
         headerText: result.headerText,
       }
     }
@@ -606,7 +775,11 @@ function buildFallbackExpression(
   // Absolute last resort: additions always exist for every recipe.
   let current = nodes[0]!
   for (let i = 1; i < nodes.length; i += 1) {
-    const result = applyBinaryOperator('add', current.value, nodes[i]!.value)
+    const result = applyBinaryOperator(
+      'add',
+      nodeExactValue(current),
+      nodeExactValue(nodes[i]!)
+    )
     current = {
       kind: 'binary',
       id: `puzzle-fallback-add-${i}`,
@@ -614,19 +787,11 @@ function buildFallbackExpression(
       left: current,
       right: nodes[i]!,
       value: result.value,
+      exactValue: result.exactValue,
       headerText: result.headerText,
     }
   }
   return current
-}
-
-function cardNode(card: Card): ExprNode {
-  return {
-    kind: 'card',
-    id: `puzzle-card-${card.id}`,
-    card,
-    value: card.value,
-  }
 }
 
 function acceptableValue(value: number): boolean {
@@ -634,7 +799,7 @@ function acceptableValue(value: number): boolean {
 }
 
 function countOperators(node: ExprNode): number {
-  if (node.kind === 'card') return 0
+  if (node.kind === 'card' || node.kind === 'bind') return 0
   if (node.kind === 'unary') return 1 + countOperators(node.operand)
   return 1 + countOperators(node.left) + countOperators(node.right)
 }
@@ -643,7 +808,7 @@ function usesOnlyEnabledOperators(
   node: ExprNode,
   allowed: AllowedOperatorsConfig
 ): boolean {
-  if (node.kind === 'card') return true
+  if (node.kind === 'card' || node.kind === 'bind') return true
   const meta = OPERATOR_CATALOG.find((op) => op.id === node.operator)
   if (!meta || !isOperatorEnabled(allowed, meta)) return false
   if (node.kind === 'unary') return usesOnlyEnabledOperators(node.operand, allowed)
@@ -657,7 +822,8 @@ function settingsForPuzzle(
   numCards: number,
   cardPool: CardPoolMode,
   allowedOperators: AllowedOperatorsConfig,
-  target: number
+  target: number,
+  binds: BindRulesConfig
 ): GameSettings {
   return {
     isMultiplayer: false,
@@ -674,6 +840,11 @@ function settingsForPuzzle(
     allowedOperators,
     forbiddenMoves: { ...recipe.forbiddenMoves },
     forbiddenMovePenalty: recipe.forbiddenMovePenalty,
+    binds: {
+      dragon: { ...binds.dragon },
+      rook: { ...binds.rook },
+      maxBinds: binds.maxBinds,
+    },
     firstToPoints: 1,
   }
 }

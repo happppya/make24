@@ -5,7 +5,7 @@ import {
   puzzleLeaderboardKey,
   type PuzzleAttempt,
 } from './puzzles'
-import type { OperatorCategory } from './types'
+import type { ExprNode, OperatorCategory } from './types'
 
 const MONDAY = new Date('2026-10-19T10:00:00.000Z')
 
@@ -121,6 +121,34 @@ describe('daily and weekly puzzles', () => {
     expect(validatePuzzleAttempt(puzzle, { kind: 'card' }).ok).toBe(false)
   })
 
+  it('generates bind-themed boards that keep their locked groups in the reference solution', () => {
+    let bindPuzzles = 0
+    const check = (kind: 'daily' | 'weekly', day: number) => {
+      const puzzle = createPuzzle(kind, new Date(Date.UTC(2026, 9, 19 + day, 12)))
+      if (puzzle.bindLabels.length === 0) return
+      bindPuzzles += 1
+      expect(
+        puzzle.settings.binds.dragon.enabled || puzzle.settings.binds.rook.enabled
+      ).toBe(true)
+      expect(
+        hasBindNode(puzzle.referenceSolution),
+        `${kind} ${puzzle.key} should keep a bind in its reference solution`
+      ).toBe(true)
+      const attempt = validatePuzzleAttempt(
+        puzzle,
+        JSON.parse(JSON.stringify(puzzle.referenceSolution))
+      )
+      expect(
+        attempt.ok,
+        `${kind} ${puzzle.key}: ${attempt.ok ? '' : attempt.error}`
+      ).toBe(true)
+    }
+
+    for (let day = 0; day < 120; day += 1) check('daily', day)
+    for (let week = 0; week < 16; week += 1) check('weekly', week * 7)
+    expect(bindPuzzles).toBeGreaterThan(0)
+  })
+
   it('has stable, distinct leaderboard keys per kind and period', () => {
     const daily = createPuzzle('daily', MONDAY)
     const weekly = createPuzzle('weekly', MONDAY)
@@ -129,6 +157,13 @@ describe('daily and weekly puzzles', () => {
     expect(puzzleLeaderboardKey(daily)).not.toBe(puzzleLeaderboardKey(weekly))
   })
 })
+
+function hasBindNode(node: ExprNode): boolean {
+  if (node.kind === 'bind') return true
+  if (node.kind === 'card') return false
+  if (node.kind === 'unary') return hasBindNode(node.operand)
+  return hasBindNode(node.left) || hasBindNode(node.right)
+}
 
 /**
  * Builds a valid-looking all-cards expression that uses a disabled operator, so

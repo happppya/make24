@@ -17,6 +17,7 @@ the merged result so any screen can inject it with `useGameContext()` from
 | [particles.ts](particles.ts) | Seeded pixel-burst maths for merges, splits, operators, errors and target hits |
 | [useBoardGestures.ts](useBoardGestures.ts) | Dragging pieces, panning the felt, tidy and recenter |
 | [useHotkeys.ts](useHotkeys.ts) | Digit/Z/Y/U/Esc shortcuts |
+| [displayPrecision.ts](displayPrecision.ts) | Shared in-game decimal-width slider state, persisted on the device |
 | [defaults.ts](defaults.ts) | Default settings and the deep copy used on the wire |
 | [labels.ts](labels.ts) | Lobby/phase labels, timers, sprite URLs, operator key labels |
 

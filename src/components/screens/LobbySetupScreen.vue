@@ -4,6 +4,7 @@ import LobbyFrame from '../LobbyFrame.vue'
 import { useGameContext } from '../../app/context'
 import { scoringModeLabel } from '../../app/labels'
 import { CONSTANT_CATALOG, constantById } from '../../engine/constants'
+import { bindRuleLabels } from '../../engine/binds'
 import {
   OPERATOR_GROUPS,
   isOperatorEnabled,
@@ -82,6 +83,11 @@ const forbiddenMoveLabels = computed(() => {
   if (settings.forbiddenMoves.oneToPower) labels.push('1 to a power')
   return labels
 })
+
+const bindLabels = computed(() => bindRuleLabels(settings.binds))
+const bindCountOptions = [2, 3, 4, 5, 6]
+const rookCountOptions = [2, 3, 4, 5]
+const maxBindOptions = [0, 1, 2, 3, 4, 5, 6]
 </script>
 
 <template>
@@ -162,6 +168,14 @@ const forbiddenMoveLabels = computed(() => {
             move is used ({{ forbiddenMoveLabels.join(', ') }})
           </li>
           <li v-else data-testid="forbidden-summary">Forbidden moves are off.</li>
+          <li v-if="bindLabels.length && settings.binds.maxBinds > 0" data-testid="bind-summary">
+            <strong>Binds:</strong> {{ bindLabels.join(' · ') }} (max
+            {{ settings.binds.maxBinds }} per deal) form free locked groups.
+          </li>
+          <li v-else-if="bindLabels.length" data-testid="bind-summary">
+            Binds are enabled, but the maximum is <strong>0</strong>, so none form.
+          </li>
+          <li v-else data-testid="bind-summary">Binds are off.</li>
           <li v-if="settings.approximationPercent > 0">
             <strong>{{ scoringModeLabel(settings.scoringMode) }}</strong> accuracy weighting:
             {{ accuracyRuleBlurb }}</li>
@@ -345,6 +359,93 @@ const forbiddenMoveLabels = computed(() => {
               Unlimited (with replacement, all ranks equally likely)
             </option>
           </select>
+        </div>
+
+        <!-- Automatic opening binds -->
+        <div class="field-row">
+          <label>Binds</label>
+          <div class="bind-grid" data-testid="bind-settings">
+            <section
+              class="bind-card"
+              :class="{ 'bind-card--on': settings.binds.dragon.enabled }"
+            >
+              <label class="bind-card__head">
+                <input
+                  v-model="settings.binds.dragon.enabled"
+                  type="checkbox"
+                  data-testid="toggle-bind-dragon"
+                />
+                <span class="bind-card__priority">P1</span>
+                <span class="bind-card__name">Dragon</span>
+              </label>
+              <p class="bind-card__hint">
+                Consecutive ranks (A, 2, 3…) fuse into one product. Duplicate ranks keep
+                one card free for a rook.
+              </p>
+              <label class="bind-card__count">
+                Needs
+                <select
+                  v-model.number="settings.binds.dragon.required"
+                  class="input-arcade input-short"
+                  data-testid="bind-dragon-required"
+                  :disabled="!settings.binds.dragon.enabled"
+                >
+                  <option v-for="count in bindCountOptions" :key="count" :value="count">
+                    {{ count }}
+                  </option>
+                </select>
+                in a row
+              </label>
+            </section>
+
+            <section class="bind-card" :class="{ 'bind-card--on': settings.binds.rook.enabled }">
+              <label class="bind-card__head">
+                <input
+                  v-model="settings.binds.rook.enabled"
+                  type="checkbox"
+                  data-testid="toggle-bind-rook"
+                />
+                <span class="bind-card__priority bind-card__priority--rook">P2</span>
+                <span class="bind-card__name">Rook</span>
+              </label>
+              <p class="bind-card__hint">
+                Every copy of one rank fuses into one product. The rank with the most
+                copies is taken first.
+              </p>
+              <label class="bind-card__count">
+                Needs
+                <select
+                  v-model.number="settings.binds.rook.required"
+                  class="input-arcade input-short"
+                  data-testid="bind-rook-required"
+                  :disabled="!settings.binds.rook.enabled"
+                >
+                  <option v-for="count in rookCountOptions" :key="count" :value="count">
+                    {{ count }}
+                  </option>
+                </select>
+                copies
+              </label>
+            </section>
+          </div>
+
+          <div class="bind-max">
+            <label for="setting-bind-max">Maximum binds per deal</label>
+            <select
+              id="setting-bind-max"
+              v-model.number="settings.binds.maxBinds"
+              class="input-arcade input-short"
+              data-testid="bind-max"
+            >
+              <option v-for="count in maxBindOptions" :key="count" :value="count">
+                {{ count }}
+              </option>
+            </select>
+          </div>
+          <span class="field-hint">
+            Binds form automatically before play. Their product is free, but a bind is
+            locked and cannot be ungrouped.
+          </span>
         </div>
 
         <!-- First to X points -->
@@ -777,5 +878,92 @@ fieldset.settings-form:disabled {
   margin-left: 5px;
   font-size: 0.78rem;
   color: var(--ink-muted);
+}
+
+/* Bind rules: two priority cards plus a shared cap. */
+.bind-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px;
+}
+
+.bind-card {
+  background: rgba(12, 10, 18, 0.6);
+  border: 1px solid rgba(111, 214, 138, 0.22);
+  padding: 9px 10px 10px;
+  opacity: 0.68;
+  transition: opacity 0.14s ease, border-color 0.14s ease, background 0.14s ease;
+}
+
+.bind-card--on {
+  opacity: 1;
+  border-color: rgba(111, 214, 138, 0.65);
+  background: rgba(18, 38, 26, 0.55);
+}
+
+.bind-card__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-family: var(--font-pixel);
+  font-size: 0.6rem;
+  letter-spacing: 0.06em;
+  color: #b8f5c8;
+}
+
+.bind-card__priority {
+  flex: none;
+  font-size: 0.46rem;
+  color: #0f1d14;
+  background: #6fd68a;
+  padding: 2px 4px;
+}
+
+.bind-card__priority--rook {
+  background: #c3a6ff;
+  color: #1a1226;
+}
+
+.bind-card__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bind-card__hint {
+  margin: 5px 0 8px 24px;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  line-height: 1.3;
+  color: var(--ink-muted);
+}
+
+.bind-card__count {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 24px;
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  color: var(--ink-muted);
+}
+
+.bind-card__count .input-arcade {
+  width: 58px;
+}
+
+.bind-max {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  font-family: var(--font-mono);
+  font-size: 0.86rem;
+  color: var(--ink-muted);
+}
+
+.bind-max .input-arcade {
+  width: 72px;
 }
 </style>

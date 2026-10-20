@@ -100,6 +100,10 @@ const sections: Section[] = [
         t: 'p',
         text: 'In exact-target tables the lobby does not ask for the number. The host is prompted for it right before each deal, and everyone plays the same target.',
       },
+      {
+        t: 'p',
+        text: 'The engine keeps far more digits than the screen shows. By default values stop at five decimal places; the DECIMALS slider in the score sidebar reveals up to 32 on the target, every group header and the final result. The last stop reads ALL 32, and the reset control returns to five.',
+      },
     ],
   },
   {
@@ -188,6 +192,10 @@ const sections: Section[] = [
       {
         t: 'p',
         text: 'Settings live in the lobby. The host sets the mode, the cards dealt, the target (a fixed 24, a range, a per-round exact number, or a famous constant), the error band, the deck pool, the operator groups and individual operators, the forbidden moves and their penalty, and the points that win the match.',
+      },
+      {
+        t: 'p',
+        text: 'Binds are the other opening rule. Turn on Dragon to fuse consecutive ranks, Rook to fuse copies of one rank, or both; set how many cards each needs and how many binds can form per deal. A bind becomes one free group whose value is the product of its cards. It is locked, so build with it rather than trying to split it.',
       },
       {
         t: 'p',

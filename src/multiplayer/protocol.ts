@@ -11,7 +11,7 @@ import { randomPlayerName } from './playerNames'
  * DOM and Node APIs so the server and the client can both import it.
  */
 
-export const PROTOCOL_VERSION = 1
+export const PROTOCOL_VERSION = 2
 
 export type RoomPhase = 'lobby' | 'playing' | 'round-end' | 'game-over'
 
@@ -36,6 +36,8 @@ export interface RoundState {
   /** 1-based round index within the match. */
   number: number
   target: number
+  /** Canonical target string; constants carry more than double precision. */
+  targetExact?: string
   /** Set when the target is a famous constant, so every screen can name it. */
   constantId?: ConstantId | null
   hand: Card[]
@@ -97,9 +99,12 @@ export type ClientMessage =
   | { t: 'set-name'; name: string }
   | { t: 'set-ready'; ready: boolean }
   | { t: 'update-settings'; settings: GameSettings }
-  /** `target` is required when the table's target preset is `manual`. */
-  | { t: 'start-match'; target?: number }
-  | { t: 'next-round'; target?: number }
+  /**
+   * `target` is required when the table's target preset is `manual`. It is a
+   * string so a typed target keeps every digit instead of a double's 16.
+   */
+  | { t: 'start-match'; target?: number | string }
+  | { t: 'next-round'; target?: number | string }
   | { t: 'skip-round' }
   | { t: 'end-match' }
   /** After the series: host sends the room back to its lobby for a rematch. */

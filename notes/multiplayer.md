@@ -59,8 +59,9 @@ the next deal clears the flag and deals them in.
 Client → server: `browse`, `create-room`, `join`, `set-name`, `set-ready`,
 `update-settings`, `start-match`, `next-round`, `skip-round`, `end-match`,
 `return-to-lobby`, `submit`. `start-match` and `next-round` carry the host's
-chosen target when the table uses exact targets; the server refuses the deal
-with `target-required` if it is missing or outside the playable range.
+chosen target when the table uses exact targets; the target is sent as text so
+all typed digits survive, and the server refuses the deal with `target-required`
+if it is missing or outside the playable range.
 
 Server → client: `welcome` (self id + room snapshot + server time), `state`
 (full snapshot with `revision`), `lobbies` (public room summaries), `error`

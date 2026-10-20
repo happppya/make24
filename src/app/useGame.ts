@@ -1,5 +1,6 @@
 import { computed, nextTick, onBeforeUnmount, provide, reactive, ref, watch } from 'vue'
 import { playSfx } from '../audio/sfx'
+import { decimalString } from '../engine/decimal'
 import { MANUAL_TARGET_MAX, MANUAL_TARGET_MIN } from '../engine/deck'
 import {
   OPERATOR_CATALOG,
@@ -72,9 +73,10 @@ export function useGame() {
     return ws.groups.find((g) => g.id === ws.selectedGroupId) ?? null
   })
 
-  const canUngroupSelected = computed(
-    () => selectedGroupNode.value !== null && selectedGroupNode.value.kind !== 'card'
-  )
+  const canUngroupSelected = computed(() => {
+    const node = selectedGroupNode.value
+    return node !== null && node.kind !== 'card' && node.kind !== 'bind'
+  })
 
   /** Name plates shown only while the matching control is hovered. */
   const hoveredOperatorLabel = ref<string | null>(null)
@@ -84,7 +86,7 @@ export function useGame() {
 
   /** The lobby no longer stores a manual target; the host picks it per deal. */
   const targetPromptOpen = ref(false)
-  const lastManualTarget = ref(settings.manualTarget)
+  const lastManualTarget = ref(String(settings.manualTarget))
   const pendingRoundAction = ref<'start' | 'next' | null>(null)
   const targetPromptRound = computed(() => {
     if (pendingRoundAction.value === 'start') return 1
@@ -234,7 +236,7 @@ export function useGame() {
   }
 
   /** Deals the first round, optionally with the host's exact target. */
-  function beginMatch(target?: number): void {
+  function beginMatch(target?: number | string): void {
     // Ensure at least one operator is enabled, including when every operator in
     // an enabled group has been switched off individually.
     if (!hasEnabledOperators(settings.allowedOperators)) {
@@ -284,17 +286,26 @@ export function useGame() {
   }
 
   /** Called by the chooser once the host confirms a usable number. */
-  function confirmTargetChoice(requested: number): void {
-    if (!Number.isFinite(requested)) return
-    const target = Math.min(MANUAL_TARGET_MAX, Math.max(MANUAL_TARGET_MIN, requested))
-    lastManualTarget.value = target
+  function confirmTargetChoice(requested: number | string): void {
+    const numeric = Number(requested)
+    if (!Number.isFinite(numeric)) return
+    const target = Math.min(MANUAL_TARGET_MAX, Math.max(MANUAL_TARGET_MIN, numeric))
+    // Keep the typed digits when they are already in range; a target such as
+    // 3.14159265358979323846 cannot survive a round-trip through a double.
+    let exact = numeric === target ? String(requested) : String(target)
+    try {
+      exact = decimalString(exact)
+    } catch {
+      exact = String(target)
+    }
+    lastManualTarget.value = exact
     // Keep solo's setting in step, but do not nudge the host's settings watcher
     // online: it would push a now-locked rules update right after the deal.
     if (!settings.isMultiplayer) settings.manualTarget = target
     const action = pendingRoundAction.value
     closeTargetPrompt()
-    if (action === 'start') beginMatch(target)
-    else if (action === 'next') match.advanceAfterRoundEnd(target)
+    if (action === 'start') beginMatch(exact)
+    else if (action === 'next') match.advanceAfterRoundEnd(exact)
   }
 
   /* ------------------------------ board actions ------------------------------ */
@@ -416,7 +427,7 @@ export function useGame() {
     const ws = match.activeWorkspace.value
     if (!ws) return
     match.actionError.value = null
-    resetWorkspaceToHand(ws, match.currentHand.value)
+    resetWorkspaceToHand(ws, match.currentHand.value, settings.binds)
     playSfx('ungroup')
     juice.triggerImpact('split', ws.selectedGroupId)
     juice.pushCue('RESET', 'neutral')
