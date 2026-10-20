@@ -85,17 +85,37 @@ describe('daily and weekly puzzles', () => {
     expect(new Set(puzzles.map((p) => p.operatorGroups.join('|'))).size).toBeGreaterThan(1)
   })
 
-  it('emits a solvable reference expression that passes the same validation as a player', () => {
-    for (const kind of ['daily', 'weekly'] as const) {
-      const puzzle = createPuzzle(kind, MONDAY)
-      const attempt = validatePuzzleAttempt(puzzle, JSON.parse(JSON.stringify(puzzle.referenceSolution)))
+  it('makes every generated challenge solvable with its retained reference board', () => {
+    const periods: { kind: 'daily' | 'weekly'; date: Date }[] = []
+    for (let day = 0; day < 120; day += 1) {
+      periods.push({ kind: 'daily', date: new Date(Date.UTC(2026, 9, 19 + day, 12)) })
+    }
+    for (let week = 0; week < 16; week += 1) {
+      periods.push({ kind: 'weekly', date: new Date(Date.UTC(2026, 9, 19 + week * 7, 12)) })
+    }
 
-      expect(attempt.ok).toBe(true)
-      if (attempt.ok) {
-        expect(attempt.finalValue).toBeCloseTo(puzzle.target, 9)
-        expect(attempt.score).toBeGreaterThan(0)
-        expect(attempt.equation).toContain('=')
-      }
+    for (const { kind, date } of periods) {
+      const puzzle = createPuzzle(kind, date)
+      // Play the reference board back through the exact validator a player's
+      // submission goes through: it has to be legal and land exactly on target.
+      const attempt = validatePuzzleAttempt(
+        puzzle,
+        JSON.parse(JSON.stringify(puzzle.referenceSolution))
+      )
+      expect(attempt.ok, `${kind} ${puzzle.key}: ${attempt.ok ? '' : attempt.error}`).toBe(true)
+      if (!attempt.ok) continue
+
+      expect(attempt.finalValue).toBe(puzzle.target)
+      expect(attempt.equation).toContain('=')
+      expect(attempt.score).toBeGreaterThan(0)
+      // The validator only accepts a board that spends every dealt card once,
+      // so a passing reference proves the challenge is possible by construction.
+      expect(sortedCardIds(puzzle.referenceSolution)).toEqual(
+        puzzle.hand.map((card) => card.id).sort()
+      )
+      // The last-resort fold leans on Add, so every challenge keeps it enabled.
+      expect(puzzle.settings.allowedOperators.basic).toBe(true)
+      expect(puzzle.settings.allowedOperators.operators.add).not.toBe(false)
     }
   })
 
@@ -157,6 +177,14 @@ describe('daily and weekly puzzles', () => {
     expect(puzzleLeaderboardKey(daily)).not.toBe(puzzleLeaderboardKey(weekly))
   })
 })
+
+/** Every dealt card the board spends, sorted, for comparing against the hand. */
+function sortedCardIds(node: ExprNode): string[] {
+  if (node.kind === 'card') return [node.card.id]
+  if (node.kind === 'bind') return node.cards.map((leaf) => leaf.card.id)
+  if (node.kind === 'unary') return sortedCardIds(node.operand)
+  return [...sortedCardIds(node.left), ...sortedCardIds(node.right)].sort()
+}
 
 function hasBindNode(node: ExprNode): boolean {
   if (node.kind === 'bind') return true

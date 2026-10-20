@@ -86,8 +86,7 @@ void tutorialTriggerRef
     >
       <span class="title-puzzles__sigil" aria-hidden="true">◆</span>
       <span class="title-puzzles__body">
-        <span class="title-puzzles__title">DAILY &amp; WEEKLY</span>
-        <span class="title-puzzles__copy">One shared board, fresh every day and week.</span>
+        <span class="title-puzzles__title">PUZZLES</span>
       </span>
       <span class="title-puzzles__arrow" aria-hidden="true">▸</span>
     </button>
@@ -364,10 +363,8 @@ void tutorialTriggerRef
 
 .title-puzzles__body {
   display: flex;
-  align-items: baseline;
-  gap: 12px;
+  align-items: center;
   min-width: 0;
-  flex-wrap: wrap;
 }
 
 .title-puzzles__title {
@@ -376,12 +373,6 @@ void tutorialTriggerRef
   letter-spacing: 0.06em;
   color: var(--gold-bright);
   white-space: nowrap;
-}
-
-.title-puzzles__copy {
-  font-family: var(--font-mono);
-  font-size: 0.92rem;
-  color: rgba(247, 240, 224, 0.62);
 }
 
 .title-puzzles__arrow {

@@ -12,7 +12,7 @@ Each phase screen:
 
 | Screen | Phase | Notes |
 | --- | --- | --- |
-| [TitleScreen.vue](TitleScreen.vue) | `title` | Solo/multiplayer entry, Daily & Weekly entry, and the tutorial button |
+| [TitleScreen.vue](TitleScreen.vue) | `title` | Solo/multiplayer entry, Puzzles entry, and the tutorial button |
 | [PuzzleHubScreen.vue](PuzzleHubScreen.vue) | `puzzles` | Current daily/weekly cards, names, rules and top-three boards |
 | [LobbyBrowserScreen.vue](LobbyBrowserScreen.vue) | `lobby-select` | Name, public lobby list, create public/private, join by code |
 | [LobbySetupScreen.vue](LobbySetupScreen.vue) | `lobby` | Seats, ready-up, and the full table settings including bind toggles (host-only) |

@@ -526,8 +526,13 @@ export function createPuzzle(kind: PuzzleKind, now: Date = new Date()): PuzzleDe
 
   if (!referenceSolution) {
     // The deterministic search is deliberately generous, but a future recipe
-    // change must never make the mode unplayable. A simple all-cards fold is a
-    // valid last resort and still gives every card a role.
+    // change must never make the challenge impossible. A simple all-cards fold
+    // is the last resort; it needs one binary operator that accepts any pair of
+    // hand values, which is what Add does. Add is switched on in the puzzle's
+    // own rules as well, so the fallback board stays a legal player board
+    // instead of relying on every recipe remembering to enable Basic.
+    allowedOperators.basic = true
+    allowedOperators.operators.add = true
     const fallback = buildFallbackExpression(createBoundGroups(hand, bindRules), allowedOperators)
     referenceSolution = fallback
     target = fallback.value

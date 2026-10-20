@@ -1551,6 +1551,59 @@ describe('Make 24 Remastered — Playable UI Flow (App.vue)', () => {
     wrapper.unmount()
   })
 
+  it('switches table setting groups from the side rail', async () => {
+    // Display checks need the app in the document, not a detached test tree.
+    const wrapper = mount(App, { attachTo: document.body })
+    await wrapper.find('[data-testid="enter-singleplayer"]').trigger('click')
+
+    const tab = (id: string) => wrapper.find(`[data-testid="settings-tab-${id}"]`)
+    const panel = (id: string) => wrapper.find(`#settings-panel-${id}`)
+
+    // Five icon-only rail buttons, with Deal open first.
+    expect(wrapper.findAll('[role="tab"]')).toHaveLength(5)
+    expect(tab('deal').text()).toBe('')
+    expect(tab('deal').attributes('aria-label')).toBe('Deal: 4 cards')
+    expect(tab('deal').attributes('aria-selected')).toBe('true')
+    expect(panel('deal').isVisible()).toBe(true)
+    expect(panel('operators').isVisible()).toBe(false)
+    expect(wrapper.find('[data-testid="settings-tip"]').exists()).toBe(false)
+
+    // The meaning of a glyph lives in a tooltip that follows hover and focus.
+    await tab('binds').trigger('mouseenter')
+    expect(wrapper.find('[data-testid="settings-tip"]').text()).toContain('Binds')
+    expect(wrapper.find('[data-testid="settings-tip"]').text()).toContain('off')
+    await tab('binds').trigger('mouseleave')
+    expect(wrapper.find('[data-testid="settings-tip"]').exists()).toBe(false)
+    await tab('target').trigger('focus')
+    expect(wrapper.find('[data-testid="settings-tip"]').text()).toContain('Target')
+    await tab('target').trigger('blur')
+
+    // Opening another group hides the previous one and its fields.
+    await tab('operators').trigger('click')
+    expect(tab('operators').attributes('aria-selected')).toBe('true')
+    expect(tab('deal').attributes('aria-selected')).toBe('false')
+    expect(panel('operators').isVisible()).toBe(true)
+    expect(panel('deal').isVisible()).toBe(false)
+    expect(wrapper.find('#setting-num-cards').isVisible()).toBe(false)
+    expect(wrapper.find('[data-testid="toggle-op-add"]').isVisible()).toBe(true)
+
+    // The rail also answers the arrow keys, wrapping at the ends.
+    await wrapper.find('[data-testid="settings-tabs"]').trigger('keydown', { key: 'ArrowUp' })
+    expect(tab('operators').attributes('aria-selected')).toBe('false')
+    expect(tab('binds').attributes('aria-selected')).toBe('true')
+    expect(panel('binds').isVisible()).toBe(true)
+
+    // Editing still works through the group it belongs to, and the tooltip
+    // reports the new status rather than a stale one.
+    await tab('target').trigger('click')
+    await wrapper.find('#setting-target').setValue('small')
+    await tab('target').trigger('mouseenter')
+    expect(wrapper.find('[data-testid="settings-tip"]').text()).toContain('1–100')
+
+    wrapper.unmount()
+    document.body.innerHTML = ''
+  })
+
   it('puts the workspace origin at the centre of the felt', async () => {
     const wrapper = mount(App)
     await wrapper.find('[data-testid="enter-singleplayer"]').trigger('click')

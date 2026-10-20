@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import LobbyFrame from '../LobbyFrame.vue'
 import { useGameContext } from '../../app/context'
 import { scoringModeLabel } from '../../app/labels'
@@ -106,6 +106,159 @@ function setBindMinCards(kind: BindKind, event: Event): void {
   const rule = settings.binds[kind]
   rule.minCards = value
   if (rule.maxCards < value) rule.maxCards = value
+}
+
+/* ------------------------------ settings tabs ------------------------------ */
+
+type SettingsTabId = 'deal' | 'target' | 'binds' | 'operators' | 'rules'
+
+/**
+ * The settings rail: one icon tab per group. Paths are drawn on a 24×24 grid
+ * with square caps so the glyphs stay in the same pixel language as the cards.
+ */
+const SETTINGS_TABS: { id: SettingsTabId; label: string; paths: string[] }[] = [
+  {
+    id: 'deal',
+    label: 'Deal',
+    paths: ['M2 9h9v12H2z', 'M13 3h9v12h-9z'],
+  },
+  {
+    id: 'target',
+    label: 'Target',
+    paths: ['M3 3h18v18H3z', 'M8 8h8v8H8z', 'M11 11h2v2h-2z'],
+  },
+  {
+    id: 'binds',
+    label: 'Binds',
+    paths: ['M5 10h14v11H5z', 'M8 10V6h8v4', 'M11 14h2v4h-2z'],
+  },
+  {
+    id: 'operators',
+    label: 'Operators',
+    paths: [
+      'M3 3h18v18H3z',
+      'M7 7h10v4H7z',
+      'M7 14h2v2H7z',
+      'M11 14h2v2h-2z',
+      'M15 14h2v2h-2z',
+      'M7 18h2v2H7z',
+      'M11 18h2v2h-2z',
+      'M15 18h2v2h-2z',
+    ],
+  },
+  {
+    id: 'rules',
+    label: 'Rules',
+    paths: ['M5 3h14v18H5z', 'M8 8h8', 'M8 12h8', 'M8 16h5'],
+  },
+]
+
+const activeTab = ref<SettingsTabId>('deal')
+const settingsForm = ref<HTMLFieldSetElement | null>(null)
+
+/** Short status under a tab, so a group can be read without opening it. */
+function settingsTabNote(id: SettingsTabId): string {
+  switch (id) {
+    case 'deal':
+      return `${settings.numCards} cards`
+    case 'target':
+      switch (settings.targetPreset) {
+        case 'just-24':
+          return '24'
+        case 'small':
+          return '1–100'
+        case 'big':
+          return '100–10k'
+        case 'custom':
+          return `${settings.customMin}–${settings.customMax}`
+        case 'manual':
+          return 'chosen'
+        default:
+          return selectedConstant.value?.symbol ?? 'random'
+      }
+    case 'binds':
+      return bindLabels.value.length ? `${bindLabels.value.length} on` : 'off'
+    case 'operators': {
+      const all = OPERATOR_GROUPS.flatMap((group) => group.operators)
+      return `${all.filter(isOpEnabled).length}/${all.length}`
+    }
+    default:
+      return forbiddenMoveLabels.value.length ? `${settings.forbiddenMovePenalty} pts` : 'off'
+  }
+}
+
+const settingsTabs = computed(() =>
+  SETTINGS_TABS.map((tab) => ({ ...tab, note: settingsTabNote(tab.id) }))
+)
+
+function selectTab(id: SettingsTabId): void {
+  activeTab.value = id
+  if (settingsForm.value) settingsForm.value.scrollTop = 0
+}
+
+/**
+ * The rail is icon-only, so the meaning lives in a tooltip that follows the
+ * hovered or focused button. It is positioned fixed because the settings panel
+ * clips its own overflow.
+ */
+const tooltipTab = ref<SettingsTabId | null>(null)
+const tooltipPosition = ref({ top: '0px', left: '0px' })
+const tooltipTabInfo = computed(
+  () => settingsTabs.value.find((tab) => tab.id === tooltipTab.value) ?? null
+)
+
+function showTabTooltip(id: SettingsTabId, event: Event): void {
+  const button = event.currentTarget
+  if (!(button instanceof HTMLElement)) return
+  const rect = button.getBoundingClientRect()
+  // On the narrow layout the rail lies down, so the tip hangs below it instead.
+  const belowRail = window.innerWidth <= 900
+  tooltipPosition.value = belowRail
+    ? {
+        top: `${rect.bottom + 8}px`,
+        left: `${Math.min(rect.left, Math.max(8, window.innerWidth - 192))}px`,
+      }
+    : { top: `${rect.top + rect.height / 2}px`, left: `${rect.right + 10}px` }
+  tooltipTab.value = id
+}
+
+function hideTabTooltip(): void {
+  tooltipTab.value = null
+}
+
+/** Arrow keys and Home/End move along the rail, as a tablist should. */
+function onTabKeydown(event: KeyboardEvent): void {
+  const last = SETTINGS_TABS.length - 1
+  const current = SETTINGS_TABS.findIndex((tab) => tab.id === activeTab.value)
+  let next: number
+  switch (event.key) {
+    case 'Escape':
+      hideTabTooltip()
+      return
+    case 'ArrowDown':
+    case 'ArrowRight':
+      next = current === last ? 0 : current + 1
+      break
+    case 'ArrowUp':
+    case 'ArrowLeft':
+      next = current === 0 ? last : current - 1
+      break
+    case 'Home':
+      next = 0
+      break
+    case 'End':
+      next = last
+      break
+    default:
+      return
+  }
+
+  event.preventDefault()
+  selectTab(SETTINGS_TABS[next]!.id)
+  const buttons = (event.currentTarget as HTMLElement).querySelectorAll<HTMLButtonElement>(
+    '[role="tab"]'
+  )
+  buttons[next]?.focus()
 }
 </script>
 
@@ -230,8 +383,68 @@ function setBindMinCards(kind: BindKind, event: Event): void {
     <section class="panel-box lobby-settings">
       <h2>Table Settings</h2>
 
-      <fieldset class="settings-form" :disabled="!canEditSettings">
-      <section class="settings-section">
+      <div class="settings-layout">
+        <div
+          class="settings-tabs"
+          role="tablist"
+          aria-orientation="vertical"
+          aria-label="Table setting groups"
+          data-testid="settings-tabs"
+          @keydown="onTabKeydown"
+        >
+          <button
+            v-for="tab in settingsTabs"
+            :key="tab.id"
+            type="button"
+            role="tab"
+            class="settings-tab"
+            :class="{ 'settings-tab--active': tab.id === activeTab }"
+            :id="`settings-tab-${tab.id}`"
+            :aria-label="`${tab.label}: ${tab.note}`"
+            :aria-selected="tab.id === activeTab"
+            :aria-controls="`settings-panel-${tab.id}`"
+            :tabindex="tab.id === activeTab ? 0 : -1"
+            :data-testid="`settings-tab-${tab.id}`"
+            @click="selectTab(tab.id)"
+            @mouseenter="showTabTooltip(tab.id, $event)"
+            @mouseleave="hideTabTooltip"
+            @focus="showTabTooltip(tab.id, $event)"
+            @blur="hideTabTooltip"
+          >
+            <svg
+              class="settings-tab__icon"
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="square"
+              stroke-linejoin="miter"
+            >
+              <path v-for="(shape, index) in tab.paths" :key="index" :d="shape" />
+            </svg>
+          </button>
+        </div>
+
+        <div
+          v-if="tooltipTabInfo"
+          class="settings-tip"
+          :style="tooltipPosition"
+          data-testid="settings-tip"
+          aria-hidden="true"
+        >
+          <span class="settings-tip__label">{{ tooltipTabInfo.label }}</span>
+          <span class="settings-tip__note">{{ tooltipTabInfo.note }}</span>
+        </div>
+
+      <fieldset ref="settingsForm" class="settings-form" :disabled="!canEditSettings">
+      <section
+        v-show="activeTab === 'deal'"
+        id="settings-panel-deal"
+        class="settings-section"
+        role="tabpanel"
+        aria-labelledby="settings-tab-deal"
+      >
         <h3 class="settings-section__title">Deal &amp; match</h3>
 
         <!-- Mode (multiplayer only dropdown) -->
@@ -287,7 +500,13 @@ function setBindMinCards(kind: BindKind, event: Event): void {
         </div>
       </section>
 
-      <section class="settings-section">
+      <section
+        v-show="activeTab === 'target'"
+        id="settings-panel-target"
+        class="settings-section"
+        role="tabpanel"
+        aria-labelledby="settings-tab-target"
+      >
         <h3 class="settings-section__title">Target</h3>
 
         <!-- Target number preset -->
@@ -401,13 +620,16 @@ function setBindMinCards(kind: BindKind, event: Event): void {
             <option value="balanced">Balanced</option>
             <option value="accuracy-first">Accuracy first</option>
           </select>
-          <span class="field-hint">
-            {{ settings.approximationPercent > 0 ? accuracyRuleBlurb : 'Set Approximations above 0% to score closeness.' }}
-          </span>
         </div>
       </section>
 
-      <section class="settings-section">
+      <section
+        v-show="activeTab === 'binds'"
+        id="settings-panel-binds"
+        class="settings-section"
+        role="tabpanel"
+        aria-labelledby="settings-tab-binds"
+      >
         <h3 class="settings-section__title">Opening binds</h3>
 
         <!-- Automatic opening binds -->
@@ -537,15 +759,16 @@ function setBindMinCards(kind: BindKind, event: Event): void {
               </div>
             </section>
           </div>
-
-          <span class="field-hint">
-            Binds form automatically before play. Longer runs and stacks shrink to their
-            maximum; their product is free, but a bind is locked and cannot be ungrouped.
-          </span>
         </div>
       </section>
 
-      <section class="settings-section">
+      <section
+        v-show="activeTab === 'operators'"
+        id="settings-panel-operators"
+        class="settings-section"
+        role="tabpanel"
+        aria-labelledby="settings-tab-operators"
+      >
         <h3 class="settings-section__title">Operators</h3>
 
         <!-- Allowed operators: group switch plus one switch per operator -->
@@ -566,7 +789,6 @@ function setBindMinCards(kind: BindKind, event: Event): void {
                   {{ group.operators.filter(isOpEnabled).length }}/{{ group.operators.length }}
                 </span>
               </label>
-              <span class="operator-group__hint">{{ group.hint }}</span>
               <div class="operator-toggles">
                 <label
                   v-for="op in group.operators"
@@ -593,7 +815,13 @@ function setBindMinCards(kind: BindKind, event: Event): void {
         </div>
       </section>
 
-      <section class="settings-section">
+      <section
+        v-show="activeTab === 'rules'"
+        id="settings-panel-rules"
+        class="settings-section"
+        role="tabpanel"
+        aria-labelledby="settings-tab-rules"
+      >
         <h3 class="settings-section__title">House rules</h3>
 
         <!-- Forbidden moves: shortcut rules with one shared price -->
@@ -640,6 +868,7 @@ function setBindMinCards(kind: BindKind, event: Event): void {
         </div>
       </section>
       </fieldset>
+      </div>
     </section>
   </div>
 </LobbyFrame>
@@ -729,6 +958,7 @@ function setBindMinCards(kind: BindKind, event: Event): void {
 .lobby-players,
 .lobby-settings {
   background: linear-gradient(180deg, #201a2e 0%, #15111f 100%);
+  min-width: 0;
 }
 
 /* Both panels are fixed-height columns: the long part scrolls, the buttons
@@ -779,6 +1009,7 @@ function setBindMinCards(kind: BindKind, event: Event): void {
     overflow: visible;
     padding-right: 0;
   }
+
 }
 
 /* Chunky scrollbars so they read as part of the cabinet rather than the OS. */
@@ -884,6 +1115,126 @@ function setBindMinCards(kind: BindKind, event: Event): void {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+/* The settings panel is a rail of group buttons beside the form they switch. */
+.settings-layout {
+  display: flex;
+  flex: 1 1 auto;
+  gap: 14px;
+  min-width: 0;
+  min-height: 0;
+}
+
+.settings-tabs {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 50px;
+  min-width: 0;
+  padding-right: 8px;
+  border-right: 2px dashed rgba(242, 201, 76, 0.22);
+  overflow-y: auto;
+  overflow-x: visible;
+  scrollbar-width: thin;
+  scrollbar-color: #6b5a2c transparent;
+}
+
+.settings-tab {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  background: #1b1727;
+  color: var(--ink-muted);
+  border: 2px solid transparent;
+  outline: 2px solid #09080f;
+  cursor: pointer;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease,
+    border-color 0.12s ease;
+}
+
+.settings-tab:hover {
+  background: #2a2338;
+  color: var(--ink-cream);
+}
+
+.settings-tab:focus-visible {
+  border-color: var(--royal-blue);
+  outline: 3px solid #09080f;
+}
+
+.settings-tab--active {
+  background: #2a2338;
+  border-color: var(--gold);
+  color: var(--ink-cream);
+  box-shadow:
+    inset 3px 0 0 var(--gold-bright),
+    inset 0 -3px 0 rgba(0, 0, 0, 0.42),
+    0 3px 0 #09080f;
+}
+
+.settings-tab__icon {
+  width: 22px;
+  height: 22px;
+  shape-rendering: crispEdges;
+  color: var(--gold);
+}
+
+.settings-tab--active .settings-tab__icon {
+  color: var(--gold-bright);
+}
+
+/* Floating label for the icon-only rail: what the glyph means, plus its status. */
+.settings-tip {
+  position: fixed;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 108px;
+  padding: 7px 10px;
+  transform: translateY(-50%);
+  background: #120f1c;
+  border: 2px solid var(--gold);
+  outline: 2px solid #09080f;
+  box-shadow: 0 4px 0 #09080f;
+  pointer-events: none;
+  animation: settings-tip-in 0.1s steps(2);
+}
+
+@keyframes settings-tip-in {
+  from {
+    opacity: 0;
+    transform: translate(-4px, -50%);
+  }
+  to {
+    opacity: 1;
+    transform: translate(0, -50%);
+  }
+}
+
+.settings-tip__label {
+  font-family: var(--font-pixel);
+  font-size: 0.56rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--gold-bright);
+}
+
+.settings-tip__note {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  line-height: 1.1;
+  color: var(--ink-muted);
+  white-space: nowrap;
 }
 
 fieldset.settings-form {
@@ -1036,18 +1387,11 @@ fieldset.settings-form:disabled {
   color: var(--ink-muted);
 }
 
-.operator-group__hint {
-  display: block;
-  margin: 3px 0 8px 24px;
-  font-family: var(--font-mono);
-  font-size: 0.8rem;
-  color: var(--ink-muted);
-}
-
 .operator-toggles {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
   gap: 6px;
+  margin-top: 8px;
 }
 
 .toggle-chip {
@@ -1158,5 +1502,29 @@ fieldset.settings-form:disabled {
 .bind-card__count .input-arcade {
   width: 54px;
   padding: 4px 6px;
+}
+
+/* No room for a column of buttons: the rail lies down above the form.
+   Kept last so it wins over the row-by-row rules above. */
+@media (max-width: 900px) {
+  .settings-layout {
+    flex-direction: column;
+    gap: 12px;
+  }
+  .settings-tabs {
+    flex-direction: row;
+    gap: 8px;
+    width: auto;
+    padding: 0 0 10px;
+    border-right: 0;
+    border-bottom: 2px dashed rgba(242, 201, 76, 0.22);
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+  /* The tip hangs below the rail here, so it must not be centred on itself. */
+  .settings-tip {
+    transform: none;
+    animation: none;
+  }
 }
 </style>
