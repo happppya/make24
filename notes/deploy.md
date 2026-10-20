@@ -197,6 +197,11 @@ when `package-lock.json` changed (the hash is cached in
 `/health` from the runner until it answers `{"ok":true}`. On failure it dumps
 `journalctl` for `make24` and `caddy` into the job log.
 
+`/health` also reports the wire `protocol` the process speaks, so the poll doubles
+as a version probe: a client built from a different commit is refused with
+`protocol-mismatch` instead of misreading snapshots. Ship the frontend and the
+table server from the same push.
+
 Only `server/**`, `src/multiplayer/**`, `src/engine/**`, the manifests and the
 workflow itself trigger it. That filter is deliberate: rooms and seats live in
 memory, so every restart disconnects everyone mid-hand and a copy tweak must

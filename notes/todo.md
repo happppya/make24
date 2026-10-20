@@ -16,7 +16,5 @@ Remove todos that are already completed. Remove documents from current status on
 
 ## Todos
 
-- [ ] Turn on GitHub Pages (Settings → Pages → Source: GitHub Actions) so pushes to `master` publish the frontend (see notes/deploy.md)
-- [~] Deploy the table server to Oracle Cloud Infrastructure (TLS termination, `ALLOWED_ORIGIN`, `VITE_MULTIPLAYER_URL`) and add auth/rate limiting before it is public — instance is live and verified end to end (TLS on a reserved IP, Node 24.22.0, both units enabled, room create/join over `wss://`); the `VITE_MULTIPLAYER_URL` variable, the Pages redeploy, and the push-to-deploy secrets remain
-- [ ] Add reconnect/resume so a dropped socket keeps its seat and any board in progress
-- [ ] Re-run `scripts/provision-vm.sh` (or update `/etc/caddy/Caddyfile`) on the live VM so `/puzzles/*` reaches the table server, then verify a puzzle submission against the deployed board
+- [~] Deploy the table server to Oracle Cloud Infrastructure (TLS termination, `ALLOWED_ORIGIN`, `VITE_MULTIPLAYER_URL`) and add auth/rate limiting before it is public — instance is live and wired end to end (TLS on a reserved IP, Node 24.22.0, both units enabled, Pages + push-to-deploy secrets and `VITE_MULTIPLAYER_URL` in place). Latest ship: `e4dbfee` redeployed by both workflows; `/health` reports `protocol: 2` and a live `wss://` create-room + manual 32-digit target round-tripped through the deployed server. Only auth/rate limiting remains.
+- [ ] Add reconnect/resume so a dropped socket keeps its seat and any board in progress- [ ] Re-run `scripts/provision-vm.sh` (or update `/etc/caddy/Caddyfile`) on the live VM so `/puzzles/*` reaches the table server, then verify a puzzle submission against the deployed board — confirmed after the `e4dbfee` ship: the live matcher is still `path /ws /health`, so a board lookup 404s at Caddy while the server itself answers it locally
