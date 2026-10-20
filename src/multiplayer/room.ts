@@ -21,6 +21,8 @@ import {
   formatFullEquation,
 } from '../engine/math'
 import type {
+  BindKind,
+  BindRule,
   Card,
   CardPoolMode,
   ExprNode,
@@ -32,12 +34,10 @@ import type {
   TargetPreset,
 } from '../engine/types'
 import {
-  DRAGON_REQUIRED_MAX,
-  DRAGON_REQUIRED_MIN,
-  MAX_BINDS_LIMIT,
-  ROOK_REQUIRED_MAX,
-  ROOK_REQUIRED_MIN,
+  BIND_CARD_LIMITS,
+  MAX_PER_DEAL_LIMIT,
   createDefaultBindRules,
+  resolveBindLimits,
 } from '../engine/binds'
 import { sanitizeSolutionTree } from './solutionTree'
 import {
@@ -127,6 +127,23 @@ function clampNumber(value: unknown, min: number, max: number, fallback: number)
   return Math.min(max, Math.max(min, num))
 }
 
+/** One bind kind's card range and per-deal cap, clamped to what the engine allows. */
+function sanitizeBindRule(kind: BindKind, raw: unknown, base: BindRule): BindRule {
+  const value = (raw ?? base) as unknown as Record<string, unknown>
+  const limits = BIND_CARD_LIMITS[kind]
+  const resolved = resolveBindLimits(kind, {
+    minCards: Math.round(clampNumber(value.minCards, limits.min, limits.max, base.minCards)),
+    maxCards: Math.round(clampNumber(value.maxCards, limits.min, limits.max, base.maxCards)),
+    maxPerDeal: Math.round(clampNumber(value.maxPerDeal, 0, MAX_PER_DEAL_LIMIT, base.maxPerDeal)),
+  })
+  return {
+    enabled: typeof value.enabled === 'boolean' ? value.enabled : base.enabled,
+    minCards: resolved.minCards,
+    maxCards: resolved.maxCards,
+    maxPerDeal: resolved.maxPerDeal,
+  }
+}
+
 /** Returns the host's chosen target as both a numeric mirror and exact digits. */
 function readManualTarget(value: unknown): { value: number; exact: string } | null {
   if (typeof value !== 'number' && typeof value !== 'string') return null
@@ -168,8 +185,6 @@ export function sanitizeSettings(input: unknown, base: GameSettings): GameSettin
     unknown
   >
   const binds = (raw.binds ?? base.binds) as unknown as Record<string, unknown>
-  const dragon = (binds.dragon ?? base.binds.dragon) as unknown as Record<string, unknown>
-  const rook = (binds.rook ?? base.binds.rook) as unknown as Record<string, unknown>
   return {
     isMultiplayer: true,
     mode: pick(raw.mode, GAME_MODES, base.mode),
@@ -206,27 +221,8 @@ export function sanitizeSettings(input: unknown, base: GameSettings): GameSettin
       clampNumber(raw.forbiddenMovePenalty, 0, 9_999, base.forbiddenMovePenalty)
     ),
     binds: {
-      dragon: {
-        enabled:
-          typeof dragon.enabled === 'boolean' ? dragon.enabled : base.binds.dragon.enabled,
-        required: Math.round(
-          clampNumber(
-            dragon.required,
-            DRAGON_REQUIRED_MIN,
-            DRAGON_REQUIRED_MAX,
-            base.binds.dragon.required
-          )
-        ),
-      },
-      rook: {
-        enabled: typeof rook.enabled === 'boolean' ? rook.enabled : base.binds.rook.enabled,
-        required: Math.round(
-          clampNumber(rook.required, ROOK_REQUIRED_MIN, ROOK_REQUIRED_MAX, base.binds.rook.required)
-        ),
-      },
-      maxBinds: Math.round(
-        clampNumber(binds.maxBinds, 0, MAX_BINDS_LIMIT, base.binds.maxBinds)
-      ),
+      dragon: sanitizeBindRule('dragon', binds.dragon, base.binds.dragon),
+      rook: sanitizeBindRule('rook', binds.rook, base.binds.rook),
     },
     firstToPoints: Math.round(clampNumber(raw.firstToPoints, 1, 25, base.firstToPoints)),
   }

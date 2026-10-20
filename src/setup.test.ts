@@ -1599,9 +1599,10 @@ describe('Make 24 Remastered — Playable UI Flow (App.vue)', () => {
 
     await wrapper.find('#setting-num-cards').setValue('10')
     await wrapper.find('[data-testid="toggle-bind-dragon"]').setValue(true)
-    await wrapper.find('[data-testid="bind-dragon-required"]').setValue('2')
-    await wrapper.find('[data-testid="bind-max"]').setValue('3')
-    expect(wrapper.find('[data-testid="bind-summary"]').text()).toContain('Dragon 2+')
+    await wrapper.find('[data-testid="bind-dragon-min"]').setValue('2')
+    await wrapper.find('[data-testid="bind-dragon-max"]').setValue('4')
+    await wrapper.find('[data-testid="bind-dragon-per-deal"]').setValue('3')
+    expect(wrapper.find('[data-testid="bind-summary"]').text()).toContain('Dragon 2–4 ×3')
 
     await wrapper.find('[data-testid="start-round-btn"]').trigger('click')
     await nextTick()
@@ -1616,6 +1617,21 @@ describe('Make 24 Remastered — Playable UI Flow (App.vue)', () => {
     await nextTick()
     expect(wrapper.find('[data-testid="inline-ungroup-btn"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="ungroup-btn"]').attributes('disabled')).toBeDefined()
+
+    wrapper.unmount()
+  })
+
+  it('raises a bind maximum card count when the minimum passes it', async () => {
+    const wrapper = mount(App)
+    await wrapper.find('[data-testid="enter-singleplayer"]').trigger('click')
+
+    await wrapper.find('[data-testid="toggle-bind-rook"]').setValue(true)
+    await wrapper.find('[data-testid="bind-rook-max"]').setValue('3')
+    await wrapper.find('[data-testid="bind-rook-min"]').setValue('4')
+
+    const max = wrapper.find('[data-testid="bind-rook-max"]').element as HTMLSelectElement
+    expect(max.value).toBe('4')
+    expect(wrapper.find('[data-testid="bind-summary"]').text()).toContain('Rook 4 ×2')
 
     wrapper.unmount()
   })

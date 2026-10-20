@@ -113,8 +113,12 @@ export type BindKind = 'dragon' | 'rook'
 
 export interface BindRule {
   enabled: boolean
-  /** Minimum cards needed to form this bind. */
-  required: number
+  /** Smallest group, in cards, that forms this bind. */
+  minCards: number
+  /** Largest group this bind may form; longer runs and stacks are trimmed. */
+  maxCards: number
+  /** Most groups of this kind formed in one deal. */
+  maxPerDeal: number
 }
 
 export interface BindRulesConfig {
@@ -122,8 +126,6 @@ export interface BindRulesConfig {
   dragon: BindRule
   /** Priority 2: every copy of one rank. */
   rook: BindRule
-  /** Total binds formed per deal across both kinds. */
-  maxBinds: number
 }
 
 export interface GameSettings {

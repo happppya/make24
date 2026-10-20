@@ -30,9 +30,8 @@ function rawBind(kind: 'dragon' | 'rook', cards: Card[]) {
 }
 
 const dragonRules = {
-  dragon: { enabled: true, required: 3 },
-  rook: { enabled: false, required: 2 },
-  maxBinds: 1,
+  dragon: { enabled: true, minCards: 3, maxCards: 6, maxPerDeal: 1 },
+  rook: { enabled: false, minCards: 2, maxCards: 5, maxPerDeal: 1 },
 } as const
 
 describe('solution tree sanitising', () => {
@@ -106,7 +105,7 @@ describe('solution tree sanitising', () => {
     const tree = sanitizeSolutionTree(
       rawBind('dragon', boundHand),
       boundHand,
-      { ...dragonRules, maxBinds: 1 }
+      dragonRules
     )
 
     expect(tree).not.toBeNull()

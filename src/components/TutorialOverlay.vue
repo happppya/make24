@@ -195,7 +195,7 @@ const sections: Section[] = [
       },
       {
         t: 'p',
-        text: 'Binds are the other opening rule. Turn on Dragon to fuse consecutive ranks, Rook to fuse copies of one rank, or both; set how many cards each needs and how many binds can form per deal. A bind becomes one free group whose value is the product of its cards. It is locked, so build with it rather than trying to split it.',
+        text: 'Binds are the other opening rule. Turn on Dragon to fuse consecutive ranks, Rook to fuse copies of one rank, or both; each one gets its own minimum and maximum card count plus its own cap of binds per deal. A bind becomes one free group whose value is the product of its cards. It is locked, so build with it rather than trying to split it.',
       },
       {
         t: 'p',

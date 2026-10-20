@@ -2,6 +2,7 @@ import { decimalString, toDecimal } from './decimal'
 import { formatNumber } from './math'
 import type {
   BindKind,
+  BindRule,
   BindRulesConfig,
   Card,
   CardLeafNode,
@@ -9,14 +10,13 @@ import type {
   Rank,
 } from './types'
 
-export const DRAGON_REQUIRED_MIN = 2
-export const DRAGON_REQUIRED_MAX = 6
-export const DRAGON_REQUIRED_DEFAULT = 3
-export const ROOK_REQUIRED_MIN = 2
-export const ROOK_REQUIRED_MAX = 5
-export const ROOK_REQUIRED_DEFAULT = 2
-export const MAX_BINDS_LIMIT = 6
-export const MAX_BINDS_DEFAULT = 2
+export const MAX_PER_DEAL_LIMIT = 6
+
+/** Allowed card counts for each kind's opening group. */
+export const BIND_CARD_LIMITS: Record<BindKind, { min: number; max: number }> = {
+  dragon: { min: 2, max: 6 },
+  rook: { min: 2, max: 5 },
+}
 
 export const BIND_LABELS: Record<BindKind, string> = {
   dragon: 'Dragon',
@@ -29,9 +29,32 @@ export const BIND_LABELS: Record<BindKind, string> = {
  */
 export function createDefaultBindRules(): BindRulesConfig {
   return {
-    dragon: { enabled: false, required: DRAGON_REQUIRED_DEFAULT },
-    rook: { enabled: false, required: ROOK_REQUIRED_DEFAULT },
-    maxBinds: MAX_BINDS_DEFAULT,
+    dragon: { enabled: false, minCards: 3, maxCards: 6, maxPerDeal: 2 },
+    rook: { enabled: false, minCards: 2, maxCards: 5, maxPerDeal: 2 },
+  }
+}
+
+/** One kind's clamped card range and per-deal cap. */
+export interface BindLimits {
+  minCards: number
+  maxCards: number
+  maxPerDeal: number
+}
+
+/**
+ * Clamps one bind rule to what the engine can honour. `maxCards` is never below
+ * `minCards`, so a table can never ask for an impossible range.
+ */
+export function resolveBindLimits(
+  kind: BindKind,
+  rule: Pick<BindRule, 'minCards' | 'maxCards' | 'maxPerDeal'>
+): BindLimits {
+  const limits = BIND_CARD_LIMITS[kind]
+  const minCards = clampInt(rule.minCards, limits.min, limits.max)
+  return {
+    minCards,
+    maxCards: clampInt(rule.maxCards, minCards, limits.max),
+    maxPerDeal: clampInt(rule.maxPerDeal, 0, MAX_PER_DEAL_LIMIT),
   }
 }
 
@@ -75,30 +98,31 @@ function clampInt(value: number, min: number, max: number): number {
  * Finds the opening bind groups for a dealt hand.
  *
  * Dragons are considered first and use one card of every rank in the longest
- * consecutive runs. Rooks then use every remaining copy of a rank. The shared
- * cap stops the engine once enough binds have been formed.
+ * consecutive runs. Rooks then use every remaining copy of a rank. Each kind
+ * has its own card range and its own per-deal cap, so a cap of 0 switches that
+ * kind off without disabling the other one.
  */
 export function findBindFormations(hand: readonly Card[], rules: BindRulesConfig): BindFormation[] {
   if (!Array.isArray(hand) || hand.length === 0) return []
-  const maxBinds = clampInt(rules.maxBinds, 0, MAX_BINDS_LIMIT)
-  if (maxBinds === 0) return []
 
   const remaining = [...hand]
   const chosen: BindFormation[] = []
 
   if (rules.dragon.enabled) {
-    const required = clampInt(rules.dragon.required, DRAGON_REQUIRED_MIN, DRAGON_REQUIRED_MAX)
-    for (const formation of dragonCandidates(remaining, required)) {
-      if (chosen.length >= maxBinds) break
-      chosen.push(formation)
+    const limits = resolveBindLimits('dragon', rules.dragon)
+    if (limits.maxPerDeal > 0) {
+      for (const formation of dragonCandidates(remaining, limits)) {
+        if (chosen.length >= limits.maxPerDeal) break
+        chosen.push(formation)
+      }
+      removeFormationCards(remaining, chosen)
     }
-    removeFormationCards(remaining, chosen)
   }
 
-  if (rules.rook.enabled && chosen.length < maxBinds) {
-    const required = clampInt(rules.rook.required, ROOK_REQUIRED_MIN, ROOK_REQUIRED_MAX)
-    for (const formation of rookCandidates(remaining, required)) {
-      if (chosen.length >= maxBinds) break
+  if (rules.rook.enabled) {
+    const limits = resolveBindLimits('rook', rules.rook)
+    for (const formation of rookCandidates(remaining, limits)) {
+      if (chosen.length >= limits.maxPerDeal) break
       chosen.push(formation)
     }
   }
@@ -106,7 +130,7 @@ export function findBindFormations(hand: readonly Card[], rules: BindRulesConfig
   return chosen
 }
 
-function dragonCandidates(cards: readonly Card[], required: number): BindFormation[] {
+function dragonCandidates(cards: readonly Card[], limits: BindLimits): BindFormation[] {
   const byRank = new Map<Rank, Card[]>()
   for (const card of cards) {
     const group = byRank.get(card.rank)
@@ -128,17 +152,20 @@ function dragonCandidates(cards: readonly Card[], required: number): BindFormati
   if (run.length > 0) runs.push(run)
 
   return runs
-    .filter((sequence) => sequence.length >= required)
+    .filter((sequence) => sequence.length >= limits.minCards)
     .map((sequence) => {
-      // One card per rank: duplicate ranks stay free for a possible rook.
-      const picked = sequence.map((rank) => byRank.get(rank)![0]!)
+      // One card per rank: duplicate ranks stay free for a possible rook. Runs
+      // longer than the cap bind their lowest ranks and leave the rest loose.
+      const picked = sequence
+        .slice(0, limits.maxCards)
+        .map((rank) => byRank.get(rank)![0]!)
       const exactValue = bindExactValue(picked)
       return { kind: 'dragon' as const, cards: picked, value: Number(exactValue), exactValue }
     })
     .sort((a, b) => b.cards.length - a.cards.length || a.cards[0]!.rank - b.cards[0]!.rank)
 }
 
-function rookCandidates(cards: readonly Card[], required: number): BindFormation[] {
+function rookCandidates(cards: readonly Card[], limits: BindLimits): BindFormation[] {
   const byRank = new Map<Rank, Card[]>()
   for (const card of cards) {
     const group = byRank.get(card.rank)
@@ -147,12 +174,14 @@ function rookCandidates(cards: readonly Card[], required: number): BindFormation
   }
 
   return [...byRank.entries()]
-    .filter(([, group]) => group.length >= required)
+    .filter(([, group]) => group.length >= limits.minCards)
     .map(([, group]) => {
-      const exactValue = bindExactValue(group)
+      // Stacks larger than the cap use their earliest-dealt copies.
+      const picked = group.slice(0, limits.maxCards)
+      const exactValue = bindExactValue(picked)
       return {
         kind: 'rook' as const,
-        cards: [...group],
+        cards: picked,
         value: Number(exactValue),
         exactValue,
       }
@@ -223,14 +252,19 @@ function cardLeaf(card: Card): CardLeafNode {
   }
 }
 
-/** Compact labels for the lobby summary and puzzle cards. */
+/** Compact labels for the lobby summary and puzzle cards, e.g. `Dragon 3–6 ×2`. */
 export function bindRuleLabels(rules: BindRulesConfig): string[] {
   const labels: string[] = []
-  if (rules.dragon.enabled) {
-    labels.push(`${BIND_LABELS.dragon} ${clampInt(rules.dragon.required, DRAGON_REQUIRED_MIN, DRAGON_REQUIRED_MAX)}+`)
-  }
-  if (rules.rook.enabled) {
-    labels.push(`${BIND_LABELS.rook} ${clampInt(rules.rook.required, ROOK_REQUIRED_MIN, ROOK_REQUIRED_MAX)}+`)
+  for (const kind of ['dragon', 'rook'] as const) {
+    const rule = rules[kind]
+    if (!rule.enabled) continue
+    const limits = resolveBindLimits(kind, rule)
+    if (limits.maxPerDeal === 0) continue
+    const span =
+      limits.minCards === limits.maxCards
+        ? `${limits.minCards}`
+        : `${limits.minCards}–${limits.maxCards}`
+    labels.push(`${BIND_LABELS[kind]} ${span} ×${limits.maxPerDeal}`)
   }
   return labels
 }

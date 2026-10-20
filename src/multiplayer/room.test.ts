@@ -164,45 +164,49 @@ describe('multiplayer room — seating and lobby', () => {
     expect(room.settings.allowedOperators.concat).toBe(true)
   })
 
-  it('clamps bind toggles, requirements and the shared cap', () => {
+  it('clamps bind toggles, card ranges and per-kind caps', () => {
     const room = createRoomState('binds')
     seat(room, 'p1', 'Host')
 
     const wild = {
       ...room.settings,
       binds: {
-        dragon: { enabled: 'yes', required: 99 },
-        rook: { enabled: true, required: 1 },
-        maxBinds: 50,
+        dragon: { enabled: 'yes', minCards: 99, maxCards: 99, maxPerDeal: 50 },
+        rook: { enabled: true, minCards: 1, maxCards: 99, maxPerDeal: -1 },
       },
     } as unknown as GameSettings
     expect(sanitizeSettings(wild, room.settings).binds).toEqual({
-      dragon: { enabled: false, required: 6 },
-      rook: { enabled: true, required: 2 },
-      maxBinds: 6,
+      dragon: { enabled: false, minCards: 6, maxCards: 6, maxPerDeal: 6 },
+      rook: { enabled: true, minCards: 2, maxCards: 5, maxPerDeal: 0 },
     })
+
+    // A maximum below the minimum is raised to the minimum, not accepted as is.
     expect(
       sanitizeSettings(
-        { ...room.settings, binds: { ...room.settings.binds, maxBinds: -1 } },
+        {
+          ...room.settings,
+          binds: {
+            ...room.settings.binds,
+            dragon: { enabled: true, minCards: 5, maxCards: 2, maxPerDeal: 3 },
+          },
+        },
         room.settings
-      ).binds.maxBinds
-    ).toBe(0)
+      ).binds.dragon
+    ).toEqual({ enabled: true, minCards: 5, maxCards: 5, maxPerDeal: 3 })
 
     handleClientMessage(room, 'p1', {
       t: 'update-settings',
       settings: {
         ...room.settings,
         binds: {
-          dragon: { enabled: true, required: 4 },
-          rook: { enabled: false, required: 3 },
-          maxBinds: 2,
+          dragon: { enabled: true, minCards: 4, maxCards: 5, maxPerDeal: 2 },
+          rook: { enabled: false, minCards: 3, maxCards: 4, maxPerDeal: 1 },
         },
       },
     })
     expect(room.settings.binds).toEqual({
-      dragon: { enabled: true, required: 4 },
-      rook: { enabled: false, required: 3 },
-      maxBinds: 2,
+      dragon: { enabled: true, minCards: 4, maxCards: 5, maxPerDeal: 2 },
+      rook: { enabled: false, minCards: 3, maxCards: 4, maxPerDeal: 1 },
     })
   })
 
@@ -824,9 +828,8 @@ describe('multiplayer room — rounds', () => {
     seat(room, 'p1', 'Host')
     room.settings.mode = 'best-1m'
     room.settings.binds = {
-      dragon: { enabled: true, required: 3 },
-      rook: { enabled: false, required: 2 },
-      maxBinds: 1,
+      dragon: { enabled: true, minCards: 3, maxCards: 6, maxPerDeal: 1 },
+      rook: { enabled: false, minCards: 2, maxCards: 5, maxPerDeal: 1 },
     }
     startMatch(room)
 

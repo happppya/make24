@@ -58,7 +58,7 @@ export interface PuzzleDefinition {
   /** Effective groups, in catalog order, for a compact rules summary. */
   operatorGroups: OperatorCategory[]
   operatorGroupLabels: string[]
-  /** Enabled opening binds, e.g. `Dragon 3+` / `Rook 2+`. */
+  /** Enabled opening binds, e.g. `Dragon 3–6 ×2` / `Rook 2 ×1`. */
   bindLabels: string[]
   /**
    * A deterministic solution generated alongside the target. It is used to
@@ -197,9 +197,8 @@ const DAILY_RECIPES: PuzzleRecipe[] = [
     forbiddenMoves: { ...DEFAULT_FORBIDDEN_MOVES },
     forbiddenMovePenalty: DEFAULT_FORBIDDEN_MOVE_PENALTY,
     binds: {
-      dragon: { enabled: true, required: 3 },
-      rook: { enabled: false, required: 2 },
-      maxBinds: 1,
+      dragon: { enabled: true, minCards: 3, maxCards: 6, maxPerDeal: 1 },
+      rook: { enabled: false, minCards: 2, maxCards: 5, maxPerDeal: 1 },
     },
     requireBind: true,
   },
@@ -217,9 +216,8 @@ const DAILY_RECIPES: PuzzleRecipe[] = [
     forbiddenMoves: { ...DEFAULT_FORBIDDEN_MOVES },
     forbiddenMovePenalty: DEFAULT_FORBIDDEN_MOVE_PENALTY,
     binds: {
-      dragon: { enabled: false, required: 3 },
-      rook: { enabled: true, required: 2 },
-      maxBinds: 1,
+      dragon: { enabled: false, minCards: 3, maxCards: 6, maxPerDeal: 1 },
+      rook: { enabled: true, minCards: 2, maxCards: 5, maxPerDeal: 1 },
     },
     requireBind: true,
   },
@@ -253,9 +251,8 @@ const DAILY_RECIPES: PuzzleRecipe[] = [
     forbiddenMovePenalty: DEFAULT_FORBIDDEN_MOVE_PENALTY,
     disabledOperators: ['bitnot'],
     binds: {
-      dragon: { enabled: true, required: 3 },
-      rook: { enabled: false, required: 2 },
-      maxBinds: 1,
+      dragon: { enabled: true, minCards: 3, maxCards: 6, maxPerDeal: 1 },
+      rook: { enabled: false, minCards: 2, maxCards: 5, maxPerDeal: 1 },
     },
     requireBind: true,
   },
@@ -277,9 +274,8 @@ const DAILY_RECIPES: PuzzleRecipe[] = [
     forbiddenMovePenalty: DEFAULT_FORBIDDEN_MOVE_PENALTY,
     disabledOperators: ['subfact'],
     binds: {
-      dragon: { enabled: true, required: 3 },
-      rook: { enabled: true, required: 2 },
-      maxBinds: 2,
+      dragon: { enabled: true, minCards: 3, maxCards: 6, maxPerDeal: 2 },
+      rook: { enabled: true, minCards: 2, maxCards: 5, maxPerDeal: 2 },
     },
     requireBind: true,
   },
@@ -311,9 +307,8 @@ const WEEKLY_RECIPES: PuzzleRecipe[] = [
     forbiddenMovePenalty: 300,
     disabledOperators: ['tan'],
     binds: {
-      dragon: { enabled: true, required: 3 },
-      rook: { enabled: true, required: 2 },
-      maxBinds: 3,
+      dragon: { enabled: true, minCards: 3, maxCards: 6, maxPerDeal: 3 },
+      rook: { enabled: true, minCards: 2, maxCards: 5, maxPerDeal: 3 },
     },
     requireBind: true,
   },
@@ -341,9 +336,8 @@ const WEEKLY_RECIPES: PuzzleRecipe[] = [
     forbiddenMovePenalty: 250,
     disabledOperators: ['gamma'],
     binds: {
-      dragon: { enabled: true, required: 3 },
-      rook: { enabled: true, required: 2 },
-      maxBinds: 2,
+      dragon: { enabled: true, minCards: 3, maxCards: 6, maxPerDeal: 2 },
+      rook: { enabled: true, minCards: 2, maxCards: 5, maxPerDeal: 2 },
     },
     requireBind: true,
   },
@@ -843,7 +837,6 @@ function settingsForPuzzle(
     binds: {
       dragon: { ...binds.dragon },
       rook: { ...binds.rook },
-      maxBinds: binds.maxBinds,
     },
     firstToPoints: 1,
   }

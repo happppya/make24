@@ -4,13 +4,13 @@ import LobbyFrame from '../LobbyFrame.vue'
 import { useGameContext } from '../../app/context'
 import { scoringModeLabel } from '../../app/labels'
 import { CONSTANT_CATALOG, constantById } from '../../engine/constants'
-import { bindRuleLabels } from '../../engine/binds'
+import { BIND_CARD_LIMITS, MAX_PER_DEAL_LIMIT, bindRuleLabels } from '../../engine/binds'
 import {
   OPERATOR_GROUPS,
   isOperatorEnabled,
   type OperatorGroup,
 } from '../../engine/math'
-import type { OperatorMeta } from '../../engine/types'
+import type { BindKind, OperatorMeta } from '../../engine/types'
 import { multiplayer as multiplayerSession, selfPlayer } from '../../multiplayer/session'
 
 const {
@@ -85,9 +85,28 @@ const forbiddenMoveLabels = computed(() => {
 })
 
 const bindLabels = computed(() => bindRuleLabels(settings.binds))
-const bindCountOptions = [2, 3, 4, 5, 6]
-const rookCountOptions = [2, 3, 4, 5]
-const maxBindOptions = [0, 1, 2, 3, 4, 5, 6]
+const bindsConfigured = computed(
+  () => settings.binds.dragon.enabled || settings.binds.rook.enabled
+)
+const bindPerDealOptions = Array.from({ length: MAX_PER_DEAL_LIMIT + 1 }, (_, index) => index)
+
+/** Card counts a kind may ask for, bounded by its own engine limits. */
+function bindCardOptions(kind: BindKind): number[] {
+  const limits = BIND_CARD_LIMITS[kind]
+  return Array.from({ length: limits.max - limits.min + 1 }, (_, index) => limits.min + index)
+}
+
+/** A maximum below the minimum is impossible, so the range follows the minimum. */
+function bindMaxOptions(kind: BindKind): number[] {
+  return bindCardOptions(kind).filter((count) => count >= settings.binds[kind].minCards)
+}
+
+function setBindMinCards(kind: BindKind, event: Event): void {
+  const value = Number((event.target as HTMLSelectElement).value)
+  const rule = settings.binds[kind]
+  rule.minCards = value
+  if (rule.maxCards < value) rule.maxCards = value
+}
 </script>
 
 <template>
@@ -173,12 +192,12 @@ const maxBindOptions = [0, 1, 2, 3, 4, 5, 6]
             move is used ({{ forbiddenMoveLabels.join(', ') }})
           </li>
           <li v-else data-testid="forbidden-summary">Forbidden moves are off.</li>
-          <li v-if="bindLabels.length && settings.binds.maxBinds > 0" data-testid="bind-summary">
-            <strong>Binds:</strong> {{ bindLabels.join(' · ') }} (max
-            {{ settings.binds.maxBinds }} per deal) form free locked groups.
+          <li v-if="bindLabels.length" data-testid="bind-summary">
+            <strong>Binds:</strong> {{ bindLabels.join(' · ') }} (cards × per deal) form
+            free locked groups.
           </li>
-          <li v-else-if="bindLabels.length" data-testid="bind-summary">
-            Binds are enabled, but the maximum is <strong>0</strong>, so none form.
+          <li v-else-if="bindsConfigured" data-testid="bind-summary">
+            Binds are enabled, but every per-deal cap is <strong>0</strong>, so none form.
           </li>
           <li v-else data-testid="bind-summary">Binds are off.</li>
           <li v-if="settings.approximationPercent > 0">
@@ -412,20 +431,50 @@ const maxBindOptions = [0, 1, 2, 3, 4, 5, 6]
                 Consecutive ranks (A, 2, 3…) fuse into one product. Duplicate ranks keep
                 one card free for a rook.
               </p>
-              <label class="bind-card__count">
-                Needs
-                <select
-                  v-model.number="settings.binds.dragon.required"
-                  class="input-arcade input-short"
-                  data-testid="bind-dragon-required"
-                  :disabled="!settings.binds.dragon.enabled"
-                >
-                  <option v-for="count in bindCountOptions" :key="count" :value="count">
-                    {{ count }}
-                  </option>
-                </select>
-                in a row
-              </label>
+              <div class="bind-card__limits">
+                <label class="bind-card__count">
+                  Cards in a row
+                  <span class="bind-card__count-controls">
+                    <select
+                      :value="settings.binds.dragon.minCards"
+                      class="input-arcade input-short"
+                      data-testid="bind-dragon-min"
+                      :disabled="!settings.binds.dragon.enabled"
+                      @change="setBindMinCards('dragon', $event)"
+                    >
+                      <option v-for="count in bindCardOptions('dragon')" :key="count" :value="count">
+                        {{ count }}
+                      </option>
+                    </select>
+                    to
+                    <select
+                      v-model.number="settings.binds.dragon.maxCards"
+                      class="input-arcade input-short"
+                      data-testid="bind-dragon-max"
+                      :disabled="!settings.binds.dragon.enabled"
+                    >
+                      <option v-for="count in bindMaxOptions('dragon')" :key="count" :value="count">
+                        {{ count }}
+                      </option>
+                    </select>
+                  </span>
+                </label>
+                <label class="bind-card__count">
+                  Per deal
+                  <span class="bind-card__count-controls">
+                    <select
+                      v-model.number="settings.binds.dragon.maxPerDeal"
+                      class="input-arcade input-short"
+                      data-testid="bind-dragon-per-deal"
+                      :disabled="!settings.binds.dragon.enabled"
+                    >
+                      <option v-for="count in bindPerDealOptions" :key="count" :value="count">
+                        {{ count }}
+                      </option>
+                    </select>
+                  </span>
+                </label>
+              </div>
             </section>
 
             <section class="bind-card" :class="{ 'bind-card--on': settings.binds.rook.enabled }">
@@ -442,39 +491,56 @@ const maxBindOptions = [0, 1, 2, 3, 4, 5, 6]
                 Every copy of one rank fuses into one product. The rank with the most
                 copies is taken first.
               </p>
-              <label class="bind-card__count">
-                Needs
-                <select
-                  v-model.number="settings.binds.rook.required"
-                  class="input-arcade input-short"
-                  data-testid="bind-rook-required"
-                  :disabled="!settings.binds.rook.enabled"
-                >
-                  <option v-for="count in rookCountOptions" :key="count" :value="count">
-                    {{ count }}
-                  </option>
-                </select>
-                copies
-              </label>
+              <div class="bind-card__limits">
+                <label class="bind-card__count">
+                  Cards in a stack
+                  <span class="bind-card__count-controls">
+                    <select
+                      :value="settings.binds.rook.minCards"
+                      class="input-arcade input-short"
+                      data-testid="bind-rook-min"
+                      :disabled="!settings.binds.rook.enabled"
+                      @change="setBindMinCards('rook', $event)"
+                    >
+                      <option v-for="count in bindCardOptions('rook')" :key="count" :value="count">
+                        {{ count }}
+                      </option>
+                    </select>
+                    to
+                    <select
+                      v-model.number="settings.binds.rook.maxCards"
+                      class="input-arcade input-short"
+                      data-testid="bind-rook-max"
+                      :disabled="!settings.binds.rook.enabled"
+                    >
+                      <option v-for="count in bindMaxOptions('rook')" :key="count" :value="count">
+                        {{ count }}
+                      </option>
+                    </select>
+                  </span>
+                </label>
+                <label class="bind-card__count">
+                  Per deal
+                  <span class="bind-card__count-controls">
+                    <select
+                      v-model.number="settings.binds.rook.maxPerDeal"
+                      class="input-arcade input-short"
+                      data-testid="bind-rook-per-deal"
+                      :disabled="!settings.binds.rook.enabled"
+                    >
+                      <option v-for="count in bindPerDealOptions" :key="count" :value="count">
+                        {{ count }}
+                      </option>
+                    </select>
+                  </span>
+                </label>
+              </div>
             </section>
           </div>
 
-          <div class="bind-max">
-            <label for="setting-bind-max">Maximum binds per deal</label>
-            <select
-              id="setting-bind-max"
-              v-model.number="settings.binds.maxBinds"
-              class="input-arcade input-short"
-              data-testid="bind-max"
-            >
-              <option v-for="count in maxBindOptions" :key="count" :value="count">
-                {{ count }}
-              </option>
-            </select>
-          </div>
           <span class="field-hint">
-            Binds form automatically before play. Their product is free, but a bind is
-            locked and cannot be ungrouped.
+            Binds form automatically before play. Longer runs and stacks shrink to their
+            maximum; their product is free, but a bind is locked and cannot be ungrouped.
           </span>
         </div>
       </section>
@@ -1008,10 +1074,10 @@ fieldset.settings-form:disabled {
   color: var(--ink-muted);
 }
 
-/* Bind rules: two priority cards plus a shared cap. */
+/* Bind rules: one priority card per kind, each with its own card range and cap. */
 .bind-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: 8px;
 }
 
@@ -1067,31 +1133,30 @@ fieldset.settings-form:disabled {
   color: var(--ink-muted);
 }
 
+.bind-card__limits {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-left: 24px;
+}
+
 .bind-card__count {
   display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-left: 24px;
+  flex-direction: column;
+  gap: 3px;
   font-family: var(--font-mono);
   font-size: 0.82rem;
   color: var(--ink-muted);
 }
 
-.bind-card__count .input-arcade {
-  width: 58px;
-}
-
-.bind-max {
+.bind-card__count-controls {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-top: 8px;
-  font-family: var(--font-mono);
-  font-size: 0.86rem;
-  color: var(--ink-muted);
+  gap: 6px;
 }
 
-.bind-max .input-arcade {
-  width: 72px;
+.bind-card__count .input-arcade {
+  width: 54px;
+  padding: 4px 6px;
 }
 </style>
