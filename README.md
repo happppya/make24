@@ -3,7 +3,8 @@
 A pixel-art twist on the Make 24 numbers game. Cards are dealt, you merge them
 with operators until one group hits the target, and the **cheapest** board wins
 the round — every operator costs points, so the elegant route beats the long one.
-Playable solo or online against friends in real time.
+Playable solo or online against friends in real time, with a deterministic
+medium daily puzzle and an extreme weekly puzzle on shared leaderboards.
 
 ## Running it
 
@@ -13,8 +14,10 @@ npm run dev            # game at http://localhost:5173
 npm run dev:server     # multiplayer table server on port 8787 (only needed online)
 ```
 
-Solo play needs just the frontend. Online play needs the table server too, or a
-deployed one pointed at with `VITE_MULTIPLAYER_URL` (see [.env.example](.env.example)).
+Solo play needs just the frontend. Online play, and the shared daily/weekly
+leaderboards, need the table server too, or a deployed one pointed at with
+`VITE_MULTIPLAYER_URL` (see [.env.example](.env.example)). Without it, puzzle
+scores stay on the device.
 
 New to the game? The title screen's **Tutorial** button is the player's guide,
 and [notes/spec.md](notes/spec.md) has the rules in full.

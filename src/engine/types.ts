@@ -1,3 +1,5 @@
+import type { ConstantChoice } from './constants'
+
 export type Suit = 'clubs' | 'diamonds' | 'hearts' | 'spades'
 
 export type Rank = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13
@@ -17,8 +19,10 @@ export type OperatorCategory =
   | 'factorial'
   | 'trig'
   | 'inverse'
-  | 'bitshift'
+  | 'computing'
   | 'concat'
+  | 'analysis'
+  | 'combinatorics'
 
 export type BinaryOperator =
   | 'add'
@@ -28,8 +32,14 @@ export type BinaryOperator =
   | 'pow'
   | 'root'
   | 'lshift'
-  | 'rshift'
+  | 'bitand'
+  | 'bitor'
+  | 'bitxor'
   | 'concat'
+  | 'log'
+  | 'comb'
+  | 'perm'
+  | 'stirling2'
 
 export type UnaryOperator =
   | 'fact'
@@ -39,6 +49,11 @@ export type UnaryOperator =
   | 'cos'
   | 'tan'
   | 'inv'
+  | 'bitnot'
+  | 'exp'
+  | 'ln'
+  | 'dfact'
+  | 'subfact'
 
 export type OperatorId = BinaryOperator | UnaryOperator
 
@@ -60,7 +75,7 @@ export type GameMode =
   | 'best-5m'
   | 'best-10m'
 
-export type TargetPreset = 'just-24' | 'small' | 'big' | 'custom' | 'manual'
+export type TargetPreset = 'just-24' | 'small' | 'big' | 'custom' | 'manual' | 'constant'
 
 export type CardPoolMode = '1-deck' | '2-decks' | '3-decks' | 'unlimited'
 
@@ -73,8 +88,16 @@ export interface AllowedOperatorsConfig {
   factorial: boolean
   trig: boolean
   inverse: boolean
-  bitshift: boolean
+  computing: boolean
   concat: boolean
+  analysis: boolean
+  combinatorics: boolean
+  /**
+   * Per-operator overrides. A missing key follows its group boolean, so the
+   * lobby can flip a whole group at once while still allowing one operator to
+   * be left out.
+   */
+  operators: Partial<Record<OperatorId, boolean>>
 }
 
 /** Shortcut moves the host can forbid, and charge a penalty for. */
@@ -90,6 +113,8 @@ export interface GameSettings {
   mode: GameMode
   numCards: number
   targetPreset: TargetPreset
+  /** Which famous constant to deal when `targetPreset` is `constant`. */
+  targetConstant: ConstantChoice
   customMin: number
   customMax: number
   manualTarget: number
@@ -191,8 +216,10 @@ export interface PlayerInfo {
 
 export type ScreenPhase =
   | 'title'
+  | 'puzzles'
   | 'lobby-select'
   | 'lobby'
   | 'playing'
   | 'round-end'
+  | 'puzzle-result'
   | 'game-over'

@@ -2,7 +2,14 @@
 import { useGameContext } from '../../app/context'
 import { spriteUrl } from '../../app/labels'
 
-const { menuOpen, tutorialOpen, enterLobby, openTutorial, tutorialTriggerRef } = useGameContext()
+const {
+  menuOpen,
+  tutorialOpen,
+  enterLobby,
+  goToPuzzles,
+  openTutorial,
+  tutorialTriggerRef,
+} = useGameContext()
 
 // Bound to the tutorial button below as a string ref; vue-tsc does not count
 // that as a use, so it is named here to keep the binding honest.
@@ -70,6 +77,20 @@ void tutorialTriggerRef
         <span class="mode-btn__arrow" aria-hidden="true">▸</span>
       </button>
     </div>
+
+    <button
+      type="button"
+      class="title-puzzles"
+      data-testid="open-puzzles"
+      @click="goToPuzzles"
+    >
+      <span class="title-puzzles__sigil" aria-hidden="true">◆</span>
+      <span class="title-puzzles__body">
+        <span class="title-puzzles__title">DAILY &amp; WEEKLY</span>
+        <span class="title-puzzles__copy">One shared board, fresh every day and week.</span>
+      </span>
+      <span class="title-puzzles__arrow" aria-hidden="true">▸</span>
+    </button>
 
     <button
       ref="tutorialTriggerRef"
@@ -300,7 +321,81 @@ void tutorialTriggerRef
   transition: translate 0.16s ease;
 }
 
-/* Tutorial entry: a slim manual tab under the two mode slabs */
+/* Puzzle entry: a wide banner under the two mode slabs, with its own cadence. */
+.title-puzzles {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  width: min(860px, 100%);
+  padding: 12px 18px;
+  text-align: left;
+  background:
+    linear-gradient(90deg, rgba(255, 190, 11, 0.1), transparent 45%),
+    linear-gradient(180deg, #241c35 0%, #13101f 100%);
+  border: 3px solid rgba(255, 190, 11, 0.72);
+  outline: 3px solid #09080f;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.09), 0 7px 0 #09080f;
+  color: inherit;
+  cursor: pointer;
+  transition:
+    transform 0.14s cubic-bezier(0.22, 1, 0.36, 1),
+    border-color 0.16s ease,
+    box-shadow 0.16s ease;
+}
+
+.title-puzzles:hover,
+.title-puzzles:focus-visible {
+  transform: translateY(-4px);
+  border-color: var(--gold-bright);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 12px 0 #09080f, 0 0 25px rgba(255, 190, 11, 0.25);
+}
+
+.title-puzzles:active {
+  transform: translateY(2px);
+  box-shadow: 0 2px 0 #09080f;
+}
+
+.title-puzzles__sigil {
+  font-size: 1.35rem;
+  color: var(--gold-bright);
+  text-shadow: 0 3px 0 #09080f;
+}
+
+.title-puzzles__body {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.title-puzzles__title {
+  font-family: var(--font-display);
+  font-size: 0.85rem;
+  letter-spacing: 0.06em;
+  color: var(--gold-bright);
+  white-space: nowrap;
+}
+
+.title-puzzles__copy {
+  font-family: var(--font-mono);
+  font-size: 0.92rem;
+  color: rgba(247, 240, 224, 0.62);
+}
+
+.title-puzzles__arrow {
+  font-family: var(--font-pixel);
+  color: var(--gold);
+  transition: translate 0.16s ease;
+}
+
+.title-puzzles:hover .title-puzzles__arrow,
+.title-puzzles:focus-visible .title-puzzles__arrow {
+  translate: 4px 0;
+}
+
+/* Tutorial entry: a slim manual tab under the puzzle banner */
 .title-guide {
   display: inline-flex;
   align-items: center;
@@ -402,6 +497,14 @@ void tutorialTriggerRef
     }
     .mode-btn {
       padding: 14px 16px;
+    }
+    .title-puzzles {
+      padding: 10px 12px;
+    }
+    .title-puzzles__body {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 4px;
     }
     .hero-heading {
       flex-direction: column;

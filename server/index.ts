@@ -1,3 +1,4 @@
+import { join } from 'node:path'
 import { createMultiplayerServer } from './server'
 
 /**
@@ -17,11 +18,16 @@ const envPort = Number(process.env.PORT ?? 0)
 const port = Number.isFinite(envPort) && envPort > 0 ? envPort : 8787
 const host = process.env.HOST ?? '0.0.0.0'
 const allowedOrigin = process.env.ALLOWED_ORIGIN ?? '*'
+// Keep puzzle boards beside the process working directory so a redeploy does
+// not wipe the server's memory. Tests pass their own temporary file instead.
+const puzzleLeaderboardPath =
+  process.env.PUZZLE_LEADERBOARD_FILE ?? join(process.cwd(), 'data', 'puzzle-leaderboards.json')
 
 const server = await createMultiplayerServer({
   port,
   host,
   allowedOrigin,
+  puzzleLeaderboardPath,
   log: (line) => console.log(`[table] ${line}`),
 })
 

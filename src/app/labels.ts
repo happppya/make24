@@ -99,8 +99,12 @@ export function spriteUrl(name: string): string {
   return assetUrl(`card-sprites/${name}`)
 }
 
-/** 1–9 for the first nine operator slots, 0 for the tenth. */
+/**
+ * 1–9 for the first nine operator slots, 0 for the tenth, and nothing beyond
+ * the ten digit keys (an enabled group can put an eleventh operator on a rail).
+ */
 export function opKeyLabel(index: number): string {
+  if (index < 0 || index > 9) return ''
   return index === 9 ? '0' : String(index + 1)
 }
 

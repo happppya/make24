@@ -1,6 +1,7 @@
 import { computed, ref, watch, type Ref } from 'vue'
 import { playSfx } from '../audio/sfx'
-import { dealHand, generateTargetNumber } from '../engine/deck'
+import { dealHand, generateTargetNumber, resolveConstantTarget } from '../engine/deck'
+import { constantById, constantByValue, type ConstantInfo } from '../engine/constants'
 import { calculateBoardBreakdown } from '../engine/math'
 import {
   WORKSPACE_COUNT,
@@ -24,6 +25,7 @@ import {
   serverNow,
 } from '../multiplayer/session'
 import type { RoomState } from '../multiplayer/protocol'
+import type { PuzzleDefinition } from '../engine/puzzles'
 import type { Juice } from './useJuice'
 
 /** A round outcome, as reported by the buttons that can end one. */
@@ -48,6 +50,9 @@ export function useMatch(deps: {
   const localMatchWinner = ref<PlayerInfo | null>(null)
 
   const currentTarget = ref(24)
+  const currentConstant = ref<ConstantInfo | null>(null)
+  /** A daily/weekly run has its own submission screen, not round-end flow. */
+  const puzzleMode = ref(false)
   const currentHand = ref<Card[]>([])
   const workspaces = ref<WorkspaceState[]>([])
   const activeWorkspaceIdx = ref(0)
@@ -115,7 +120,8 @@ export function useMatch(deps: {
 
   /* ------------------------------ round flow ------------------------------ */
 
-  function startNewRound(): void {
+  function startNewRound(targetOverride?: number): void {
+    puzzleMode.value = false
     stopDeadlineClock()
     actionError.value = null
     localRoundSolutions.value = []
@@ -123,7 +129,10 @@ export function useMatch(deps: {
     sawAcceptable = false
     playSfx('deal')
 
-    currentTarget.value = generateTargetNumber(settings)
+    const constant = targetOverride === undefined ? resolveConstantTarget(settings) : null
+    currentConstant.value = constant
+    currentTarget.value =
+      targetOverride ?? constant?.value ?? generateTargetNumber(settings)
     currentHand.value = dealHand(settings.numCards, settings.cardPool)
     workspaces.value = createAllWorkspaces(currentHand.value)
     activeWorkspaceIdx.value = 0
@@ -138,8 +147,29 @@ export function useMatch(deps: {
   }
 
   function enterSoloLobby(): void {
+    puzzleMode.value = false
     localPlayers.value = [createLocalSeat()]
     phase.value = 'lobby'
+  }
+
+  /** Deals a fixed daily/weekly hand; the puzzle screen owns submission. */
+  function startPuzzleRound(puzzle: PuzzleDefinition): void {
+    puzzleMode.value = true
+    stopDeadlineClock()
+    actionError.value = null
+    localRoundSolutions.value = []
+    localRoundWinnerId.value = null
+    sawAcceptable = false
+    lastReportedBoard = null
+    currentConstant.value = null
+    currentTarget.value = puzzle.target
+    currentHand.value = puzzle.hand.map((card) => ({ ...card }))
+    workspaces.value = createAllWorkspaces(currentHand.value)
+    activeWorkspaceIdx.value = 0
+    remainingSeconds.value = null
+    roundStartTimestamp = Date.now()
+    phase.value = 'playing'
+    playSfx('deal')
   }
 
   function resetLocalMatch(): void {
@@ -183,10 +213,10 @@ export function useMatch(deps: {
     phase.value = 'round-end'
   }
 
-  function advanceAfterRoundEnd(): void {
+  function advanceAfterRoundEnd(targetOverride?: number): void {
     if (settings.isMultiplayer) {
       if (isRoomHost.value && multiplayer.room?.phase === 'round-end') {
-        sendToRoom({ t: 'next-round' })
+        sendToRoom({ t: 'next-round', target: targetOverride })
       }
       return
     }
@@ -195,7 +225,7 @@ export function useMatch(deps: {
       return
     }
     localRoundNumber.value += 1
-    startNewRound()
+    startNewRound(targetOverride)
   }
 
   function endEntireGameNow(): void {
@@ -288,13 +318,13 @@ export function useMatch(deps: {
       if (acceptableNow && !sawAcceptable) {
         juice.hitSignal.value += 1
         playSfx('hit')
-        juice.triggerImpact('hit')
+        juice.triggerImpact('hit', activeWorkspace.value?.selectedGroupId)
         juice.pushCue('TARGET HIT', 'good')
       }
       sawAcceptable = acceptableNow
-      if (acceptableNow) {
+      if (acceptableNow && !puzzleMode.value) {
         // Solo keeps a local leaderboard; multiplayer reports the board and lets
-        // the server decide when the round is over.
+        // the server decide when the round is over. Puzzles submit explicitly.
         recordPlayerSolutionFromWorkspace()
       }
     },
@@ -347,6 +377,11 @@ export function useMatch(deps: {
         sawAcceptable = false
         lastReportedBoard = null
         currentTarget.value = room.round.target
+        currentConstant.value = room.round.constantId
+          ? constantById(room.round.constantId)
+          : settings.targetPreset === 'constant'
+            ? constantByValue(room.round.target)
+            : null
         currentHand.value = room.round.hand
         workspaces.value = createAllWorkspaces(room.round.hand)
         activeWorkspaceIdx.value = 0
@@ -393,6 +428,8 @@ export function useMatch(deps: {
     localRoundWinnerId,
     localMatchWinner,
     currentTarget,
+    currentConstant,
+    puzzleMode,
     currentHand,
     workspaces,
     activeWorkspaceIdx,
@@ -403,6 +440,7 @@ export function useMatch(deps: {
     currentEvaluation,
     costBreakdown,
     startNewRound,
+    startPuzzleRound,
     enterSoloLobby,
     resetLocalMatch,
     finishRound,

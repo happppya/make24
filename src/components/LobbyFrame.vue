@@ -11,11 +11,11 @@ defineProps<{
   backTestId?: string
 }>()
 
-const { menuOpen, tutorialOpen, goToTitle } = useGameContext()
+const { menuOpen, tutorialOpen, targetPromptOpen, goToTitle } = useGameContext()
 </script>
 
 <template>
-  <main class="screen-lobby" :inert="menuOpen || tutorialOpen">
+  <main class="screen-lobby" :inert="menuOpen || tutorialOpen || targetPromptOpen">
     <div class="lobby-marquee">
       <div class="lobby-marquee__left">
         <span class="lobby-marquee__badge">{{ badge }}</span>

@@ -1,4 +1,5 @@
 import type { Card, CardPoolMode, GameSettings, Rank, Suit } from './types'
+import { constantById, pickConstant, type ConstantChoice } from './constants'
 
 const SUITS: Suit[] = ['clubs', 'diamonds', 'hearts', 'spades']
 const RANKS: Rank[] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
@@ -94,11 +95,29 @@ export function dealHand(
   return hand
 }
 
+/** Range the host's exact-target chooser accepts, for solo and online tables. */
+export const MANUAL_TARGET_MIN = -99_999
+export const MANUAL_TARGET_MAX = 99_999
+
+type TargetSettings = Pick<
+  GameSettings,
+  'targetPreset' | 'customMin' | 'customMax' | 'manualTarget'
+> & { targetConstant?: ConstantChoice }
+
+/** The catalogued constant a constant-mode round is aiming at, if any. */
+export function resolveConstantTarget(
+  settings: TargetSettings,
+  rng: () => number = Math.random
+) {
+  if (settings.targetPreset !== 'constant') return null
+  if (settings.targetConstant === undefined || settings.targetConstant === 'random') {
+    return pickConstant(rng)
+  }
+  return constantById(settings.targetConstant) ?? pickConstant(rng)
+}
+
 export function generateTargetNumber(
-  settings: Pick<
-    GameSettings,
-    'targetPreset' | 'customMin' | 'customMax' | 'manualTarget'
-  >,
+  settings: TargetSettings,
   rng: () => number = Math.random
 ): number {
   switch (settings.targetPreset) {
@@ -120,6 +139,9 @@ export function generateTargetNumber(
     }
     case 'manual': {
       return Number.isFinite(settings.manualTarget) ? settings.manualTarget : 24
+    }
+    case 'constant': {
+      return resolveConstantTarget(settings, rng)?.value ?? Math.PI
     }
   }
 }

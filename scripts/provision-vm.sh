@@ -166,7 +166,7 @@ mkdir -p /etc/caddy /var/lib/caddy
 cat >/etc/caddy/Caddyfile <<CADDY
 ${DOMAIN} {
 	route {
-		@table path /ws /health
+		@table path /ws /health /puzzles/*
 		reverse_proxy @table 127.0.0.1:8787
 		respond 404
 	}

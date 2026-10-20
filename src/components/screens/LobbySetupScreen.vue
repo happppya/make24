@@ -3,6 +3,13 @@ import { computed } from 'vue'
 import LobbyFrame from '../LobbyFrame.vue'
 import { useGameContext } from '../../app/context'
 import { scoringModeLabel } from '../../app/labels'
+import { CONSTANT_CATALOG, constantById } from '../../engine/constants'
+import {
+  OPERATOR_GROUPS,
+  isOperatorEnabled,
+  type OperatorGroup,
+} from '../../engine/math'
+import type { OperatorMeta } from '../../engine/types'
 import { multiplayer as multiplayerSession, selfPlayer } from '../../multiplayer/session'
 
 const {
@@ -17,6 +24,45 @@ const {
   leaveTable,
   startMatchFromLobby,
 } = useGameContext()
+
+const selectedConstant = computed(() =>
+  settings.targetConstant === 'random' ? null : constantById(settings.targetConstant)
+)
+
+/**
+ * Constants are irrational, so an exact target is unplayable. Landing on the
+ * mode is an explicit choice, so give it a workable band unless one is set.
+ */
+function handleTargetPresetChange(event: Event): void {
+  const value = (event.target as HTMLSelectElement).value
+  if (value === 'constant' && settings.approximationPercent <= 0) {
+    settings.approximationPercent = 2
+  }
+}
+
+function isOpEnabled(op: OperatorMeta): boolean {
+  return isOperatorEnabled(settings.allowedOperators, op)
+}
+
+function groupEnabled(group: OperatorGroup): boolean {
+  return group.operators.every(isOpEnabled)
+}
+
+function groupIndeterminate(group: OperatorGroup): boolean {
+  const on = group.operators.filter(isOpEnabled).length
+  return on > 0 && on < group.operators.length
+}
+
+/** Group header switch: flips every operator in the group at once. */
+function setGroupEnabled(group: OperatorGroup, event: Event): void {
+  const enabled = (event.target as HTMLInputElement).checked
+  settings.allowedOperators[group.id] = enabled
+  for (const op of group.operators) settings.allowedOperators.operators[op.id] = enabled
+}
+
+function setOperatorEnabled(op: OperatorMeta, event: Event): void {
+  settings.allowedOperators.operators[op.id] = (event.target as HTMLInputElement).checked
+}
 
 const accuracyRuleBlurb = computed(() => {
   switch (settings.scoringMode) {
@@ -179,13 +225,43 @@ const forbiddenMoveLabels = computed(() => {
             id="setting-target"
             v-model="settings.targetPreset"
             class="input-arcade"
+            @change="handleTargetPresetChange"
           >
             <option value="just-24">Just 24 (Always 24)</option>
             <option value="small">Small numbers (1 – 100)</option>
             <option value="big">Big numbers (100 – 10000)</option>
             <option value="custom">Custom range (Min – Max)</option>
-            <option value="manual">Host selects exact target number</option>
+            <option value="manual">Exact target, chosen before each round</option>
+            <option value="constant">Famous constants (π, e, γ…)</option>
           </select>
+        </div>
+
+        <!-- Famous constant picker -->
+        <div v-if="settings.targetPreset === 'constant'" class="field-row constant-field">
+          <label for="setting-constant">Constant</label>
+          <select
+            id="setting-constant"
+            v-model="settings.targetConstant"
+            class="input-arcade"
+            data-testid="setting-constant"
+          >
+            <option value="random">Random each round</option>
+            <option v-for="constant in CONSTANT_CATALOG" :key="constant.id" :value="constant.id">
+              {{ constant.symbol }} — {{ constant.name }} ({{ constant.value.toPrecision(6) }})
+            </option>
+          </select>
+          <p class="field-hint constant-preview" data-testid="constant-preview">
+            <template v-if="selectedConstant">
+              <strong>{{ selectedConstant.symbol }} {{ selectedConstant.name }}</strong> —
+              {{ selectedConstant.description }}
+            </template>
+            <template v-else>
+              Each round deals a famous constant, with its name and meaning shown in the HUD.
+            </template>
+          </p>
+          <p class="field-hint">
+            These are not whole numbers, so keep the approximation band above 0%.
+          </p>
         </div>
 
         <!-- Custom range inputs -->
@@ -210,18 +286,15 @@ const forbiddenMoveLabels = computed(() => {
           </div>
         </div>
 
-        <!-- Host manual target input -->
-        <div v-if="settings.targetPreset === 'manual'" class="field-row field-subrow">
-          <div>
-            <label for="setting-manual-target">Host Target Number</label>
-            <input
-              id="setting-manual-target"
-              v-model.number="settings.manualTarget"
-              type="number"
-              class="input-arcade input-short"
-            />
-          </div>
-        </div>
+        <!-- The exact number is chosen in the pre-round dialog, not here. -->
+        <p
+          v-if="settings.targetPreset === 'manual'"
+          class="field-hint manual-target-hint"
+          data-testid="manual-target-hint"
+        >
+          {{ canEditSettings ? 'You choose the exact number' : 'The host chooses the exact number' }}
+          each time a round is dealt. Every player gets the same target.
+        </p>
 
         <!-- Approximations (%) -->
         <div class="field-row">
@@ -287,42 +360,47 @@ const forbiddenMoveLabels = computed(() => {
           />
         </div>
 
-        <!-- Allowed operators -->
+        <!-- Allowed operators: group switch plus one switch per operator -->
         <div class="field-row">
           <label>Allowed operators</label>
-          <div class="operator-toggles">
-            <label class="toggle-chip">
-              <input v-model="settings.allowedOperators.basic" type="checkbox" />
-              <span>Basic (+, −, ×, ÷)</span>
-            </label>
-            <label class="toggle-chip">
-              <input v-model="settings.allowedOperators.powers" type="checkbox" />
-              <span>Powers &amp; roots (xʸ, ʸ√x)</span>
-            </label>
-            <label class="toggle-chip">
-              <input v-model="settings.allowedOperators.factorial" type="checkbox" />
-              <span>Factorials &amp; gamma (x!, Γ(x), Γ⁻¹(x))</span>
-            </label>
-            <label class="toggle-chip">
-              <input v-model="settings.allowedOperators.trig" type="checkbox" />
-              <span>Basic trig in deg (sin°, cos°, tan°)</span>
-            </label>
-            <label class="toggle-chip">
-              <input v-model="settings.allowedOperators.inverse" type="checkbox" />
-              <span>Inverse (1/x)</span>
-            </label>
-            <label class="toggle-chip">
-              <input v-model="settings.allowedOperators.bitshift" type="checkbox" />
-              <span>Bit shifting (LSHIFT, RSHIFT)</span>
-            </label>
-            <label class="toggle-chip">
-              <input
-                v-model="settings.allowedOperators.concat"
-                type="checkbox"
-                data-testid="toggle-concat"
-              />
-              <span>Concatenate (||)</span>
-            </label>
+          <div class="operator-groups">
+            <section v-for="group in OPERATOR_GROUPS" :key="group.id" class="operator-group">
+              <label class="operator-group__head">
+                <input
+                  type="checkbox"
+                  :checked="groupEnabled(group)"
+                  :indeterminate.prop="groupIndeterminate(group)"
+                  :data-testid="`toggle-group-${group.id}`"
+                  @change="setGroupEnabled(group, $event)"
+                />
+                <span class="operator-group__name">{{ group.label }}</span>
+                <span class="operator-group__count">
+                  {{ group.operators.filter(isOpEnabled).length }}/{{ group.operators.length }}
+                </span>
+              </label>
+              <span class="operator-group__hint">{{ group.hint }}</span>
+              <div class="operator-toggles">
+                <label
+                  v-for="op in group.operators"
+                  :key="op.id"
+                  class="toggle-chip"
+                  :class="{ 'toggle-chip--on': isOpEnabled(op) }"
+                  :title="op.description"
+                >
+                  <input
+                    type="checkbox"
+                    :checked="isOpEnabled(op)"
+                    :aria-label="`${op.label} (${op.shortSymbol})`"
+                    :data-testid="`toggle-op-${op.id}`"
+                    @change="setOperatorEnabled(op, $event)"
+                  />
+                  <span>
+                    <strong>{{ op.shortSymbol }}</strong>
+                    <span class="toggle-chip__label">{{ op.label }}</span>
+                  </span>
+                </label>
+              </div>
+            </section>
           </div>
         </div>
 
@@ -607,16 +685,74 @@ fieldset.settings-form:disabled {
   gap: 16px;
 }
 
+.constant-field {
+  border-left: 3px solid rgba(255, 190, 11, 0.35);
+  padding-left: 12px;
+}
+
+.constant-preview {
+  line-height: 1.35;
+}
+
+.constant-preview strong {
+  color: var(--gold-bright);
+}
+
+.manual-target-hint {
+  margin: -4px 0 0;
+  line-height: 1.4;
+  border-left: 3px solid rgba(255, 190, 11, 0.35);
+  padding-left: 10px;
+}
+
 .inline-field {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
+.operator-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.operator-group {
+  background: rgba(12, 10, 18, 0.55);
+  border: 1px solid rgba(242, 201, 76, 0.24);
+  padding: 9px 10px 10px;
+}
+
+.operator-group__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-family: var(--font-pixel);
+  font-size: 0.58rem;
+  letter-spacing: 0.06em;
+  color: var(--gold-bright);
+}
+
+.operator-group__count {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  color: var(--ink-muted);
+}
+
+.operator-group__hint {
+  display: block;
+  margin: 3px 0 8px 24px;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--ink-muted);
+}
+
 .operator-toggles {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 6px;
 }
 
 .toggle-chip {
@@ -625,8 +761,21 @@ fieldset.settings-form:disabled {
   gap: 8px;
   background: #241f30;
   border: 1px solid rgba(242, 201, 76, 0.4);
-  padding: 8px 10px;
+  padding: 7px 9px;
   font-size: 0.84rem;
   cursor: pointer;
+  opacity: 0.72;
+}
+
+.toggle-chip--on {
+  opacity: 1;
+  border-color: rgba(255, 190, 11, 0.68);
+  background: #2a2338;
+}
+
+.toggle-chip__label {
+  margin-left: 5px;
+  font-size: 0.78rem;
+  color: var(--ink-muted);
 }
 </style>

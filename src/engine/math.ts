@@ -3,6 +3,7 @@ import type {
   BinaryOperator,
   ExprNode,
   ForbiddenMovesConfig,
+  OperatorCategory,
   OperatorId,
   OperatorMeta,
   SolutionScoringMode,
@@ -146,24 +147,51 @@ export const OPERATOR_CATALOG: OperatorMeta[] = [
     description: '1 ÷ x',
     hotkey: 'i',
   },
-  // Bit shifting
+  // Binary computing
   {
     id: 'lshift',
     arity: 'binary',
-    category: 'bitshift',
+    category: 'computing',
     label: 'LSHIFT',
     shortSymbol: '<<',
     description: 'LSHIFT(a, b)',
     hotkey: '<',
   },
   {
-    id: 'rshift',
+    id: 'bitand',
     arity: 'binary',
-    category: 'bitshift',
-    label: 'RSHIFT',
-    shortSymbol: '>>',
-    description: 'RSHIFT(a, b)',
-    hotkey: '>',
+    category: 'computing',
+    label: 'AND',
+    shortSymbol: '&',
+    description: 'AND(a, b) — bitwise and',
+    hotkey: '&',
+  },
+  {
+    id: 'bitor',
+    arity: 'binary',
+    category: 'computing',
+    label: 'OR',
+    shortSymbol: '|',
+    description: 'OR(a, b) — bitwise or',
+    hotkey: 'o',
+  },
+  {
+    id: 'bitxor',
+    arity: 'binary',
+    category: 'computing',
+    label: 'XOR',
+    shortSymbol: '⊕',
+    description: 'XOR(a, b) — bitwise exclusive or',
+    hotkey: 'x',
+  },
+  {
+    id: 'bitnot',
+    arity: 'unary',
+    category: 'computing',
+    label: 'NOT',
+    shortSymbol: '~',
+    description: 'NOT(a) — bitwise complement',
+    hotkey: 'n',
   },
   // Concatenation
   {
@@ -175,10 +203,129 @@ export const OPERATOR_CATALOG: OperatorMeta[] = [
     description: 'a || b (digits joined)',
     hotkey: '|',
   },
+  // Analysis
+  {
+    id: 'exp',
+    arity: 'unary',
+    category: 'analysis',
+    label: 'Exp',
+    shortSymbol: 'eˣ',
+    description: 'e^x',
+    hotkey: 'e',
+  },
+  {
+    id: 'ln',
+    arity: 'unary',
+    category: 'analysis',
+    label: 'Natural log',
+    shortSymbol: 'ln',
+    description: 'ln(x), the natural logarithm',
+    hotkey: 'l',
+  },
+  {
+    id: 'log',
+    arity: 'binary',
+    category: 'analysis',
+    label: 'Logarithm',
+    shortSymbol: 'logₐ',
+    description: 'log(a, b) — log base a of b',
+    hotkey: 'L',
+  },
+  // Combinatorics
+  {
+    id: 'comb',
+    arity: 'binary',
+    category: 'combinatorics',
+    label: 'Combinations',
+    shortSymbol: 'C(n,k)',
+    description: 'COMB(n, k) — n choose k',
+    hotkey: 'C',
+  },
+  {
+    id: 'perm',
+    arity: 'binary',
+    category: 'combinatorics',
+    label: 'Permutations',
+    shortSymbol: 'P(n,k)',
+    description: 'PERM(n, k) — ordered selections of k from n',
+    hotkey: 'P',
+  },
+  {
+    id: 'stirling2',
+    arity: 'binary',
+    category: 'combinatorics',
+    label: 'Stirling 2nd',
+    shortSymbol: 'S(n,k)',
+    description: 'STR2(n, k) — ways to split n items into k groups',
+    hotkey: 'S',
+  },
+  {
+    id: 'dfact',
+    arity: 'unary',
+    category: 'combinatorics',
+    label: 'Double factorial',
+    shortSymbol: 'n!!',
+    description: 'n!! = n × (n−2) × …',
+    hotkey: 'D',
+  },
+  {
+    id: 'subfact',
+    arity: 'unary',
+    category: 'combinatorics',
+    label: 'Subfactorial',
+    shortSymbol: '!n',
+    description: '!n — derangements of n items',
+    hotkey: 'F',
+  },
 ]
 
+export interface OperatorGroupMeta {
+  id: OperatorCategory
+  label: string
+  /** Short list of what the group contains, shown in the lobby. */
+  hint: string
+}
+
+export interface OperatorGroup extends OperatorGroupMeta {
+  operators: OperatorMeta[]
+}
+
+const OPERATOR_GROUP_META: OperatorGroupMeta[] = [
+  { id: 'basic', label: 'Basic', hint: '+ − × ÷' },
+  { id: 'powers', label: 'Powers & roots', hint: 'xʸ, ʸ√x' },
+  { id: 'factorial', label: 'Factorials & gamma', hint: 'x!, Γ(x), Γ⁻¹(x)' },
+  { id: 'trig', label: 'Basic trig', hint: 'sin°, cos°, tan°' },
+  { id: 'inverse', label: 'Inverse', hint: '1/x' },
+  { id: 'computing', label: 'Binary computing', hint: 'LSHIFT, AND, OR, XOR, NOT' },
+  { id: 'concat', label: 'Concatenate', hint: 'digit joining with ||' },
+  { id: 'analysis', label: 'Analysis', hint: 'eˣ, ln x, log base a' },
+  {
+    id: 'combinatorics',
+    label: 'Combinatorics',
+    hint: 'C(n,k), P(n,k), S(n,k), n!!, !n',
+  },
+]
+
+export const OPERATOR_GROUPS: OperatorGroup[] = OPERATOR_GROUP_META.map((group) => ({
+  ...group,
+  operators: OPERATOR_CATALOG.filter((op) => op.category === group.id),
+}))
+
+/** A group is on by default; an explicit per-operator switch overrides it. */
+export function isOperatorEnabled(
+  allowed: AllowedOperatorsConfig,
+  op: OperatorMeta
+): boolean {
+  const override = allowed.operators?.[op.id]
+  return typeof override === 'boolean' ? override : Boolean(allowed[op.category])
+}
+
 export function getEnabledOperators(allowed: AllowedOperatorsConfig): OperatorMeta[] {
-  return OPERATOR_CATALOG.filter((op) => allowed[op.category])
+  return OPERATOR_CATALOG.filter((op) => isOperatorEnabled(allowed, op))
+}
+
+export function hasEnabledOperators(allowed: AllowedOperatorsConfig): boolean {
+  return OPERATOR_CATALOG.some((op) => isOperatorEnabled(allowed, op))
 }
 
 export function isUnaryOperator(op: OperatorId): op is UnaryOperator {
@@ -189,7 +336,12 @@ export function isUnaryOperator(op: OperatorId): op is UnaryOperator {
     op === 'sin' ||
     op === 'cos' ||
     op === 'tan' ||
-    op === 'inv'
+    op === 'inv' ||
+    op === 'bitnot' ||
+    op === 'exp' ||
+    op === 'ln' ||
+    op === 'dfact' ||
+    op === 'subfact'
   )
 }
 
@@ -339,6 +491,52 @@ export function realInverseGamma(y: number): number | null {
   return cleanFloat(root)
 }
 
+const MAX_COMBINATORICS_INPUT = 1_000
+const MAX_STIRLING_INPUT = 200
+
+/** A whole number close enough to its rounded value, for combinatorial inputs. */
+function wholeNumber(value: number): number | null {
+  if (!Number.isFinite(value)) return null
+  const rounded = Math.round(value)
+  return Math.abs(value - rounded) <= 1e-9 ? rounded : null
+}
+
+function safeBigInt(value: bigint): number | null {
+  return value > BigInt(Number.MAX_SAFE_INTEGER) || value < BigInt(Number.MIN_SAFE_INTEGER)
+    ? null
+    : Number(value)
+}
+
+function combinationsBigInt(n: number, k: number): bigint {
+  const kk = Math.min(k, n - k)
+  let result = 1n
+  for (let i = 1; i <= kk; i++) {
+    result = (result * BigInt(n - kk + i)) / BigInt(i)
+  }
+  return result
+}
+
+function permutationsBigInt(n: number, k: number): bigint {
+  let result = 1n
+  for (let i = 0; i < k; i++) result *= BigInt(n - i)
+  return result
+}
+
+function stirlingSecondBigInt(n: number, k: number): bigint {
+  if (k === 0) return n === 0 ? 1n : 0n
+  if (k > n) return 0n
+  let row: bigint[] = [1n]
+  for (let i = 1; i <= n; i++) {
+    const size = Math.min(i, k)
+    const next: bigint[] = new Array(size + 1).fill(0n)
+    for (let j = 1; j <= size; j++) {
+      next[j] = BigInt(j) * (row[j] ?? 0n) + (row[j - 1] ?? 0n)
+    }
+    row = next
+  }
+  return row[k] ?? 0n
+}
+
 export interface EvalResult {
   ok: boolean
   value: number
@@ -458,6 +656,158 @@ export function applyUnaryOperator(op: UnaryOperator, x: number): EvalResult {
         headerText: `1 / ${xStr} = ${formatNumber(val)}`,
       }
     }
+    case 'bitnot': {
+      if (!Number.isSafeInteger(x)) {
+        return {
+          ok: false,
+          value: NaN,
+          headerText: '',
+          error: 'NOT needs a whole number.',
+        }
+      }
+      const val = Number(~BigInt(x))
+      if (!Number.isSafeInteger(val)) {
+        return {
+          ok: false,
+          value: NaN,
+          headerText: '',
+          error: `NOT(${xStr}) is too large.`,
+        }
+      }
+      return {
+        ok: true,
+        value: val,
+        headerText: `NOT(${xStr}) = ${formatNumber(val)}`,
+      }
+    }
+    case 'exp': {
+      const raw = Math.exp(x)
+      if (!Number.isFinite(raw)) {
+        return {
+          ok: false,
+          value: NaN,
+          headerText: '',
+          error: `e^(${xStr}) is undefined or overflows.`,
+        }
+      }
+      const val = cleanFloat(raw)
+      return {
+        ok: true,
+        value: val,
+        headerText: `e^(${xStr}) = ${formatNumber(val)}`,
+      }
+    }
+    case 'ln': {
+      if (!(x > 0)) {
+        return {
+          ok: false,
+          value: NaN,
+          headerText: '',
+          error: `ln(${xStr}) is undefined for values at or below 0.`,
+        }
+      }
+      const val = cleanFloat(Math.log(x))
+      return {
+        ok: true,
+        value: val,
+        headerText: `ln(${xStr}) = ${formatNumber(val)}`,
+      }
+    }
+    case 'dfact': {
+      const n = wholeNumber(x)
+      if (n === null || n < 0) {
+        return {
+          ok: false,
+          value: NaN,
+          headerText: '',
+          error: 'Double factorial needs a whole number, zero or higher.',
+        }
+      }
+      let val = 1
+      for (let i = n; i > 1; i -= 2) {
+        val *= i
+        if (!Number.isSafeInteger(val)) {
+          return {
+            ok: false,
+            value: NaN,
+            headerText: '',
+            error: `${xStr}!! is too large to use as a number.`,
+          }
+        }
+      }
+      return {
+        ok: true,
+        value: val,
+        headerText: `${xStr}!! = ${formatNumber(val)}`,
+      }
+    }
+    case 'subfact': {
+      const n = wholeNumber(x)
+      if (n === null || n < 0) {
+        return {
+          ok: false,
+          value: NaN,
+          headerText: '',
+          error: 'Subfactorial needs a whole number, zero or higher.',
+        }
+      }
+      let val = 1
+      for (let i = 1; i <= n; i++) {
+        val = i * val + (i % 2 === 0 ? 1 : -1)
+        if (!Number.isSafeInteger(val)) {
+          return {
+            ok: false,
+            value: NaN,
+            headerText: '',
+            error: `!${xStr} is too large to use as a number.`,
+          }
+        }
+      }
+      return {
+        ok: true,
+        value: val,
+        headerText: `!${xStr} = ${formatNumber(val)}`,
+      }
+    }
+  }
+}
+
+/**
+ * Bitwise AND/OR/XOR over exact whole numbers. BigInt keeps the two's-complement
+ * semantics without silently truncating values that LSHIFT can push past 32 bits.
+ */
+function applyBitwiseBinary(
+  op: 'bitand' | 'bitor' | 'bitxor',
+  a: number,
+  b: number
+): EvalResult {
+  const aStr = formatNumber(a)
+  const bStr = formatNumber(b)
+  if (!Number.isSafeInteger(a) || !Number.isSafeInteger(b)) {
+    return {
+      ok: false,
+      value: NaN,
+      headerText: '',
+      error: 'Bitwise operators need whole numbers.',
+    }
+  }
+  const left = BigInt(a)
+  const right = BigInt(b)
+  const raw = op === 'bitand' ? left & right : op === 'bitor' ? left | right : left ^ right
+  const val = Number(raw)
+  if (!Number.isSafeInteger(val)) {
+    return {
+      ok: false,
+      value: NaN,
+      headerText: '',
+      error: 'That bitwise result is too large.',
+    }
+  }
+  const name = op === 'bitand' ? 'AND' : op === 'bitor' ? 'OR' : 'XOR'
+  return {
+    ok: true,
+    value: val,
+    headerText: `${name}(${aStr}, ${bStr}) = ${formatNumber(val)}`,
   }
 }
 
@@ -576,30 +926,91 @@ export function applyBinaryOperator(op: BinaryOperator, a: number, b: number): E
         headerText: `LSHIFT(${aInt}, ${bInt}) = ${formatNumber(val)}`,
       }
     }
-    case 'rshift': {
-      const aInt = Math.round(a)
-      const bInt = Math.round(b)
-      if (Math.abs(a - aInt) > 1e-9 || Math.abs(b - bInt) > 1e-9) {
+    case 'bitand':
+    case 'bitor':
+    case 'bitxor':
+      return applyBitwiseBinary(op, a, b)
+    case 'log': {
+      if (a <= 0 || Math.abs(a - 1) < 1e-12 || b <= 0) {
         return {
           ok: false,
           value: NaN,
           headerText: '',
-          error: 'Bit shifting requires integer values.',
+          error: 'Log needs a positive base other than 1, and a positive argument.',
         }
       }
-      if (bInt < 0 || bInt > 52) {
+      const raw = Math.log(b) / Math.log(a)
+      if (!Number.isFinite(raw)) {
         return {
           ok: false,
           value: NaN,
           headerText: '',
-          error: 'Shift amount must be between 0 and 52.',
+          error: 'That logarithm is undefined or overflows.',
         }
       }
-      const val = Math.floor(aInt / Math.pow(2, bInt))
+      const val = cleanFloat(raw)
       return {
         ok: true,
         value: val,
-        headerText: `RSHIFT(${aInt}, ${bInt}) = ${formatNumber(val)}`,
+        headerText: `log(${aStr}, ${bStr}) = ${formatNumber(val)}`,
+      }
+    }
+    case 'comb':
+    case 'perm':
+    case 'stirling2': {
+      const n = wholeNumber(a)
+      const k = wholeNumber(b)
+      const name = op === 'comb' ? 'COMB' : op === 'perm' ? 'PERM' : 'STR2'
+      if (n === null || k === null || n < 0 || k < 0) {
+        return {
+          ok: false,
+          value: NaN,
+          headerText: '',
+          error: `${name} needs two whole numbers, zero or higher.`,
+        }
+      }
+      if (op !== 'stirling2' && k > n) {
+        return {
+          ok: false,
+          value: NaN,
+          headerText: '',
+          error: `${name} needs k between 0 and n.`,
+        }
+      }
+      if (op === 'stirling2' && k > n) {
+        return {
+          ok: true,
+          value: 0,
+          headerText: `${name}(${aStr}, ${bStr}) = 0`,
+        }
+      }
+      if (n > (op === 'stirling2' ? MAX_STIRLING_INPUT : MAX_COMBINATORICS_INPUT)) {
+        return {
+          ok: false,
+          value: NaN,
+          headerText: '',
+          error: `${name} input is too large to compute exactly.`,
+        }
+      }
+      const raw =
+        op === 'comb'
+          ? combinationsBigInt(n, k)
+          : op === 'perm'
+            ? permutationsBigInt(n, k)
+            : stirlingSecondBigInt(n, k)
+      const val = safeBigInt(raw)
+      if (val === null) {
+        return {
+          ok: false,
+          value: NaN,
+          headerText: '',
+          error: `${name}(${aStr}, ${bStr}) is too large to use as a number.`,
+        }
+      }
+      return {
+        ok: true,
+        value: val,
+        headerText: `${name}(${aStr}, ${bStr}) = ${formatNumber(val)}`,
       }
     }
     case 'concat': {
@@ -939,7 +1350,13 @@ function getBinaryPrecedence(op: BinaryOperator): number {
     case 'concat':
       return 0
     case 'lshift':
-    case 'rshift':
+    case 'bitand':
+    case 'bitor':
+    case 'bitxor':
+    case 'log':
+    case 'comb':
+    case 'perm':
+    case 'stirling2':
       return 1
     case 'add':
     case 'sub':
@@ -960,10 +1377,7 @@ export function formatExpressionLhs(node: ExprNode): string {
 
   if (node.kind === 'unary') {
     const inner = formatExpressionLhs(node.operand)
-    const needsParens =
-      node.operand.kind === 'binary' ||
-      (node.operator === 'fact' && node.operand.kind === 'unary' && node.operand.operator === 'fact') ||
-      (node.operator === 'inv' && node.operand.kind !== 'card')
+    const needsParens = node.operand.kind !== 'card'
     switch (node.operator) {
       case 'fact':
         return needsParens ? `(${inner})!` : `${inner}!`
@@ -979,6 +1393,16 @@ export function formatExpressionLhs(node: ExprNode): string {
         return `tan(${inner}°)`
       case 'inv':
         return needsParens ? `1 / (${inner})` : `1 / ${inner}`
+      case 'bitnot':
+        return `NOT(${inner})`
+      case 'exp':
+        return `e^(${inner})`
+      case 'ln':
+        return `ln(${inner})`
+      case 'dfact':
+        return node.operand.kind === 'card' ? `${inner}!!` : `(${inner})!!`
+      case 'subfact':
+        return node.operand.kind === 'card' ? `!${inner}` : `!(${inner})`
     }
   }
 
@@ -989,8 +1413,26 @@ export function formatExpressionLhs(node: ExprNode): string {
   if (node.operator === 'lshift') {
     return `LSHIFT(${leftStr}, ${rightStr})`
   }
-  if (node.operator === 'rshift') {
-    return `RSHIFT(${leftStr}, ${rightStr})`
+  if (node.operator === 'bitand') {
+    return `AND(${leftStr}, ${rightStr})`
+  }
+  if (node.operator === 'bitor') {
+    return `OR(${leftStr}, ${rightStr})`
+  }
+  if (node.operator === 'bitxor') {
+    return `XOR(${leftStr}, ${rightStr})`
+  }
+  if (node.operator === 'log') {
+    return `log(${leftStr}, ${rightStr})`
+  }
+  if (node.operator === 'comb') {
+    return `COMB(${leftStr}, ${rightStr})`
+  }
+  if (node.operator === 'perm') {
+    return `PERM(${leftStr}, ${rightStr})`
+  }
+  if (node.operator === 'stirling2') {
+    return `STR2(${leftStr}, ${rightStr})`
   }
   if (node.operator === 'root') {
     const leftWrapped = node.left.kind === 'binary' ? `(${leftStr})` : leftStr
@@ -1006,17 +1448,25 @@ export function formatExpressionLhs(node: ExprNode): string {
   }
 
   const prec = getBinaryPrecedence(node.operator)
+  const wordStyle = (op: BinaryOperator): boolean =>
+    op === 'lshift' ||
+    op === 'bitand' ||
+    op === 'bitor' ||
+    op === 'bitxor' ||
+    op === 'log' ||
+    op === 'comb' ||
+    op === 'perm' ||
+    op === 'stirling2'
+
   const wrapLeft =
     node.left.kind === 'binary' &&
-    node.left.operator !== 'lshift' &&
-    node.left.operator !== 'rshift' &&
+    !wordStyle(node.left.operator) &&
     (getBinaryPrecedence(node.left.operator) < prec ||
       (node.operator === 'pow' && getBinaryPrecedence(node.left.operator) <= prec))
 
   const wrapRight =
     node.right.kind === 'binary' &&
-    node.right.operator !== 'lshift' &&
-    node.right.operator !== 'rshift' &&
+    !wordStyle(node.right.operator) &&
     (getBinaryPrecedence(node.right.operator) < prec ||
       ((node.operator === 'sub' || node.operator === 'div' || node.operator === 'pow') &&
         getBinaryPrecedence(node.right.operator) === prec))
@@ -1025,7 +1475,19 @@ export function formatExpressionLhs(node: ExprNode): string {
   const rFinal = wrapRight ? `(${rightStr})` : rightStr
 
   const symbolMap: Record<
-    Exclude<BinaryOperator, 'lshift' | 'rshift' | 'root' | 'concat'>,
+    Exclude<
+      BinaryOperator,
+      | 'lshift'
+      | 'bitand'
+      | 'bitor'
+      | 'bitxor'
+      | 'root'
+      | 'concat'
+      | 'log'
+      | 'comb'
+      | 'perm'
+      | 'stirling2'
+    >,
     string
   > = {
     add: '+',

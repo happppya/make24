@@ -15,6 +15,9 @@ dist
 dist-ssr
 *.local
 
+# Server-side puzzle leaderboards
+data/
+
 # Editor
 .vscode/*
 !.vscode/extensions.json

@@ -136,7 +136,7 @@ table.example.com {
 	# block is sorted before `reverse_proxy`, so it would answer every request —
 	# /health and the /ws upgrade included, and the site would 404 forever.
 	route {
-		@table path /ws /health
+		@table path /ws /health /puzzles/*
 		reverse_proxy @table 127.0.0.1:8787
 		respond 404
 	}
@@ -145,7 +145,13 @@ table.example.com {
 
 Caddy obtains a certificate automatically once `table.example.com` resolves to
 the reserved IP and ports 80/443 reach the box. It handles the WebSocket
-upgrade without extra configuration. No domain? An IP of `1.2.3.4` already has
+upgrade without extra configuration. `/puzzles/*` must stay in the matcher: the
+daily and weekly boards are plain HTTP endpoints on the same server.
+
+Puzzle scores persist in `data/puzzle-leaderboards.json` under the service's
+working directory (override with `PUZZLE_LEADERBOARD_FILE`). `git reset --hard`
+leaves that ignored directory alone, so a server deploy keeps the boards; back
+the file up if the instance is rebuilt. No domain? An IP of `1.2.3.4` already has
 the hostname `1-2-3-4.sslip.io`, which Let's Encrypt will issue for.
 
 ### 5. Host firewall

@@ -4,6 +4,7 @@ import { useGameContext } from '../../app/context'
 const {
   phase,
   settings,
+  activePuzzle,
   menuOpen,
   closeMenu,
   menuGoToLobby,
@@ -25,14 +26,17 @@ const {
 >
   <div class="pause-card">
     <div class="pause-card__marquee">
-      <span class="pause-card__badge">
-        {{
-          phase === 'title'
-            ? 'START SCREEN'
-            : settings.isMultiplayer
-              ? 'MULTIPLAYER'
-              : 'SINGLEPLAYER'
-        }}
+      <span class="pause-card__badge">          {{
+            phase === 'title'
+              ? 'START SCREEN'
+              : activePuzzle
+                ? activePuzzle.kind === 'daily'
+                  ? 'DAILY PUZZLE'
+                  : 'WEEKLY PUZZLE'
+                : settings.isMultiplayer
+                  ? 'MULTIPLAYER'
+                  : 'SINGLEPLAYER'
+          }}
       </span>
       <span class="pause-card__title">MENU</span>
     </div>
@@ -50,10 +54,10 @@ const {
         type="button"
         class="btn-arcade btn-arcade--block"
         data-testid="menu-lobby"
-        :disabled="phase === 'lobby'"
+        :disabled="phase === 'lobby' || phase === 'puzzles'"
         @click="menuGoToLobby"
       >
-        Lobby &amp; Settings
+        {{ activePuzzle ? 'Back to Puzzles' : 'Lobby & Settings' }}
       </button>
       <button
         type="button"

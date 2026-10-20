@@ -1,10 +1,12 @@
 import { computed, nextTick, onBeforeUnmount, provide, reactive, ref, watch } from 'vue'
 import { playSfx } from '../audio/sfx'
+import { MANUAL_TARGET_MAX, MANUAL_TARGET_MIN } from '../engine/deck'
 import {
   OPERATOR_CATALOG,
   costOfBinaryOn,
   costOfUnaryOn,
   getEnabledOperators,
+  hasEnabledOperators,
   isUnaryOperator,
 } from '../engine/math'
 import {
@@ -23,6 +25,7 @@ import { useBoardGestures } from './useBoardGestures'
 import { useHotkeys } from './useHotkeys'
 import { useJuice } from './useJuice'
 import { useMatch } from './useMatch'
+import { usePuzzles } from './usePuzzles'
 import { useRoom } from './useRoom'
 import { useStandings } from './useStandings'
 
@@ -37,6 +40,7 @@ export function useGame() {
   const viewportRef = ref<HTMLElement | null>(null)
   const juice = useJuice(viewportRef)
   const match = useMatch({ settings, phase, juice })
+  const puzzles = usePuzzles({ settings, phase, match })
   const standings = useStandings({ settings, match })
   const room = useRoom({ settings, phase, match, standings })
   const gestures = useBoardGestures({
@@ -75,6 +79,18 @@ export function useGame() {
   /** Name plates shown only while the matching control is hovered. */
   const hoveredOperatorLabel = ref<string | null>(null)
   const hoveredActionLabel = ref<string | null>(null)
+
+  /* ------------------------- exact target chooser ------------------------- */
+
+  /** The lobby no longer stores a manual target; the host picks it per deal. */
+  const targetPromptOpen = ref(false)
+  const lastManualTarget = ref(settings.manualTarget)
+  const pendingRoundAction = ref<'start' | 'next' | null>(null)
+  const targetPromptRound = computed(() => {
+    if (pendingRoundAction.value === 'start') return 1
+    if (settings.isMultiplayer) return (multiplayer.room?.round?.number ?? 0) + 1
+    return match.localRoundNumber.value + 1
+  })
 
   /* ------------------------------- Tutorial ------------------------------- */
 
@@ -121,6 +137,10 @@ export function useGame() {
   }
 
   function handleEscape(): void {
+    if (targetPromptOpen.value) {
+      cancelTargetPrompt()
+      return
+    }
     if (tutorialOpen.value) {
       void closeTutorial()
       return
@@ -142,7 +162,12 @@ export function useGame() {
   /* ------------------------------ navigation ------------------------------ */
 
   function goToTitle(): void {
+    closeTargetPrompt()
     playSfx('click')
+    if (puzzles.activePuzzle.value) {
+      puzzles.leavePuzzleForTitle()
+      return
+    }
     // Walking away from the title screen must free the seat, or the room would
     // keep a ghost player around.
     if (settings.isMultiplayer) leaveRoom()
@@ -151,7 +176,12 @@ export function useGame() {
   }
 
   function goToLobby(): void {
+    closeTargetPrompt()
     playSfx('click')
+    if (puzzles.activePuzzle.value) {
+      puzzles.exitPuzzleToHub()
+      return
+    }
     // Leaving the table is deliberate: the room keeps running for everyone else
     // and the seat is handed back when this player rejoins.
     if (settings.isMultiplayer) {
@@ -162,7 +192,13 @@ export function useGame() {
     phase.value = 'lobby'
   }
 
+  function goToPuzzles(): void {
+    playSfx('click')
+    puzzles.openPuzzleHub()
+  }
+
   function enterLobby(isMultiplayer: boolean): void {
+    closeTargetPrompt()
     settings.isMultiplayer = isMultiplayer
     if (isMultiplayer) {
       // Online play starts at the lobby list: pick a public table, take a code,
@@ -179,6 +215,7 @@ export function useGame() {
    * rules can be changed before the next series. The server moves every seat.
    */
   function playAgainFromGameOver(): void {
+    closeTargetPrompt()
     playSfx('click')
     if (settings.isMultiplayer) {
       if (room.multiplayerHost.value) sendToRoom({ t: 'return-to-lobby' })
@@ -188,21 +225,76 @@ export function useGame() {
   }
 
   function startMatchFromLobby(): void {
-    // Ensure at least one operator category is enabled
-    const anyEnabled = Object.values(settings.allowedOperators).some(Boolean)
-    if (!anyEnabled) {
-      settings.allowedOperators.basic = true
+    if (settings.isMultiplayer && !room.multiplayerHost.value) return
+    if (settings.targetPreset === 'manual') {
+      openTargetPrompt('start')
+      return
+    }
+    beginMatch()
+  }
+
+  /** Deals the first round, optionally with the host's exact target. */
+  function beginMatch(target?: number): void {
+    // Ensure at least one operator is enabled, including when every operator in
+    // an enabled group has been switched off individually.
+    if (!hasEnabledOperators(settings.allowedOperators)) {
+      settings.allowedOperators.operators.add = true
     }
 
     if (settings.isMultiplayer) {
       if (room.multiplayerHost.value && multiplayer.room?.phase !== 'playing') {
-        sendToRoom({ t: 'start-match' })
+        sendToRoom({ t: 'start-match', target })
       }
       return
     }
 
     match.resetLocalMatch()
-    match.startNewRound()
+    match.startNewRound(target)
+  }
+
+  /** Round-end "deal next": a manual table asks for its target first. */
+  function requestAdvanceRound(): void {
+    if (settings.isMultiplayer) {
+      if (!room.multiplayerHost.value || multiplayer.room?.phase !== 'round-end') return
+    }
+    const seriesOver = settings.isMultiplayer
+      ? standings.matchWinnerIds.value.length > 0
+      : match.localMatchWinner.value !== null
+    if (!seriesOver && settings.targetPreset === 'manual') {
+      openTargetPrompt('next')
+      return
+    }
+    match.advanceAfterRoundEnd()
+  }
+
+  function openTargetPrompt(action: 'start' | 'next'): void {
+    pendingRoundAction.value = action
+    targetPromptOpen.value = true
+    playSfx('select')
+  }
+
+  function closeTargetPrompt(): void {
+    targetPromptOpen.value = false
+    pendingRoundAction.value = null
+  }
+
+  function cancelTargetPrompt(): void {
+    closeTargetPrompt()
+    playSfx('click')
+  }
+
+  /** Called by the chooser once the host confirms a usable number. */
+  function confirmTargetChoice(requested: number): void {
+    if (!Number.isFinite(requested)) return
+    const target = Math.min(MANUAL_TARGET_MAX, Math.max(MANUAL_TARGET_MIN, requested))
+    lastManualTarget.value = target
+    // Keep solo's setting in step, but do not nudge the host's settings watcher
+    // online: it would push a now-locked rules update right after the deal.
+    if (!settings.isMultiplayer) settings.manualTarget = target
+    const action = pendingRoundAction.value
+    closeTargetPrompt()
+    if (action === 'start') beginMatch(target)
+    else if (action === 'next') match.advanceAfterRoundEnd(target)
   }
 
   /* ------------------------------ board actions ------------------------------ */
@@ -217,8 +309,11 @@ export function useGame() {
     const res = selectGroupInWorkspace(ws, groupId)
     if (res.changed) {
       if (ws.groups.length < groupsBefore) {
-        // Two groups were fused: thunk, and keep the taller stack on screen.
+        // Two groups were fused: thunk, spark at the fused stack, and keep the
+        // taller stack on screen.
         playSfx('merge')
+        const mergedId = ws.selectedGroupId
+        void nextTick(() => juice.spawnParticles('merge', mergedId))
         void juice.glideToGroups(ws, ws.groups.map((group) => group.id))
       } else {
         playSfx('select')
@@ -226,7 +321,7 @@ export function useGame() {
     } else {
       if (res.error) match.actionError.value = res.error
       playSfx('error')
-      juice.triggerImpact('error')
+      juice.triggerImpact('error', ws.selectedGroupId)
       juice.pushCue('NOPE', 'bad')
     }
   }
@@ -239,14 +334,14 @@ export function useGame() {
     const res = ungroupInWorkspace(ws, targetGroupId)
     if (res.changed) {
       playSfx('ungroup')
-      juice.triggerImpact('split')
+      juice.triggerImpact('split', ws.selectedGroupId)
       juice.pushCue('SPLIT', 'neutral')
       // Reframe the felt so every fanned-out piece stays reachable.
       void juice.glideToGroups(ws, ws.groups.map((group) => group.id))
     } else {
       if (res.error) match.actionError.value = res.error
       playSfx('error')
-      juice.triggerImpact('error')
+      juice.triggerImpact('error', ws.selectedGroupId)
       juice.pushCue('NOPE', 'bad')
     }
   }
@@ -266,12 +361,15 @@ export function useGame() {
       // A unary operation wraps the piece in a new group id, so the slot it now
       // lives in only exists after the board re-renders.
       const bobTarget = ws.selectedGroupId
-      void nextTick(() => juice.bobGroup(bobTarget))
+      void nextTick(() => {
+        juice.bobGroup(bobTarget)
+        juice.spawnParticles('operator', bobTarget)
+      })
       juice.pushCue(`${meta?.shortSymbol ?? '?'} ${costLabel}`, 'neutral')
     } else {
       if (res.error) match.actionError.value = res.error
       playSfx('error')
-      juice.triggerImpact('error')
+      juice.triggerImpact('error', ws.selectedGroupId)
       juice.pushCue('NOPE', 'bad')
     }
   }
@@ -320,7 +418,7 @@ export function useGame() {
     match.actionError.value = null
     resetWorkspaceToHand(ws, match.currentHand.value)
     playSfx('ungroup')
-    juice.triggerImpact('split')
+    juice.triggerImpact('split', ws.selectedGroupId)
     juice.pushCue('RESET', 'neutral')
   }
 
@@ -363,6 +461,7 @@ export function useGame() {
 
   onBeforeUnmount(() => {
     match.stopDeadlineClock()
+    puzzles.stopPolling()
     leaveRoom()
     disposeJuice()
     disposeRoom()
@@ -373,6 +472,7 @@ export function useGame() {
     settings,
     ...juiceApi,
     ...match,
+    ...puzzles,
     ...standings,
     ...roomApi,
     ...gestures,
@@ -396,9 +496,16 @@ export function useGame() {
     handleEscape,
     goToTitle,
     goToLobby,
+    goToPuzzles,
     enterLobby,
     playAgainFromGameOver,
     startMatchFromLobby,
+    requestAdvanceRound,
+    targetPromptOpen,
+    targetPromptRound,
+    targetPromptInitial: lastManualTarget,
+    confirmTargetChoice,
+    cancelTargetPrompt,
     handleSelectGroup,
     handleUngroup,
     handleApplyOperator,

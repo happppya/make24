@@ -58,7 +58,9 @@ the next deal clears the flag and deals them in.
 
 Client → server: `browse`, `create-room`, `join`, `set-name`, `set-ready`,
 `update-settings`, `start-match`, `next-round`, `skip-round`, `end-match`,
-`return-to-lobby`, `submit`.
+`return-to-lobby`, `submit`. `start-match` and `next-round` carry the host's
+chosen target when the table uses exact targets; the server refuses the deal
+with `target-required` if it is missing or outside the playable range.
 
 Server → client: `welcome` (self id + room snapshot + server time), `state`
 (full snapshot with `revision`), `lobbies` (public room summaries), `error`
@@ -101,6 +103,25 @@ final round, opens the series screen, `end-match` finishes the series early, and
 host can adjust the rules before the next match. `start-match` is only accepted
 from `lobby`.
 
+## Puzzle leaderboards over HTTP
+
+The daily/weekly boards are not room state, so they use a small HTTP surface on
+the same server rather than a socket:
+
+- `GET /puzzles/:kind/:key/leaderboard` returns `{ entries, serverTime }`.
+- `POST /puzzles/:kind/:key/leaderboard` takes `{ playerName, expression }` and
+  returns `{ entries, rank, improved, serverTime }`.
+
+`kind` is `daily` or `weekly`; `key` is the UTC date or ISO week. The server
+rebuilds the expression against the generated puzzle, requires every dealt card
+exactly once, rejects disabled operators and stale keys, and recomputes the score
+from the target and puzzle rules. Names are trimmed to 24 characters; a repeat
+name only replaces its row when the new score is lower. The top 50 per board are
+kept and persisted in `data/puzzle-leaderboards.json` (override with
+`PUZZLE_LEADERBOARD_FILE`). Caddy must proxy `/puzzles/*` alongside `/ws` and
+`/health`; the frontend falls back to a device-local board if the HTTP request
+fails.
+
 ## Swapping the transport for the cloud
 
 Nothing above `transport.ts` knows about sockets, so deployment is a transport
@@ -140,6 +161,11 @@ rejected.
   the unreachable-server error.
 - `src/multiplayer/session.test.ts` — the same session driving the loopback
   transport, proving the seam.
+- `src/multiplayer/puzzleLeaderboard.test.ts` — persistent top-score storage and
+  the HTTP board: valid submission, stale key, incomplete board, oversized body.
+- `src/engine/puzzles.test.ts` — deterministic daily/weekly generation, names,
+  difficulty, variation and reference-solution validation.
+- `src/puzzles.test.ts` — the main-menu entry, puzzle hub and in-game top-three.
 - `src/setup.test.ts` — the rendered selector (name, public/private, code entry)
   and the waiting banner/locked board a mid-round joiner sees.
 

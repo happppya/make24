@@ -70,7 +70,7 @@ const shots = {
     pins: [
       { n: 1, x: 93.65, y: 14.61, label: 'Round mode (head to head only)' },
       { n: 2, x: 22, y: 25.34, label: 'Cards dealt to everyone' },
-      { n: 3, x: 93.65, y: 36.07, label: 'Target: fixed 24, a range, or exact' },
+      { n: 3, x: 93.65, y: 36.07, label: 'Target: fixed 24, a range, exact, or a famous constant' },
       { n: 4, x: 22, y: 46.81, label: 'Approximation band, in percent' },
       { n: 5, x: 22, y: 68.27, label: 'Points that take the match' },
       { n: 6, x: 93.65, y: 94.16, label: 'Operator sets in play' },
@@ -91,6 +91,14 @@ const sections: Section[] = [
       {
         t: 'p',
         text: 'A valid solution has a final value that lands on the target number (or in the acceptable error range). Every card is used exactly once.',
+      },
+      {
+        t: 'p',
+        text: "In the famous-constants mode the target is a constant such as π, e or Euler's γ instead of a whole number. The HUD names the constant and explains what it is, and every round can deal a different one. Constants are irrational, so the error band does the real work here.",
+      },
+      {
+        t: 'p',
+        text: 'In exact-target tables the lobby does not ask for the number. The host is prompted for it right before each deal, and everyone plays the same target.',
       },
     ],
   },
@@ -179,7 +187,7 @@ const sections: Section[] = [
     blocks: [
       {
         t: 'p',
-        text: 'Settings live in the lobby. The host sets the mode, the cards dealt, the target (a fixed 24, a range, or an exact number), the error band, the deck pool, the operator sets, the forbidden moves and their penalty, and the points that win the match.',
+        text: 'Settings live in the lobby. The host sets the mode, the cards dealt, the target (a fixed 24, a range, a per-round exact number, or a famous constant), the error band, the deck pool, the operator groups and individual operators, the forbidden moves and their penalty, and the points that win the match.',
       },
       {
         t: 'p',
@@ -199,7 +207,7 @@ const sections: Section[] = [
     blocks: [
       {
         t: 'p',
-        text: 'The host switches these on in sets; whatever is enabled shows up on the rails. {1}–{0} pick a binary operator and {⇧1}–{⇧0} a unary one, counting down the rail.',
+        text: 'The host can switch a whole group on at once or pick individual operators; whatever is enabled shows up on the rails. {1}–{0} pick a binary operator and {⇧1}–{⇧0} a unary one, counting down the rail; only the first ten of each get a digit key.',
       },
       {
         t: 'ops',
@@ -212,11 +220,21 @@ const sections: Section[] = [
           { sym: 'Γ⁻¹(x)', name: 'Inverse gamma', note: 'Principal branch; undefined at or below ≈0.8856.' },
           { sym: 'sin° cos° tan°', name: 'Trig', note: 'Angles are in degrees.' },
           { sym: '1/x', name: 'Inverse', note: 'One divided by x.' },
-          { sym: '<< >>', name: 'Bit shift', note: 'Integers only, shifted by 0 to 52.' },
+          { sym: '<< & | ⊕ ~', name: 'Binary computing', note: 'Whole numbers only: LSHIFT, AND, OR, XOR and NOT.' },
           {
             sym: '||',
             name: 'Concat',
             note: 'Joins the digits in selection order: 6 || 10 is 610, 10 || 6 is 106.',
+          },
+          {
+            sym: 'eˣ ln logₐ',
+            name: 'Analysis',
+            note: 'e raised to x, the natural log, and log(a, b) with base a.',
+          },
+          {
+            sym: 'C P S n!! !n',
+            name: 'Combinatorics',
+            note: 'Combinations, permutations, Stirling numbers, double factorial and derangements. Whole numbers only; results must stay exact.',
           },
         ],
       },
@@ -230,8 +248,8 @@ const sections: Section[] = [
       {
         t: 'keys',
         rows: [
-          { keys: ['1', '0'], does: 'Binary operators, in rail order' },
-          { keys: ['⇧1', '⇧0'], does: 'Unary operators, in rail order' },
+          { keys: ['1', '0'], does: 'First ten binary operators, in rail order' },
+          { keys: ['⇧1', '⇧0'], does: 'First ten unary operators, in rail order' },
           { keys: ['Z', 'Y'], does: 'Undo, redo' },
           { keys: ['U'], does: 'Split the selected group' },
           { keys: ['⌥1', '⌥5'], does: 'Switch workspace' },

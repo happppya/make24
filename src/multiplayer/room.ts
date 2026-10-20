@@ -1,7 +1,19 @@
-import { dealHand, generateTargetNumber } from '../engine/deck'
+import {
+  MANUAL_TARGET_MAX,
+  MANUAL_TARGET_MIN,
+  dealHand,
+  generateTargetNumber,
+  resolveConstantTarget,
+} from '../engine/deck'
+import {
+  CONSTANT_CHOICES,
+  type ConstantChoice,
+  type ConstantId,
+} from '../engine/constants'
 import {
   DEFAULT_FORBIDDEN_MOVES,
   DEFAULT_FORBIDDEN_MOVE_PENALTY,
+  OPERATOR_CATALOG,
   calculateScoreBreakdown,
   checkTargetAcceptance,
   formatExpressionLhs,
@@ -13,6 +25,7 @@ import type {
   ExprNode,
   GameMode,
   GameSettings,
+  OperatorId,
   SolutionScoringMode,
   SubmittedSolution,
   TargetPreset,
@@ -48,6 +61,7 @@ export function createDefaultSettings(): GameSettings {
     mode: 'first-to-solve',
     numCards: 4,
     targetPreset: 'just-24',
+    targetConstant: 'random',
     customMin: 10,
     customMax: 250,
     manualTarget: 24,
@@ -60,8 +74,11 @@ export function createDefaultSettings(): GameSettings {
       factorial: true,
       trig: false,
       inverse: false,
-      bitshift: false,
+      computing: false,
       concat: false,
+      analysis: false,
+      combinatorics: false,
+      operators: {},
     },
     forbiddenMoves: { ...DEFAULT_FORBIDDEN_MOVES },
     forbiddenMovePenalty: DEFAULT_FORBIDDEN_MOVE_PENALTY,
@@ -77,7 +94,14 @@ const GAME_MODES: GameMode[] = [
   'best-5m',
   'best-10m',
 ]
-const TARGET_PRESETS: TargetPreset[] = ['just-24', 'small', 'big', 'custom', 'manual']
+const TARGET_PRESETS: TargetPreset[] = [
+  'just-24',
+  'small',
+  'big',
+  'custom',
+  'manual',
+  'constant',
+]
 const CARD_POOLS: CardPoolMode[] = ['1-deck', '2-decks', '3-decks', 'unlimited']
 const SCORING_MODES: SolutionScoringMode[] = ['cost-first', 'balanced', 'accuracy-first']
 
@@ -94,12 +118,31 @@ function clampNumber(value: unknown, min: number, max: number, fallback: number)
 }
 
 /** Client-supplied settings are never trusted: clamp everything into a playable range. */
+/** Returns the host's chosen exact target, or null when it is absent or unusable. */
+function readManualTarget(value: number | undefined): number | null {
+  if (
+    typeof value !== 'number' ||
+    !Number.isFinite(value) ||
+    value < MANUAL_TARGET_MIN ||
+    value > MANUAL_TARGET_MAX
+  ) {
+    return null
+  }
+  return value
+}
+
 export function sanitizeSettings(input: unknown, base: GameSettings): GameSettings {
   const raw = (input ?? {}) as Partial<GameSettings>
   const operators = (raw.allowedOperators ?? base.allowedOperators) as unknown as Record<
     string,
     unknown
   >
+  const rawOperatorOverrides = (operators.operators ?? {}) as Record<string, unknown>
+  const operatorOverrides: Partial<Record<OperatorId, boolean>> = {}
+  for (const meta of OPERATOR_CATALOG) {
+    const enabled = rawOperatorOverrides[meta.id]
+    if (typeof enabled === 'boolean') operatorOverrides[meta.id] = enabled
+  }
   const forbidden = (raw.forbiddenMoves ?? base.forbiddenMoves) as unknown as Record<
     string,
     unknown
@@ -109,6 +152,11 @@ export function sanitizeSettings(input: unknown, base: GameSettings): GameSettin
     mode: pick(raw.mode, GAME_MODES, base.mode),
     numCards: Math.round(clampNumber(raw.numCards, 2, 10, base.numCards)),
     targetPreset: pick(raw.targetPreset, TARGET_PRESETS, base.targetPreset),
+    targetConstant: pick<ConstantChoice>(
+      raw.targetConstant,
+      CONSTANT_CHOICES,
+      base.targetConstant
+    ),
     customMin: clampNumber(raw.customMin, -99999, 99999, base.customMin),
     customMax: clampNumber(raw.customMax, -99999, 99999, base.customMax),
     manualTarget: clampNumber(raw.manualTarget, -99999, 99999, base.manualTarget),
@@ -121,8 +169,11 @@ export function sanitizeSettings(input: unknown, base: GameSettings): GameSettin
       factorial: Boolean(operators.factorial),
       trig: Boolean(operators.trig),
       inverse: Boolean(operators.inverse),
-      bitshift: Boolean(operators.bitshift),
+      computing: Boolean(operators.computing),
       concat: Boolean(operators.concat),
+      analysis: Boolean(operators.analysis),
+      combinatorics: Boolean(operators.combinatorics),
+      operators: operatorOverrides,
     },
     forbiddenMoves: {
       factorialInvgamma: Boolean(forbidden.factorialInvgamma),
@@ -272,12 +323,14 @@ function computeWinnerIds(solutions: SubmittedSolution[]): string[] {
   return winners
 }
 
-function dealRound(room: RoomState, now: number): void {
+function dealRound(room: RoomState, now: number, targetOverride?: number): void {
   const roundNumber = (room.round?.number ?? 0) + 1
   const duration = modeDurationSeconds(room.settings.mode)
+  const constant = targetOverride === undefined ? resolveConstantTarget(room.settings) : null
   const round: RoundState = {
     number: roundNumber,
-    target: generateTargetNumber(room.settings),
+    target: targetOverride ?? constant?.value ?? generateTargetNumber(room.settings),
+    constantId: (constant?.id as ConstantId | undefined) ?? null,
     hand: dealHand(room.settings.numCards, room.settings.cardPool),
     startedAt: now,
     deadline: duration === null ? null : now + duration * 1000,
@@ -487,6 +540,11 @@ export function handleClientMessage(
       if (!isRoomHost(room, playerId)) return fail('not-host', 'Only the host can deal the first round.')
       if (room.phase !== 'lobby') return fail('wrong-phase', 'Return to the lobby to deal a new match.')
       if (room.players.length === 0) return fail('wrong-phase', 'Nobody is seated.')
+      const manualTarget =
+        room.settings.targetPreset === 'manual' ? readManualTarget(message.target) : null
+      if (room.settings.targetPreset === 'manual' && manualTarget === null) {
+        return fail('target-required', 'Choose an exact target before dealing.')
+      }
       for (const p of room.players) {
         p.points = 0
         p.bestRoundScore = null
@@ -494,7 +552,7 @@ export function handleClientMessage(
       room.round = null
       room.matchWinnerIds = []
       room.hostId = playerId
-      dealRound(room, now)
+      dealRound(room, now, manualTarget ?? undefined)
       return ok(true)
     }
 
@@ -506,7 +564,12 @@ export function handleClientMessage(
         room.revision += 1
         return ok(true)
       }
-      dealRound(room, now)
+      const manualTarget =
+        room.settings.targetPreset === 'manual' ? readManualTarget(message.target) : null
+      if (room.settings.targetPreset === 'manual' && manualTarget === null) {
+        return fail('target-required', 'Choose an exact target before dealing.')
+      }
+      dealRound(room, now, manualTarget ?? undefined)
       return ok(true)
     }
 

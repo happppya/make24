@@ -2,6 +2,7 @@ import { nextTick, ref, type Ref } from 'vue'
 import { isSfxEnabled, playSfx, toggleSfx } from '../audio/sfx'
 import { getGroupPosition, setWorkspacePan } from '../engine/workspace'
 import type { WorkspaceState } from '../engine/types'
+import { createParticleBurst, type BurstParticle, type ParticleBurstKind } from './particles'
 
 export type ImpactKind = 'split' | 'error' | 'hit'
 export type CueTone = 'good' | 'bad' | 'neutral'
@@ -12,9 +13,24 @@ export interface FloatingCue {
   offsetX: number
 }
 
+/** One painted burst; particles carry felt-local origins so they can share a layer. */
+export interface LiveParticleBurst {
+  id: number
+  kind: ParticleBurstKind
+  particles: BurstParticle[]
+}
+
+function prefersReducedMotion(): boolean {
+  return (
+    typeof window !== 'undefined' &&
+    !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+  )
+}
+
 /**
- * The table's "juice": sound, screen shake, floating cues, bobbing pieces and
- * camera glides. Nothing here owns game state — the board is passed in.
+ * The table's "juice": sound, screen shake, floating cues, bobbing pieces,
+ * pixel particle bursts and camera glides. Nothing here owns game state — the
+ * board is passed in.
  */
 export function useJuice(viewportRef: Ref<HTMLElement | null>) {
   const sfxOn = ref(isSfxEnabled())
@@ -25,10 +41,13 @@ export function useJuice(viewportRef: Ref<HTMLElement | null>) {
   const sidebarRef = ref<HTMLElement | null>(null)
   const panGlide = ref(false)
   const floatingCues = ref<FloatingCue[]>([])
+  const particleBursts = ref<LiveParticleBurst[]>([])
 
   let cueSeed = 0
+  let particleSeed = 0
   let impactTimer: ReturnType<typeof setTimeout> | null = null
   const cueTimers = new Set<ReturnType<typeof setTimeout>>()
+  const particleTimers = new Set<ReturnType<typeof setTimeout>>()
 
   /**
    * Ease the felt so a freshly merged group (which can be a tall nested stack)
@@ -83,11 +102,7 @@ export function useJuice(viewportRef: Ref<HTMLElement | null>) {
    * should read as the card acknowledging it, not as the whole board lurching.
    */
   function bobGroup(groupId: string | null): void {
-    if (!groupId) return
-    const reduceMotion =
-      typeof window !== 'undefined' &&
-      window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
-    if (reduceMotion) return
+    if (!groupId || prefersReducedMotion()) return
     const slot = viewportRef.value?.querySelector<HTMLElement>(
       `[data-testid="group-slot-${groupId}"]`
     )
@@ -106,8 +121,42 @@ export function useJuice(viewportRef: Ref<HTMLElement | null>) {
     )
   }
 
+  /**
+   * Paints a pixel burst over the felt. Merge/operator fireworks land on the
+   * piece that changed; splits and hits default to the middle of the felt.
+   * A missing group falls back to the centre instead of dropping the effect.
+   */
+  function spawnParticles(kind: ParticleBurstKind, groupId?: string | null): void {
+    if (prefersReducedMotion()) return
+    const felt = feltRef.value
+    if (!felt) return
+
+    const feltBox = felt.getBoundingClientRect()
+    let x = felt.clientWidth / 2
+    let y = felt.clientHeight / 2
+    const slot = groupId
+      ? viewportRef.value?.querySelector<HTMLElement>(`[data-testid="group-slot-${groupId}"]`)
+      : null
+    if (slot) {
+      const slotBox = slot.getBoundingClientRect()
+      x = slotBox.left + slotBox.width / 2 - feltBox.left - felt.clientLeft
+      y = slotBox.top + slotBox.height / 2 - feltBox.top - felt.clientTop
+    }
+
+    const id = ++particleSeed
+    particleBursts.value = [
+      ...particleBursts.value.slice(-2),
+      { id, kind, particles: createParticleBurst(kind, id * 7919, { x, y }) },
+    ]
+    const timer = setTimeout(() => {
+      particleBursts.value = particleBursts.value.filter((burst) => burst.id !== id)
+      particleTimers.delete(timer)
+    }, 1400)
+    particleTimers.add(timer)
+  }
+
   /** Physical feedback: Web Animations API so every repeat replays cleanly. */
-  function triggerImpact(kind: ImpactKind): void {
+  function triggerImpact(kind: ImpactKind, groupId?: string | null): void {
     impactKind.value = kind
     if (impactTimer) clearTimeout(impactTimer)
     impactTimer = setTimeout(
@@ -116,6 +165,9 @@ export function useJuice(viewportRef: Ref<HTMLElement | null>) {
       },
       kind === 'hit' ? 900 : 380
     )
+
+    // After the board action the new/changed slot only exists next frame.
+    void nextTick(() => spawnParticles(kind, groupId))
 
     const canAnimate =
       typeof Element !== 'undefined' && typeof Element.prototype.animate === 'function'
@@ -203,6 +255,8 @@ export function useJuice(viewportRef: Ref<HTMLElement | null>) {
     if (impactTimer) clearTimeout(impactTimer)
     cueTimers.forEach((timer) => clearTimeout(timer))
     cueTimers.clear()
+    particleTimers.forEach((timer) => clearTimeout(timer))
+    particleTimers.clear()
   }
 
   return {
@@ -215,8 +269,10 @@ export function useJuice(viewportRef: Ref<HTMLElement | null>) {
     viewportRef,
     panGlide,
     floatingCues,
+    particleBursts,
     glideToGroups,
     bobGroup,
+    spawnParticles,
     triggerImpact,
     pushCue,
     onToggleSfx,

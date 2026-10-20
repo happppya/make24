@@ -3,15 +3,29 @@ import { onBeforeUnmount, onMounted, watch } from 'vue'
 import { useGameContext } from '../../app/context'
 import { formatScore, formatTimer, opKeyLabel } from '../../app/labels'
 import CardGroupNode from '../CardGroupNode.vue'
+import PuzzlePlayHeader from './PuzzlePlayHeader.vue'
 import ScorePanel from '../ScorePanel.vue'
 import { getGroupPosition, getGroupStackRank } from '../../engine/workspace'
+
+/** Accessible name for a rail button, including its digit key when it has one. */
+function operatorAriaLabel(label: string, symbol: string, index: number, unary: boolean): string {
+  const key = opKeyLabel(index)
+  if (!key) return `${label} (${symbol})`
+  return `${label} (${symbol}), key ${unary ? 'shift+' : ''}${key}`
+}
 
 const {
   menuOpen,
   tutorialOpen,
   settings,
+  activePuzzle,
+  canSubmit,
+  submitting,
+  finishPuzzle,
+  exitPuzzleToHub,
   roundNumber,
   currentTarget,
+  currentConstant,
   currentEvaluation,
   costBreakdown,
   hitSignal,
@@ -51,6 +65,7 @@ const {
   panGlide,
   tidyingBoard,
   floatingCues,
+  particleBursts,
   glideToGroups,
 } = useGameContext()
 
@@ -78,6 +93,9 @@ function handleViewportResize(): void {
 }
 
 onMounted(() => {
+  // The hub can be scrolled when a puzzle starts; the table owns the viewport.
+  document.documentElement.scrollTop = 0
+  document.body.scrollTop = 0
   window.addEventListener('resize', handleViewportResize)
   if (!viewportRef.value || typeof ResizeObserver === 'undefined') return
   resizeObserver = new ResizeObserver(handleViewportResize)
@@ -103,6 +121,7 @@ void [feltRef, sidebarRef, viewportRef]
       <ScorePanel
         :round-number="roundNumber"
         :target="currentTarget"
+        :constant="currentConstant"
         :approximation-percent="settings.approximationPercent"
         :scoring-mode="settings.scoringMode"
         :value="currentEvaluation?.finalValue ?? null"
@@ -140,33 +159,54 @@ void [feltRef, sidebarRef, viewportRef]
       </div>
 
       <div class="sidebar-actions">
-        <button
-          v-if="!settings.isMultiplayer || settings.mode !== 'first-to-solve'"
-          type="button"
-          class="btn-arcade btn-arcade--gold btn-arcade--block"
-          data-testid="finish-round-btn"
-          :disabled="settings.isMultiplayer && !multiplayerHost"
-          @click="finishRound('player-end')"
-        >
-          {{ settings.isMultiplayer ? 'End Round' : 'Submit' }}
-        </button>
-        <button
-          type="button"
-          class="btn-arcade btn-arcade--block"
-          data-testid="skip-round-btn"
-          :disabled="settings.isMultiplayer && !multiplayerHost"
-          @click="finishRound('skip')"
-        >
-          Skip Round
-        </button>
-        <button
-          type="button"
-          class="btn-arcade btn-arcade--crimson btn-arcade--block"
-          :disabled="settings.isMultiplayer && !multiplayerHost"
-          @click="endEntireGameNow"
-        >
-          End Match
-        </button>
+        <template v-if="activePuzzle">
+          <button
+            type="button"
+            class="btn-arcade btn-arcade--gold btn-arcade--block"
+            data-testid="puzzle-submit-btn"
+            :disabled="!canSubmit || submitting"
+            @click="finishPuzzle"
+          >
+            {{ submitting ? 'Saving…' : 'Submit Solution' }}
+          </button>
+          <button
+            type="button"
+            class="btn-arcade btn-arcade--block"
+            data-testid="puzzle-quit-btn"
+            @click="exitPuzzleToHub"
+          >
+            Back to Puzzles
+          </button>
+        </template>
+        <template v-else>
+          <button
+            v-if="!settings.isMultiplayer || settings.mode !== 'first-to-solve'"
+            type="button"
+            class="btn-arcade btn-arcade--gold btn-arcade--block"
+            data-testid="finish-round-btn"
+            :disabled="settings.isMultiplayer && !multiplayerHost"
+            @click="finishRound('player-end')"
+          >
+            {{ settings.isMultiplayer ? 'End Round' : 'Submit' }}
+          </button>
+          <button
+            type="button"
+            class="btn-arcade btn-arcade--block"
+            data-testid="skip-round-btn"
+            :disabled="settings.isMultiplayer && !multiplayerHost"
+            @click="finishRound('skip')"
+          >
+            Skip Round
+          </button>
+          <button
+            type="button"
+            class="btn-arcade btn-arcade--crimson btn-arcade--block"
+            :disabled="settings.isMultiplayer && !multiplayerHost"
+            @click="endEntireGameNow"
+          >
+            End Match
+          </button>
+        </template>
       </div>
     </aside>
 
@@ -184,6 +224,8 @@ void [feltRef, sidebarRef, viewportRef]
           next round starts.
         </span>
       </div>
+
+      <PuzzlePlayHeader v-if="activePuzzle" />
 
       <div
         v-if="currentEvaluation && currentEvaluation.isSingleGroup"
@@ -275,6 +317,29 @@ void [feltRef, sidebarRef, viewportRef]
         </div>
       </div>
 
+      <!-- Pixel particles: merge sparks, split shards, operator motes, hit confetti -->
+      <div class="particle-layer" aria-hidden="true" data-testid="particle-layer">
+        <template v-for="burst in particleBursts" :key="burst.id">
+          <span
+            v-for="particle in burst.particles"
+            :key="`${burst.id}-${particle.id}`"
+            class="felt-particle"
+            :class="`felt-particle--${particle.shape}`"
+            :style="{
+              left: `${particle.originX}px`,
+              top: `${particle.originY}px`,
+              '--dx': `${particle.dx.toFixed(1)}px`,
+              '--dy': `${particle.dy.toFixed(1)}px`,
+              '--size': `${particle.size.toFixed(1)}px`,
+              '--rot': `${particle.rotation.toFixed(0)}deg`,
+              '--delay': `${particle.delay.toFixed(0)}ms`,
+              '--dur': `${particle.duration.toFixed(0)}ms`,
+              '--color': particle.color,
+            }"
+          ></span>
+        </template>
+      </div>
+
       <!-- Operators: vertical rail, top right -->
       <div class="op-rail" role="group" aria-label="Operators">
         <div class="op-rail__group">
@@ -287,7 +352,7 @@ void [feltRef, sidebarRef, viewportRef]
             :class="{ 'btn-op--active': activeWorkspace?.pendingOperator === op.id }"
             :disabled="!activeWorkspace?.selectedGroupId"
             :data-testid="`op-${op.id}`"
-            :aria-label="`${op.label} (${op.shortSymbol}), key ${opKeyLabel(idx)}`"
+            :aria-label="operatorAriaLabel(op.label, op.shortSymbol, idx, false)"
             @mouseenter="hoveredOperatorLabel = op.label"
             @mouseleave="hoveredOperatorLabel = null"
             @focus="hoveredOperatorLabel = op.label"
@@ -295,7 +360,7 @@ void [feltRef, sidebarRef, viewportRef]
             @click="handleApplyOperator(op.id)"
           >
             <span class="op-square__sym">{{ op.shortSymbol }}</span>
-            <span class="op-key">{{ opKeyLabel(idx) }}</span>
+            <span v-if="opKeyLabel(idx)" class="op-key">{{ opKeyLabel(idx) }}</span>
           </button>
         </div>
 
@@ -308,7 +373,7 @@ void [feltRef, sidebarRef, viewportRef]
             class="op-square btn-op btn-op--unary"
             :disabled="!activeWorkspace?.selectedGroupId"
             :data-testid="`op-${op.id}`"
-            :aria-label="`${op.label} (${op.shortSymbol}), key shift+${opKeyLabel(idx)}`"
+            :aria-label="operatorAriaLabel(op.label, op.shortSymbol, idx, true)"
             @mouseenter="hoveredOperatorLabel = op.label"
             @mouseleave="hoveredOperatorLabel = null"
             @focus="hoveredOperatorLabel = op.label"
@@ -316,7 +381,7 @@ void [feltRef, sidebarRef, viewportRef]
             @click="handleApplyOperator(op.id)"
           >
             <span class="op-square__sym">{{ op.shortSymbol }}</span>
-            <span class="op-key">⇧{{ opKeyLabel(idx) }}</span>
+            <span v-if="opKeyLabel(idx)" class="op-key">⇧{{ opKeyLabel(idx) }}</span>
           </button>
         </div>
       </div>
@@ -880,6 +945,61 @@ void [feltRef, sidebarRef, viewportRef]
   background: rgba(10, 13, 18, 0.62);
   border: 1px solid rgba(242, 201, 76, 0.22);
   padding: 3px 7px;
+}
+
+/* Particle bursts live above the cards and below the operator rail. Each span
+   starts at its felt-local origin and flies outward with a little gravity. */
+.particle-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 24;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.felt-particle {
+  position: absolute;
+  width: var(--size);
+  height: var(--size);
+  background: var(--color);
+  box-shadow: 0 0 6px var(--color);
+  image-rendering: pixelated;
+  opacity: 0;
+  animation: felt-particle-fly var(--dur) cubic-bezier(0.16, 0.78, 0.38, 1) var(--delay)
+    forwards;
+}
+
+.felt-particle--spark {
+  width: calc(var(--size) * 1.7);
+  height: 2px;
+}
+
+.felt-particle--shard {
+  width: 2px;
+  height: calc(var(--size) * 1.5);
+}
+
+@keyframes felt-particle-fly {
+  0% {
+    opacity: 0;
+    transform: translate(0, 0) rotate(0deg) scale(0.4);
+  }
+  10% {
+    opacity: 1;
+  }
+  62% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(var(--dx), calc(var(--dy) + 24px)) rotate(var(--rot)) scale(0.9);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .particle-layer {
+    display: none;
+  }
 }
 
 /* Workspace viewport with infinite pan plane — grows to the felt's bottom */

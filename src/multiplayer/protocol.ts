@@ -1,3 +1,4 @@
+import type { ConstantId } from '../engine/constants'
 import type { Card, ExprNode, GameSettings, SubmittedSolution } from '../engine/types'
 import { randomPlayerName } from './playerNames'
 
@@ -35,6 +36,8 @@ export interface RoundState {
   /** 1-based round index within the match. */
   number: number
   target: number
+  /** Set when the target is a famous constant, so every screen can name it. */
+  constantId?: ConstantId | null
   hand: Card[]
   startedAt: number
   /** Epoch ms when timed modes expire; null for first-to-solve. */
@@ -94,8 +97,9 @@ export type ClientMessage =
   | { t: 'set-name'; name: string }
   | { t: 'set-ready'; ready: boolean }
   | { t: 'update-settings'; settings: GameSettings }
-  | { t: 'start-match' }
-  | { t: 'next-round' }
+  /** `target` is required when the table's target preset is `manual`. */
+  | { t: 'start-match'; target?: number }
+  | { t: 'next-round'; target?: number }
   | { t: 'skip-round' }
   | { t: 'end-match' }
   /** After the series: host sends the room back to its lobby for a rematch. */
@@ -113,6 +117,8 @@ export type ServerErrorCode =
   | 'not-found'
   /** Seated mid-round; they play from the next deal. */
   | 'waiting'
+  /** The table deals manual targets, but no usable exact target was sent. */
+  | 'target-required'
 
 export type ServerMessage =
   | {

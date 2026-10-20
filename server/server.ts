@@ -20,6 +20,14 @@ import {
   type RoomState,
   type ServerMessage,
 } from '../src/multiplayer/protocol'
+import {
+  createPuzzle,
+  puzzlePeriod,
+  validatePuzzleAttempt,
+  type PuzzleDefinition,
+  type PuzzleKind,
+} from '../src/engine/puzzles'
+import { PuzzleLeaderboardStore, normalizePlayerName } from './puzzleLeaderboard'
 
 /**
  * Local multiplayer table server.
@@ -41,6 +49,10 @@ export interface ServerOptions {
   heartbeatMs?: number
   maxRooms?: number
   log?: (line: string) => void
+  /** JSON file for daily/weekly boards; null/omitted keeps them in memory. */
+  puzzleLeaderboardPath?: string | null
+  /** Injectable clock so puzzle HTTP tests can pin a UTC period. */
+  now?: () => number
 }
 
 /** Largest client frame we will even read; the biggest real message is a settings push. */
@@ -66,6 +78,43 @@ interface Session {
 /** Public rooms a browser may see, newest first, capped for a readable list. */
 const MAX_LISTED_ROOMS = 50
 
+/** JSON bodies are tiny boards; reject anything that could be an attack payload. */
+const MAX_PUZZLE_BODY_BYTES = 32 * 1024
+
+type JsonBodyResult =
+  | { ok: true; value: unknown }
+  | { ok: false; status: number; error: string }
+
+function readJsonBody(req: IncomingMessage): Promise<JsonBodyResult> {
+  return new Promise((resolve) => {
+    let size = 0
+    let tooLarge = false
+    const chunks: Buffer[] = []
+    req.on('data', (chunk: Buffer) => {
+      size += chunk.length
+      if (size > MAX_PUZZLE_BODY_BYTES) {
+        tooLarge = true
+        return
+      }
+      chunks.push(chunk)
+    })
+    req.on('end', () => {
+      if (tooLarge) {
+        resolve({ ok: false, status: 413, error: 'That submission is too large.' })
+        return
+      }
+      try {
+        resolve({ ok: true, value: JSON.parse(Buffer.concat(chunks).toString('utf8')) })
+      } catch {
+        resolve({ ok: false, status: 400, error: 'Submissions must be JSON.' })
+      }
+    })
+    req.on('error', () => {
+      resolve({ ok: false, status: 400, error: 'Could not read the submission.' })
+    })
+  })
+}
+
 export async function createMultiplayerServer(options: ServerOptions = {}): Promise<MultiplayerServer> {
   const port = options.port ?? 8787
   const host = options.host ?? '0.0.0.0'
@@ -77,9 +126,15 @@ export async function createMultiplayerServer(options: ServerOptions = {}): Prom
   const heartbeatMs = options.heartbeatMs ?? 30_000
   const maxRooms = options.maxRooms ?? 200
   const log = options.log ?? (() => {})
+  const now = options.now ?? (() => Date.now())
 
   const rooms = new Map<string, RoomState>()
   const sessions = new Map<WebSocket, Session>()
+  const puzzleBoards = new PuzzleLeaderboardStore({
+    filePath: options.puzzleLeaderboardPath ?? null,
+    log,
+  })
+  const puzzleCache = new Map<string, PuzzleDefinition>()
 
   const seatedPlayers = (): number => {
     let count = 0
@@ -87,10 +142,118 @@ export async function createMultiplayerServer(options: ServerOptions = {}): Prom
     return count
   }
 
+  /** The current period's puzzle, cached by kind + key. */
+  function currentPuzzle(kind: PuzzleKind, key: string): PuzzleDefinition | null {
+    const currentKey = puzzlePeriod(kind, new Date(now())).key
+    if (currentKey !== key) return null
+    const cacheKey = `${kind}:${key}`
+    const cached = puzzleCache.get(cacheKey)
+    if (cached) return cached
+    const puzzle = createPuzzle(kind, new Date(now()))
+    puzzleCache.set(cacheKey, puzzle)
+    return puzzle
+  }
+
+  async function handlePuzzleHttp(
+    req: IncomingMessage,
+    res: import('node:http').ServerResponse,
+    kind: PuzzleKind,
+    key: string
+  ): Promise<void> {
+    const boardKey = `${kind}:${key}`
+    if (req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ entries: puzzleBoards.top(boardKey), serverTime: now() }))
+      return
+    }
+    if (req.method !== 'POST') {
+      res.writeHead(405, { 'Content-Type': 'application/json', Allow: 'GET, POST, OPTIONS' })
+      res.end(JSON.stringify({ error: 'Use GET or POST.' }))
+      return
+    }
+
+    const puzzle = currentPuzzle(kind, key)
+    if (!puzzle) {
+      res.writeHead(409, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: 'That puzzle has closed.' }))
+      return
+    }
+
+    const body = await readJsonBody(req)
+    if (!body.ok) {
+      res.writeHead(body.status, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: body.error }))
+      return
+    }
+    const payload =
+      body.value && typeof body.value === 'object'
+        ? (body.value as { playerName?: unknown; expression?: unknown })
+        : null
+    const playerName = normalizePlayerName(payload?.playerName)
+    if (!playerName) {
+      res.writeHead(400, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: 'Choose a name before submitting a score.' }))
+      return
+    }
+
+    const attempt = validatePuzzleAttempt(puzzle, payload?.expression)
+    if (!attempt.ok) {
+      res.writeHead(400, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: attempt.error }))
+      return
+    }
+
+    const result = puzzleBoards.submit(boardKey, {
+      playerName,
+      score: attempt.score,
+      equation: attempt.equation,
+      lhs: attempt.lhs,
+      finalValue: attempt.finalValue,
+      submittedAt: now(),
+    })
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(
+      JSON.stringify({
+        entries: result.entries,
+        rank: result.rank,
+        improved: result.improved,
+        serverTime: now(),
+      })
+    )
+  }
+
   const httpServer = createServer((req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*')
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
     res.setHeader('Cache-Control', 'no-store')
-    if (req.url === '/health' || req.url === '/') {
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204)
+      res.end()
+      return
+    }
+
+    const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`)
+    const puzzleMatch = /^\/puzzles\/(daily|weekly)\/([^/]+)\/leaderboard$/.exec(
+      url.pathname
+    )
+    if (puzzleMatch) {
+      void handlePuzzleHttp(
+        req,
+        res,
+        puzzleMatch[1] as PuzzleKind,
+        decodeURIComponent(puzzleMatch[2]!)
+      ).catch((error) => {
+        log(`puzzle request failed: ${error instanceof Error ? error.message : String(error)}`)
+        if (!res.headersSent) {
+          res.writeHead(500, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify({ error: 'The leaderboard could not be updated.' }))
+        }
+      })
+      return
+    }
+
+    if (url.pathname === '/health' || url.pathname === '/') {
       res.writeHead(200, { 'Content-Type': 'application/json' })
       res.end(
         JSON.stringify({
@@ -99,6 +262,7 @@ export async function createMultiplayerServer(options: ServerOptions = {}): Prom
           protocol: PROTOCOL_VERSION,
           rooms: rooms.size,
           players: seatedPlayers(),
+          puzzles: puzzleBoards.boardCount(),
           uptimeSeconds: Math.round(process.uptime()),
         })
       )

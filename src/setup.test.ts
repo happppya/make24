@@ -16,6 +16,7 @@ import {
   accuracyPenaltyFor,
   applyBinaryOperator,
   applyUnaryOperator,
+  OPERATOR_CATALOG,
   calculateBoardBreakdown,
   calculateScore,
   calculateScoreBreakdown,
@@ -32,6 +33,11 @@ import {
   realInverseGamma,
 } from './engine/math'
 import { buildDeckPool, createCard, dealHand, generateTargetNumber } from './engine/deck'
+import {
+  CONSTANT_CATALOG,
+  constantById,
+  constantByValue,
+} from './engine/constants'
 import {
   DEFAULT_CARDS_PER_ROW,
   DEFAULT_CARD_SLOT_HEIGHT,
@@ -56,7 +62,8 @@ import {
   ungroupInWorkspace,
 } from './engine/workspace'
 import type { Card, ExprNode } from './engine/types'
-import { fittedFontSize, formatPercent, formatScore } from './app/labels'
+import { fittedFontSize, formatPercent, formatScore, opKeyLabel } from './app/labels'
+import { PARTICLE_BURST_COUNTS } from './app/particles'
 import { createDefaultSettings } from './multiplayer/room'
 import { leaveRoom, multiplayer as multiplayerSession } from './multiplayer/session'
 import type { LobbyPlayer, RoomState } from './multiplayer/protocol'
@@ -147,7 +154,7 @@ describe('Make 24 Remastered — Math & Operators Engine', () => {
     expect(applyUnaryOperator('tan', 90).ok).toBe(false)
   })
 
-  it('evaluates inverse and bit-shifting operators', () => {
+  it('evaluates inverse and binary-computing operators', () => {
     const inv4 = applyUnaryOperator('inv', 4)
     expect(inv4.ok).toBe(true)
     expect(inv4.value).toBe(0.25)
@@ -160,10 +167,30 @@ describe('Make 24 Remastered — Math & Operators Engine', () => {
       value: 40,
       headerText: 'LSHIFT(5, 3) = 40',
     })
-
-    const rshiftRes = applyBinaryOperator('rshift', 40, 3)
-    expect(rshiftRes.value).toBe(5)
     expect(applyBinaryOperator('lshift', 2.5, 1).ok).toBe(false)
+
+    // Bitwise operators use two's-complement whole numbers.
+    expect(applyBinaryOperator('bitand', 12, 10)).toEqual({
+      ok: true,
+      value: 8,
+      headerText: 'AND(12, 10) = 8',
+    })
+    expect(applyBinaryOperator('bitor', 12, 10).value).toBe(14)
+    expect(applyBinaryOperator('bitxor', 12, 10).value).toBe(6)
+    expect(applyBinaryOperator('bitand', -1, 6).value).toBe(6)
+    expect(applyBinaryOperator('bitxor', -1, 5).value).toBe(-6)
+    for (const op of ['bitand', 'bitor', 'bitxor'] as const) {
+      expect(applyBinaryOperator(op, 2.5, 1).ok).toBe(false)
+      expect(applyBinaryOperator(op, 1, 2.5).ok).toBe(false)
+    }
+
+    expect(applyUnaryOperator('bitnot', 5)).toEqual({
+      ok: true,
+      value: -6,
+      headerText: 'NOT(5) = -6',
+    })
+    expect(applyUnaryOperator('bitnot', -1).value).toBe(0)
+    expect(applyUnaryOperator('bitnot', 1.5).ok).toBe(false)
   })
 
   it('concatenates digits in selection order', () => {
@@ -200,8 +227,11 @@ describe('Make 24 Remastered — Math & Operators Engine', () => {
       factorial: false,
       trig: false,
       inverse: false,
-      bitshift: false,
+      computing: false,
       concat: false,
+      analysis: false,
+      combinatorics: false,
+      operators: {},
     }
     expect(getEnabledOperators(allOff)).toHaveLength(0)
     expect(getEnabledOperators({ ...allOff, concat: true }).map((op) => op.id)).toEqual(['concat'])
@@ -212,6 +242,205 @@ describe('Make 24 Remastered — Math & Operators Engine', () => {
       'div',
       'concat',
     ])
+  })
+
+  it('evaluates analysis operators and rejects their undefined domains', () => {
+    const exp = applyUnaryOperator('exp', 2)
+    expect(exp.ok).toBe(true)
+    expect(exp.value).toBeCloseTo(Math.E ** 2, 12)
+    expect(exp.headerText).toBe(`e^(2) = ${formatNumber(Math.E ** 2)}`)
+    expect(applyUnaryOperator('exp', 1000).ok).toBe(false)
+
+    expect(applyUnaryOperator('ln', Math.E).value).toBeCloseTo(1, 12)
+    expect(applyUnaryOperator('ln', 0).ok).toBe(false)
+    expect(applyUnaryOperator('ln', -1).ok).toBe(false)
+
+    const log = applyBinaryOperator('log', 2, 8)
+    expect(log.ok).toBe(true)
+    expect(log.value).toBeCloseTo(3, 12)
+    expect(log.headerText).toBe('log(2, 8) = 3')
+    expect(applyBinaryOperator('log', 10, 1000).value).toBeCloseTo(3, 12)
+    expect(applyBinaryOperator('log', 1, 8).ok).toBe(false)
+    expect(applyBinaryOperator('log', 0, 8).ok).toBe(false)
+    expect(applyBinaryOperator('log', 2, 0).ok).toBe(false)
+  })
+
+  it('evaluates combinatorics operators with whole, in-range arguments', () => {
+    expect(applyBinaryOperator('comb', 5, 2)).toMatchObject({
+      ok: true,
+      value: 10,
+      headerText: 'COMB(5, 2) = 10',
+    })
+    expect(applyBinaryOperator('comb', 0, 0).value).toBe(1)
+    expect(applyBinaryOperator('comb', 3, 5).ok).toBe(false)
+    expect(applyBinaryOperator('comb', 5.5, 2).ok).toBe(false)
+
+    expect(applyBinaryOperator('perm', 5, 2)).toMatchObject({
+      ok: true,
+      value: 20,
+      headerText: 'PERM(5, 2) = 20',
+    })
+    expect(applyBinaryOperator('perm', 5, 0).value).toBe(1)
+    expect(applyBinaryOperator('perm', 2, 5).ok).toBe(false)
+
+    expect(applyBinaryOperator('stirling2', 5, 2)).toMatchObject({
+      ok: true,
+      value: 15,
+      headerText: 'STR2(5, 2) = 15',
+    })
+    expect(applyBinaryOperator('stirling2', 0, 0).value).toBe(1)
+    expect(applyBinaryOperator('stirling2', 4, 0).value).toBe(0)
+    expect(applyBinaryOperator('stirling2', 2, 4).value).toBe(0)
+    expect(applyBinaryOperator('stirling2', 4, -1).ok).toBe(false)
+
+    expect(applyUnaryOperator('dfact', 6)).toMatchObject({
+      ok: true,
+      value: 48,
+      headerText: '6!! = 48',
+    })
+    expect(applyUnaryOperator('dfact', 7).value).toBe(105)
+    expect(applyUnaryOperator('dfact', 0).value).toBe(1)
+    expect(applyUnaryOperator('dfact', 2.5).ok).toBe(false)
+    expect(applyUnaryOperator('dfact', -2).ok).toBe(false)
+
+    expect(applyUnaryOperator('subfact', 4)).toMatchObject({
+      ok: true,
+      value: 9,
+      headerText: '!4 = 9',
+    })
+    expect(applyUnaryOperator('subfact', 0).value).toBe(1)
+    expect(applyUnaryOperator('subfact', 5).value).toBe(44)
+    expect(applyUnaryOperator('subfact', 2.5).ok).toBe(false)
+    expect(applyUnaryOperator('subfact', -1).ok).toBe(false)
+
+    // Results outside the exact integer range are refused rather than rounded.
+    expect(applyBinaryOperator('comb', 1000, 500).ok).toBe(false)
+    expect(applyUnaryOperator('dfact', 30).ok).toBe(false)
+    expect(applyUnaryOperator('subfact', 30).ok).toBe(false)
+  })
+
+  it('prints analysis and combinatorics operators in readable equation form', () => {
+    const exponential = createWorkspace(0, [createCard(2, 'spades', 'exp-2')])
+    selectGroupInWorkspace(exponential, exponential.groups[0]!.id)
+    applyOperatorInWorkspace(exponential, 'exp')
+    expect(formatExpressionLhs(exponential.groups[0]!)).toBe('e^(2)')
+
+    const logarithm = createWorkspace(0, [
+      createCard(2, 'spades', 'log-2'),
+      createCard(8, 'hearts', 'log-8'),
+    ])
+    selectGroupInWorkspace(logarithm, logarithm.groups[0]!.id)
+    applyOperatorInWorkspace(logarithm, 'log')
+    selectGroupInWorkspace(logarithm, logarithm.groups[1]!.id)
+    expect(formatExpressionLhs(logarithm.groups[0]!)).toBe('log(2, 8)')
+
+    const choose = createWorkspace(0, [
+      createCard(5, 'spades', 'comb-5'),
+      createCard(2, 'hearts', 'comb-2'),
+    ])
+    selectGroupInWorkspace(choose, choose.groups[0]!.id)
+    applyOperatorInWorkspace(choose, 'comb')
+    selectGroupInWorkspace(choose, choose.groups[1]!.id)
+    expect(formatExpressionLhs(choose.groups[0]!)).toBe('COMB(5, 2)')
+
+    const doubleFact = createWorkspace(0, [createCard(6, 'clubs', 'dfact-6')])
+    selectGroupInWorkspace(doubleFact, doubleFact.groups[0]!.id)
+    applyOperatorInWorkspace(doubleFact, 'dfact')
+    expect(formatExpressionLhs(doubleFact.groups[0]!)).toBe('6!!')
+
+    const derangement = createWorkspace(0, [createCard(4, 'diamonds', 'subfact-4')])
+    selectGroupInWorkspace(derangement, derangement.groups[0]!.id)
+    applyOperatorInWorkspace(derangement, 'subfact')
+    expect(formatExpressionLhs(derangement.groups[0]!)).toBe('!4')
+
+    // Nested factorial stays distinct from the new double-factorial operator.
+    const nestedFactorial = createWorkspace(0, [createCard(3, 'hearts', 'nested-3')])
+    selectGroupInWorkspace(nestedFactorial, nestedFactorial.groups[0]!.id)
+    applyOperatorInWorkspace(nestedFactorial, 'fact')
+    applyOperatorInWorkspace(nestedFactorial, 'fact')
+    expect(formatExpressionLhs(nestedFactorial.groups[0]!)).toBe('(3!)!')
+  })
+
+  it('enables operators individually as well as by group', () => {
+    const allOff = {
+      basic: false,
+      powers: false,
+      factorial: false,
+      trig: false,
+      inverse: false,
+      computing: false,
+      concat: false,
+      analysis: false,
+      combinatorics: false,
+      operators: {},
+    }
+
+    expect(getEnabledOperators(allOff)).toHaveLength(0)
+    expect(
+      getEnabledOperators({ ...allOff, analysis: true }).map((op) => op.id)
+    ).toEqual(['exp', 'ln', 'log'])
+    expect(
+      getEnabledOperators({
+        ...allOff,
+        analysis: true,
+        operators: { ln: false, exp: true },
+      }).map((op) => op.id)
+    ).toEqual(['exp', 'log'])
+    expect(
+      getEnabledOperators({ ...allOff, operators: { exp: true, comb: true } }).map(
+        (op) => op.id
+      )
+    ).toEqual(['exp', 'comb'])
+    expect(
+      getEnabledOperators({ ...allOff, combinatorics: true }).map((op) => op.id)
+    ).toEqual(['comb', 'perm', 'stirling2', 'dfact', 'subfact'])
+  })
+
+  it('groups LSHIFT and the bitwise operators under binary computing, without RSHIFT', () => {
+    const allOff = {
+      basic: false,
+      powers: false,
+      factorial: false,
+      trig: false,
+      inverse: false,
+      computing: false,
+      concat: false,
+      analysis: false,
+      combinatorics: false,
+      operators: {},
+    }
+    const computing = getEnabledOperators({ ...allOff, computing: true })
+    expect(computing.map((op) => op.id)).toEqual(['lshift', 'bitand', 'bitor', 'bitxor', 'bitnot'])
+    expect(computing.every((op) => op.category === 'computing')).toBe(true)
+    expect((OPERATOR_CATALOG.map((op) => op.id) as string[]).includes('rshift')).toBe(false)
+  })
+
+  it('prints computing operators in word form inside equations', () => {
+    const hand = [
+      createCard(12, 'spades', 'bits-12'),
+      createCard(10, 'hearts', 'bits-10'),
+      createCard(2, 'clubs', 'bits-2'),
+    ]
+    const ws = createWorkspace(0, hand)
+    selectGroupInWorkspace(ws, ws.groups[0]!.id)
+    applyOperatorInWorkspace(ws, 'bitand')
+    selectGroupInWorkspace(ws, ws.groups[1]!.id)
+    expect(formatExpressionLhs(ws.groups[0]!)).toBe('AND(12, 10)')
+
+    applyOperatorInWorkspace(ws, 'bitnot')
+    expect(formatExpressionLhs(ws.groups[0]!)).toBe('NOT(AND(12, 10))')
+    expect(formatFullEquation(ws.groups[0]!)).toBe('NOT(AND(12, 10)) = -9')
+
+    // A word-form call reads as one term beside ordinary arithmetic.
+    applyOperatorInWorkspace(ws, 'add')
+    selectGroupInWorkspace(ws, ws.groups[1]!.id)
+    expect(formatExpressionLhs(ws.groups[0]!)).toBe('NOT(AND(12, 10)) + 2')
+  })
+
+  it('leaves operators beyond the tenth without a digit badge', () => {
+    expect(opKeyLabel(0)).toBe('1')
+    expect(opKeyLabel(9)).toBe('0')
+    expect(opKeyLabel(10)).toBe('')
   })
 
   it('formats numbers at full double precision, including small values', () => {
@@ -794,6 +1023,50 @@ describe('Make 24 Remastered — Deck Pool, 5 Workspaces & Undo/Redo', () => {
     ).toBe(360)
   })
 
+  it('ships a catalogue of famous constants with names and explanations', () => {
+    expect(CONSTANT_CATALOG.length).toBeGreaterThanOrEqual(23)
+    expect(new Set(CONSTANT_CATALOG.map((constant) => constant.id)).size).toBe(
+      CONSTANT_CATALOG.length
+    )
+    expect(new Set(CONSTANT_CATALOG.map((constant) => constant.value)).size).toBe(
+      CONSTANT_CATALOG.length
+    )
+
+    for (const constant of CONSTANT_CATALOG) {
+      expect(Number.isFinite(constant.value)).toBe(true)
+      expect(constant.symbol.length).toBeGreaterThan(0)
+      expect(constant.name.length).toBeGreaterThan(1)
+      expect(constant.description.length).toBeGreaterThan(20)
+    }
+
+    expect(constantById('pi')?.value).toBe(Math.PI)
+    expect(constantById('e')?.value).toBe(Math.E)
+    expect(constantById('euler-gamma')?.value).toBeCloseTo(0.5772156649015329, 12)
+    expect(constantById('not-a-constant')).toBeNull()
+    expect(constantByValue(Math.PI)?.id).toBe('pi')
+  })
+
+  it('deals a chosen or random famous constant as the target', () => {
+    const base = {
+      customMin: 1,
+      customMax: 50,
+      manualTarget: 99,
+    }
+
+    expect(
+      generateTargetNumber({ ...base, targetPreset: 'constant', targetConstant: 'e' })
+    ).toBe(Math.E)
+    expect(
+      generateTargetNumber({ ...base, targetPreset: 'constant', targetConstant: 'pi' })
+    ).toBe(Math.PI)
+
+    const random = generateTargetNumber(
+      { ...base, targetPreset: 'constant', targetConstant: 'random' },
+      () => 0.5
+    )
+    expect(CONSTANT_CATALOG.some((constant) => constant.value === random)).toBe(true)
+  })
+
   it('maintains 5 independent workspaces and supports full z/y undo and redo', () => {
     const hand = [
       createCard(8, 'spades', 'c1'),
@@ -1298,10 +1571,12 @@ describe('Make 24 Remastered — Playable UI Flow (App.vue)', () => {
 
     // A wide band and target make any sum of the random hand acceptable.
     await wrapper.find('#setting-target').setValue('manual')
-    await nextTick()
-    await wrapper.find('#setting-manual-target').setValue('100')
     await wrapper.find('#setting-approx').setValue('100')
     await wrapper.find('[data-testid="start-round-btn"]').trigger('click')
+    await wrapper.find('[data-testid="target-choice-input"]').setValue('100')
+    await wrapper.find('[data-testid="target-choice-form"]').trigger('submit')
+    await nextTick()
+    expect(wrapper.find('[data-testid="target-display"]').text()).toBe('100')
 
     // Merge every card with addition; the merged group stays selected.
     await wrapper.findAll('.expr-node--root')[0]!.trigger('click')
@@ -1324,6 +1599,50 @@ describe('Make 24 Remastered — Playable UI Flow (App.vue)', () => {
     wrapper.unmount()
   })
 
+  it('asks for the exact target before every round instead of in the lobby', async () => {
+    const wrapper = mount(App)
+    await wrapper.find('[data-testid="enter-singleplayer"]').trigger('click')
+
+    await wrapper.find('#setting-target').setValue('manual')
+    expect(wrapper.find('#setting-manual-target').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="manual-target-hint"]').exists()).toBe(true)
+
+    // Opening the chooser and cancelling leaves the table untouched.
+    await wrapper.find('[data-testid="start-round-btn"]').trigger('click')
+    expect(wrapper.find('[data-testid="target-choice-dialog"]').exists()).toBe(true)
+    await wrapper.find('[data-testid="target-choice-cancel"]').trigger('click')
+    expect(wrapper.find('[data-testid="target-choice-dialog"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="start-round-btn"]').exists()).toBe(true)
+
+    // An empty field is refused rather than silently dealing 0.
+    await wrapper.find('[data-testid="start-round-btn"]').trigger('click')
+    await wrapper.find('[data-testid="target-choice-input"]').setValue('')
+    await wrapper.find('[data-testid="target-choice-form"]').trigger('submit')
+    expect(wrapper.find('[data-testid="target-choice-dialog"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="target-choice-error"]').exists()).toBe(true)
+
+    await wrapper.find('[data-testid="target-choice-input"]').setValue('42')
+    await wrapper.find('[data-testid="target-choice-form"]').trigger('submit')
+    await nextTick()
+    expect(wrapper.find('[data-testid="target-display"]').text()).toBe('42')
+
+    // The next round asks again, with the previous target as the starting value.
+    await wrapper.find('[data-testid="finish-round-btn"]').trigger('click')
+    await nextTick()
+    await wrapper.find('[data-testid="next-round-btn"]').trigger('click')
+    expect(wrapper.find('[data-testid="target-choice-dialog"]').exists()).toBe(true)
+    expect(
+      (wrapper.find('[data-testid="target-choice-input"]').element as HTMLInputElement).value
+    ).toBe('42')
+    await wrapper.find('[data-testid="target-choice-input"]').setValue('84')
+    await wrapper.find('[data-testid="target-choice-form"]').trigger('submit')
+    await nextTick()
+    expect(wrapper.find('[data-testid="target-display"]').text()).toBe('84')
+    expect(wrapper.find('.blind-card__marquee').text()).toContain('ROUND 2')
+
+    wrapper.unmount()
+  })
+
   it('offers the three weighted scoring modes in the lobby, enabled with approximations', async () => {
     const wrapper = mount(App)
     await wrapper.find('[data-testid="enter-singleplayer"]').trigger('click')
@@ -1342,6 +1661,42 @@ describe('Make 24 Remastered — Playable UI Flow (App.vue)', () => {
     expect(select.attributes('disabled')).toBeUndefined()
     await select.setValue('accuracy-first')
     expect((select.element as HTMLSelectElement).value).toBe('accuracy-first')
+
+    wrapper.unmount()
+  })
+
+  it('offers a constants target mode with a picker, a default error band and an in-game legend', async () => {
+    const wrapper = mount(App)
+    await wrapper.find('[data-testid="enter-singleplayer"]').trigger('click')
+
+    await wrapper.find('#setting-target').setValue('constant')
+    await nextTick()
+
+    const picker = wrapper.find('[data-testid="setting-constant"]')
+    expect(picker.exists()).toBe(true)
+    const values = picker.findAll('option').map((option) => option.attributes('value'))
+    expect(values[0]).toBe('random')
+    expect(values).toContain('pi')
+    expect(values).toContain('e')
+    expect(values).toContain('euler-gamma')
+    expect(values.length).toBeGreaterThanOrEqual(24)
+
+    // Constants are irrational, so picking the mode leaves a usable band by default.
+    const approx = wrapper.find('#setting-approx').element as HTMLInputElement
+    expect(Number(approx.value)).toBeGreaterThan(0)
+
+    await picker.setValue('pi')
+    expect(wrapper.find('[data-testid="constant-preview"]').text()).toContain('Pi')
+
+    await wrapper.find('[data-testid="start-round-btn"]').trigger('click')
+    await nextTick()
+
+    const target = wrapper.find('[data-testid="target-display"]').text()
+    expect(target).toBe(formatNumber(Math.PI))
+    const legend = wrapper.find('[data-testid="constant-display"]')
+    expect(legend.exists()).toBe(true)
+    expect(legend.text()).toContain('Pi')
+    expect(legend.text()).toContain('circumference')
 
     wrapper.unmount()
   })
@@ -1533,8 +1888,9 @@ describe('Make 24 Remastered — Playable UI Flow (App.vue)', () => {
     expect(wrapper.findAll('.rail-link')).toHaveLength(8)
 
     // The operator reference covers each operator family the host can enable.
-    expect(wrapper.findAll('.op-table__row')).toHaveLength(10)
-    expect(wrapper.findAll('.op-table__note')).toHaveLength(10)
+    // Ten original families plus the analysis and combinatorics groups.
+    expect(wrapper.findAll('.op-table__row')).toHaveLength(12)
+    expect(wrapper.findAll('.op-table__note')).toHaveLength(12)
 
     // Each screenshot carries alt text and one legend entry per numbered pin.
     const figures = wrapper.findAll('[data-testid="tutorial-scroll"] figure')
@@ -1626,6 +1982,49 @@ describe('Make 24 Remastered — Playable UI Flow (App.vue)', () => {
     }
   })
 
+  it('sprays pixel particles when operators land, pieces merge and groups split', async () => {
+    const wrapper = mount(App)
+    await wrapper.find('[data-testid="enter-singleplayer"]').trigger('click')
+    await wrapper.find('[data-testid="start-round-btn"]').trigger('click')
+
+    const particles = () => wrapper.findAll('.felt-particle')
+    expect(wrapper.find('[data-testid="particle-layer"]').exists()).toBe(true)
+    expect(particles()).toHaveLength(0)
+
+    // Equipping a unary operator pops motes around the wrapped piece.
+    await wrapper.findAll('.expr-node--root')[0]!.trigger('click')
+    await wrapper.find('[data-testid="op-fact"]').trigger('click')
+    await nextTick()
+    await nextTick()
+    expect(particles()).toHaveLength(PARTICLE_BURST_COUNTS.operator)
+
+    // Arming a binary operator sparks too, then picking a second card fuses
+    // the pieces with a merge burst of its own.
+    await wrapper.find('[data-testid="op-add"]').trigger('click')
+    await wrapper.findAll('.expr-node--root')[1]!.trigger('click')
+    await nextTick()
+    await nextTick()
+    expect(particles()).toHaveLength(PARTICLE_BURST_COUNTS.operator * 2 + PARTICLE_BURST_COUNTS.merge)
+
+    // Splitting the fused group throws shards from the freed pieces. Only the
+    // newest three bursts stay mounted, so the oldest operator motes drop off.
+    await wrapper.find('[data-testid="ungroup-btn"]').trigger('click')
+    await nextTick()
+    await nextTick()
+    expect(particles()).toHaveLength(
+      PARTICLE_BURST_COUNTS.operator + PARTICLE_BURST_COUNTS.merge + PARTICLE_BURST_COUNTS.split
+    )
+
+    // Each particle owns its flight vector and colour, so the layer is animated
+    // by CSS rather than by polling Vue state every frame.
+    const style = particles()[0]!.attributes('style') ?? ''
+    expect(style).toMatch(/--dx: -?[\d.]+px/)
+    expect(style).toMatch(/--dy: -?[\d.]+px/)
+    expect(style).toMatch(/--color: #[0-9a-f]{6}/i)
+
+    wrapper.unmount()
+  })
+
   it('keeps a floating cue on its own spot when older cues drop off', async () => {
     const wrapper = mount(App)
     await wrapper.find('[data-testid="enter-singleplayer"]').trigger('click')
@@ -1655,7 +2054,7 @@ describe('Make 24 Remastered — Playable UI Flow (App.vue)', () => {
   it('puts concat on the rails only when its lobby toggle is on', async () => {
     const off = mount(App)
     await off.find('[data-testid="enter-singleplayer"]').trigger('click')
-    const offToggle = off.find('[data-testid="toggle-concat"]')
+    const offToggle = off.find('[data-testid="toggle-group-concat"]')
     expect(offToggle.exists()).toBe(true)
     expect((offToggle.element as HTMLInputElement).checked).toBe(false)
     await off.find('[data-testid="start-round-btn"]').trigger('click')
@@ -1664,7 +2063,7 @@ describe('Make 24 Remastered — Playable UI Flow (App.vue)', () => {
 
     const on = mount(App)
     await on.find('[data-testid="enter-singleplayer"]').trigger('click')
-    await on.find('[data-testid="toggle-concat"]').setValue(true)
+    await on.find('[data-testid="toggle-group-concat"]').setValue(true)
     await on.find('[data-testid="start-round-btn"]').trigger('click')
     expect(on.find('[data-testid="op-concat"]').exists()).toBe(true)
 
@@ -1676,6 +2075,93 @@ describe('Make 24 Remastered — Playable UI Flow (App.vue)', () => {
     expect(header).toMatch(/^\d+ \|\| \d+ = \d+$/)
 
     on.unmount()
+  })
+
+  it('puts the computing operators behind one lobby toggle', async () => {
+    const off = mount(App)
+    await off.find('[data-testid="enter-singleplayer"]').trigger('click')
+    const toggle = off.find('[data-testid="toggle-group-computing"]')
+    expect(toggle.exists()).toBe(true)
+    expect((toggle.element as HTMLInputElement).checked).toBe(false)
+    await off.find('[data-testid="start-round-btn"]').trigger('click')
+    for (const id of ['lshift', 'bitand', 'bitor', 'bitxor', 'bitnot', 'rshift']) {
+      expect(off.find(`[data-testid="op-${id}"]`).exists()).toBe(false)
+    }
+    off.unmount()
+
+    const on = mount(App)
+    await on.find('[data-testid="enter-singleplayer"]').trigger('click')
+    await on.find('[data-testid="toggle-group-computing"]').setValue(true)
+    await on.find('[data-testid="start-round-btn"]').trigger('click')
+    for (const id of ['lshift', 'bitand', 'bitor', 'bitxor', 'bitnot']) {
+      expect(on.find(`[data-testid="op-${id}"]`).exists()).toBe(true)
+    }
+    expect(on.find('[data-testid="op-rshift"]').exists()).toBe(false)
+
+    on.unmount()
+  })
+
+  it('toggles analysis operators individually and as a group', async () => {
+    const single = mount(App)
+    await single.find('[data-testid="enter-singleplayer"]').trigger('click')
+
+    const group = single.find('[data-testid="toggle-group-analysis"]')
+    expect(group.exists()).toBe(true)
+    expect((group.element as HTMLInputElement).checked).toBe(false)
+
+    // A single operator can be enabled while its group stays off.
+    await single.find('[data-testid="toggle-op-exp"]').setValue(true)
+    expect((group.element as HTMLInputElement).checked).toBe(false)
+    expect((group.element as HTMLInputElement).indeterminate).toBe(true)
+    await single.find('[data-testid="start-round-btn"]').trigger('click')
+    expect(single.find('[data-testid="op-exp"]').exists()).toBe(true)
+    expect(single.find('[data-testid="op-ln"]').exists()).toBe(false)
+    expect(single.find('[data-testid="op-log"]').exists()).toBe(false)
+    single.unmount()
+
+    // The group switch turns all three on, and one can then be switched off again.
+    const grouped = mount(App)
+    await grouped.find('[data-testid="enter-singleplayer"]').trigger('click')
+    await grouped.find('[data-testid="toggle-group-analysis"]').setValue(true)
+    await grouped.find('[data-testid="toggle-op-ln"]').setValue(false)
+    const groupedToggle = grouped.find('[data-testid="toggle-group-analysis"]')
+      .element as HTMLInputElement
+    expect(groupedToggle.checked).toBe(false)
+    expect(groupedToggle.indeterminate).toBe(true)
+    await grouped.find('[data-testid="start-round-btn"]').trigger('click')
+    expect(grouped.find('[data-testid="op-exp"]').exists()).toBe(true)
+    expect(grouped.find('[data-testid="op-log"]').exists()).toBe(true)
+    expect(grouped.find('[data-testid="op-ln"]').exists()).toBe(false)
+    grouped.unmount()
+  })
+
+  it('auto-enables Add when every operator is switched off', async () => {
+    const wrapper = mount(App)
+    await wrapper.find('[data-testid="enter-singleplayer"]').trigger('click')
+    for (const id of ['basic', 'powers', 'factorial']) {
+      await wrapper.find(`[data-testid="toggle-group-${id}"]`).setValue(false)
+    }
+    await wrapper.find('[data-testid="start-round-btn"]').trigger('click')
+    expect(wrapper.find('[data-testid="op-add"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="op-sub"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('puts all five combinatorics operators behind one lobby group switch', async () => {
+    const wrapper = mount(App)
+    await wrapper.find('[data-testid="enter-singleplayer"]').trigger('click')
+
+    const group = wrapper.find('[data-testid="toggle-group-combinatorics"]')
+    expect(group.exists()).toBe(true)
+    expect((group.element as HTMLInputElement).checked).toBe(false)
+
+    await group.setValue(true)
+    await wrapper.find('[data-testid="start-round-btn"]').trigger('click')
+    for (const id of ['comb', 'perm', 'stirling2', 'dfact', 'subfact']) {
+      expect(wrapper.find(`[data-testid="op-${id}"]`).exists()).toBe(true)
+    }
+
+    wrapper.unmount()
   })
 
   it('takes Multiplayer to the lobby selector, not straight into a room', async () => {

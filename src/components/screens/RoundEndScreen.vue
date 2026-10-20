@@ -7,24 +7,26 @@ import SolutionBoard from '../SolutionBoard.vue'
 const {
   menuOpen,
   tutorialOpen,
+  targetPromptOpen,
   settings,
   players,
   roundNumber,
   currentTarget,
+  currentConstant,
   roundWinnerIds,
   roundWinnerNames,
   sortedRoundSolutions,
   winningSolutionIds,
   matchWinnerIds,
   multiplayerHost,
-  advanceAfterRoundEnd,
+  requestAdvanceRound,
   endEntireGameNow,
   goToLobby,
 } = useGameContext()
 </script>
 
 <template>
-<main class="screen-round-end" :inert="menuOpen || tutorialOpen">
+<main class="screen-round-end" :inert="menuOpen || tutorialOpen || targetPromptOpen">
   <div
     class="results-cabinet"
     :class="roundWinnerIds.length ? 'results-cabinet--win' : 'results-cabinet--bust'"
@@ -35,6 +37,11 @@ const {
         TARGET <strong>{{ formatNumber(currentTarget) }}</strong>
       </span>
     </div>
+
+    <p v-if="currentConstant" class="results-constant" data-testid="round-end-constant">
+      <strong>{{ currentConstant.symbol }} {{ currentConstant.name }}</strong>
+      — {{ currentConstant.description }}
+    </p>
 
     <div
       class="results-stamp"
@@ -129,7 +136,7 @@ const {
         class="btn-arcade btn-arcade--gold"
         data-testid="next-round-btn"
         :disabled="settings.isMultiplayer && !multiplayerHost"
-        @click="advanceAfterRoundEnd"
+        @click="requestAdvanceRound"
       >
         {{ matchWinnerIds.length ? 'View Match Winner' : 'Deal Next Round' }}
       </button>
@@ -177,6 +184,19 @@ const {
   border-color: #fff9db;
   color: #15111e;
   text-shadow: 0 2px 0 rgba(255, 255, 255, 0.5);
+}
+
+.results-constant {
+  margin: 10px 0 0;
+  max-width: 62ch;
+  font-family: var(--font-mono);
+  font-size: 1rem;
+  line-height: 1.3;
+  color: var(--ink-muted);
+}
+
+.results-constant strong {
+  color: var(--gold-bright);
 }
 
 .results-stamp--bust {

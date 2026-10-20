@@ -4,12 +4,22 @@ import LobbyBrowserScreen from './components/screens/LobbyBrowserScreen.vue'
 import LobbySetupScreen from './components/screens/LobbySetupScreen.vue'
 import PauseMenu from './components/screens/PauseMenu.vue'
 import PlayingScreen from './components/screens/PlayingScreen.vue'
+import PuzzleHubScreen from './components/screens/PuzzleHubScreen.vue'
+import PuzzleResultScreen from './components/screens/PuzzleResultScreen.vue'
 import RoundEndScreen from './components/screens/RoundEndScreen.vue'
+import TargetChoiceDialog from './components/screens/TargetChoiceDialog.vue'
 import TitleScreen from './components/screens/TitleScreen.vue'
 import TutorialOverlay from './components/TutorialOverlay.vue'
 import { useGame } from './app/useGame'
 
-const { phase, impactKind, shellRef, tutorialOpen, closeTutorial } = useGame()
+const {
+  phase,
+  impactKind,
+  shellRef,
+  tutorialOpen,
+  closeTutorial,
+  targetPromptOpen,
+} = useGame()
 
 // `shellRef` is bound in the template as a string ref, which vue-tsc does not
 // count as a use; this keeps it from reading as a dead binding.
@@ -24,13 +34,16 @@ void shellRef
   >
     <!-- One screen per phase; each one injects the shared game context. -->
     <TitleScreen v-if="phase === 'title'" />
+    <PuzzleHubScreen v-else-if="phase === 'puzzles'" />
     <LobbyBrowserScreen v-else-if="phase === 'lobby-select'" />
     <LobbySetupScreen v-else-if="phase === 'lobby'" />
     <PlayingScreen v-else-if="phase === 'playing'" />
     <RoundEndScreen v-else-if="phase === 'round-end'" />
+    <PuzzleResultScreen v-else-if="phase === 'puzzle-result'" />
     <GameOverScreen v-else-if="phase === 'game-over'" />
 
     <PauseMenu />
+    <TargetChoiceDialog v-if="targetPromptOpen" />
     <TutorialOverlay v-if="tutorialOpen" @close="closeTutorial" />
   </div>
 </template>

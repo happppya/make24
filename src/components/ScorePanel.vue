@@ -2,11 +2,14 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { fittedFontSize, formatPercent, formatScore, scoringModeLabel } from '../app/labels'
 import { formatNumber, type ScoreBreakdown } from '../engine/math'
+import type { ConstantInfo } from '../engine/constants'
 import type { SolutionScoringMode } from '../engine/types'
 
 const props = defineProps<{
   roundNumber: number
   target: number
+  /** Named famous constant behind the target, when the table deals one. */
+  constant?: ConstantInfo | null
   approximationPercent: number
   scoringMode: SolutionScoringMode
   /** Value of the single combined group, or null while cards remain unmerged. */
@@ -176,6 +179,13 @@ onBeforeUnmount(() => {
         {{ targetText }}
       </div>
       <div class="blind-card__caption">TARGET</div>
+      <div v-if="constant" class="blind-card__constant" data-testid="constant-display">
+        <span class="blind-card__constant-head">
+          <span class="blind-card__constant-symbol">{{ constant.symbol }}</span>
+          <span class="blind-card__constant-name">{{ constant.name }}</span>
+        </span>
+        <span class="blind-card__constant-desc">{{ constant.description }}</span>
+      </div>
       <div class="blind-card__range">{{ rangeLabel }}</div>
     </div>
 
@@ -362,6 +372,46 @@ onBeforeUnmount(() => {
   font-size: 0.62rem;
   letter-spacing: 0.34em;
   color: #ffb3b3;
+}
+
+.blind-card__constant {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 7px 1px 0;
+  padding: 5px 6px 6px;
+  background: rgba(255, 190, 11, 0.08);
+  border: 1px solid rgba(255, 190, 11, 0.3);
+  text-align: center;
+}
+
+.blind-card__constant-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 6px;
+}
+
+.blind-card__constant-symbol {
+  font-family: var(--font-display);
+  font-size: 1.1rem;
+  line-height: 1;
+  color: var(--gold-bright);
+}
+
+.blind-card__constant-name {
+  font-family: var(--font-pixel);
+  font-size: 0.56rem;
+  letter-spacing: 0.08em;
+  color: var(--ink-cream);
+}
+
+.blind-card__constant-desc {
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  line-height: 1.2;
+  color: var(--ink-muted);
 }
 
 .blind-card__range {

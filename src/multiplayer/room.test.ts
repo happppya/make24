@@ -163,6 +163,58 @@ describe('multiplayer room — seating and lobby', () => {
     expect(room.settings.allowedOperators.concat).toBe(true)
   })
 
+  it('deals a constant target, records which constant, and sanitises the choice', () => {
+    const room = createRoomState('test')
+    seat(room, 'p1', 'Host')
+
+    handleClientMessage(room, 'p1', {
+      t: 'update-settings',
+      settings: {
+        ...room.settings,
+        targetPreset: 'constant',
+        targetConstant: 'e',
+        approximationPercent: 2,
+      },
+    })
+    expect(room.settings.targetPreset).toBe('constant')
+    expect(room.settings.targetConstant).toBe('e')
+
+    startMatch(room)
+    expect(room.round?.target).toBe(Math.E)
+    expect(room.round?.constantId).toBe('e')
+
+    // Unknown constants fall back to the base rules instead of reaching play.
+    expect(
+      sanitizeSettings({ ...room.settings, targetConstant: 'not-real' }, room.settings)
+        .targetConstant
+    ).toBe('e')
+    expect(
+      sanitizeSettings({ ...room.settings, targetConstant: 'pi' }, room.settings)
+        .targetConstant
+    ).toBe('pi')
+  })
+
+  it('sanitises per-operator switches alongside the group switches', () => {
+    const room = createRoomState('operators')
+
+    const next = sanitizeSettings(
+      {
+        ...room.settings,
+        allowedOperators: {
+          ...room.settings.allowedOperators,
+          analysis: true,
+          combinatorics: true,
+          operators: { exp: false, log: true, comb: true, nonsense: true },
+        },
+      } as unknown as GameSettings,
+      room.settings
+    )
+
+    expect(next.allowedOperators.analysis).toBe(true)
+    expect(next.allowedOperators.combinatorics).toBe(true)
+    expect(next.allowedOperators.operators).toEqual({ exp: false, log: true, comb: true })
+  })
+
   it('tracks readiness without letting the host un-ready', () => {
     const room = createRoomState('test')
     seat(room, 'p1', 'Host')
@@ -241,6 +293,42 @@ describe('multiplayer room — rounds', () => {
     expect(room.round!.deadline).toBeNull()
     expect(room.round!.target).toBe(24)
     expect(room.players.every((p) => p.bestRoundScore === null)).toBe(true)
+  })
+
+  it('requires a host-chosen target for manual rounds and uses it each deal', () => {
+    const room = createRoomState('manual')
+    seat(room, 'p1', 'Host')
+    handleClientMessage(room, 'p1', {
+      t: 'update-settings',
+      settings: { ...room.settings, targetPreset: 'manual' },
+    })
+
+    // No exact target, no deal: the lobby cannot start the round on a default.
+    const missing = handleClientMessage(room, 'p1', { t: 'start-match' }, 1_000)
+    expect(missing.error?.code).toBe('target-required')
+    expect(room.phase).toBe('lobby')
+    expect(
+      handleClientMessage(room, 'p1', { t: 'start-match', target: Number.NaN }, 1_000).error
+        ?.code
+    ).toBe('target-required')
+
+    expect(
+      handleClientMessage(room, 'p1', { t: 'start-match', target: 42 }, 1_000).error
+    ).toBeUndefined()
+    expect(room.phase).toBe('playing')
+    expect(room.round?.target).toBe(42)
+
+    // The next deal asks again instead of reusing the previous target.
+    expect(handleClientMessage(room, 'p1', { t: 'skip-round' }, 1_100).error).toBeUndefined()
+    expect(room.phase).toBe('round-end')
+    expect(
+      handleClientMessage(room, 'p1', { t: 'next-round' }, 1_200).error?.code
+    ).toBe('target-required')
+    expect(
+      handleClientMessage(room, 'p1', { t: 'next-round', target: 84 }, 1_200).error
+    ).toBeUndefined()
+    expect(room.round?.number).toBe(2)
+    expect(room.round?.target).toBe(84)
   })
 
   it('gives timed modes a deadline the server can expire', () => {

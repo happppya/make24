@@ -11,15 +11,18 @@ the merged result so any screen can inject it with `useGameContext()` from
 | [useMatch.ts](useMatch.ts) | Round state: hand, target, workspaces, local leaderboard, server room mirror, round clock |
 | [useStandings.ts](useStandings.ts) | View models for seats, round winners and the series winner |
 | [useRoom.ts](useRoom.ts) | Lobby browser, create/join/leave, ready-up, host settings sync |
-| [useJuice.ts](useJuice.ts) | Sound, screen shake, floating cues, bobbing pieces, camera glide |
+| [usePuzzles.ts](usePuzzles.ts) | Daily/weekly hub, puzzle run lifecycle, shared/local leaderboards, submission |
+| [puzzleBoards.ts](puzzleBoards.ts) | Puzzle HTTP endpoints, local score storage, name persistence |
+| [useJuice.ts](useJuice.ts) | Sound, screen shake, floating cues, bobbing pieces, camera glide, felt particle bursts |
+| [particles.ts](particles.ts) | Seeded pixel-burst maths for merges, splits, operators, errors and target hits |
 | [useBoardGestures.ts](useBoardGestures.ts) | Dragging pieces, panning the felt, tidy and recenter |
 | [useHotkeys.ts](useHotkeys.ts) | Digit/Z/Y/U/Esc shortcuts |
 | [defaults.ts](defaults.ts) | Default settings and the deep copy used on the wire |
 | [labels.ts](labels.ts) | Lobby/phase labels, timers, sprite URLs, operator key labels |
 
-Order matters: `useMatch` needs the juice layer, `useRoom` needs the standings,
-and the board actions need both — follow the order inside `useGame()` when adding
-a module. Anything a screen needs must also be part of the object `useGame()`
+Order matters: `useMatch` needs the juice layer, `usePuzzles` needs the match,
+`useRoom` needs the standings, and the board actions need both — follow the order
+inside `useGame()` when adding a module. Anything a screen needs must also be part of the object `useGame()`
 returns; nothing else can reach it.
 
 Two rules keep this folder honest:
