@@ -76,7 +76,7 @@ onBeforeUnmount(() => {
     <div
       ref="stageRef"
       class="solution-board__stage"
-      :style="{ transform: `scale(${scale})` }"
+      :style="{ transform: `translate(-50%, -50%) scale(${scale})` }"
     >
       <!-- Root styling and interaction belong to the live board, not this replay. -->
       <CardGroupNode :node="node" :is-root="false" />
@@ -98,7 +98,13 @@ onBeforeUnmount(() => {
     0 4px 0 rgba(9, 8, 15, 0.8);
 }
 
+/* The unscaled stage can be taller than the frame. Grid centering refuses to
+   center an overflowing item, so anchor its centre to the frame and let the
+   transform shrink it around that point. */
 .solution-board__stage {
+  position: absolute;
+  top: 50%;
+  left: 50%;
   transform-origin: center center;
 }
 </style>

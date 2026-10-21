@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import DifficultyChip from '../DifficultyChip.vue'
 import { useGameContext } from '../../app/context'
 import { DUNGEON_GAUNTLETS, DUNGEON_GROUPS } from '../../engine/dungeon'
@@ -14,9 +14,15 @@ const {
   gauntletUnlocked,
   openGauntlet,
   goToTitle,
+  tryDungeonCode,
 } = useGameContext()
 
 const ROMAN = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII']
+const dungeonCode = ref('')
+
+function submitDungeonCode(): void {
+  if (tryDungeonCode(dungeonCode.value)) dungeonCode.value = ''
+}
 
 const groups = computed(() =>
   DUNGEON_GROUPS.map((group) => {
@@ -179,6 +185,20 @@ const gauntletsCleared = computed(() =>
       trial is generated once from its gauntlet and slot, so the same door always
       opens onto the same hand.
     </p>
+
+    <form class="dungeon-code" data-testid="dungeon-code-form" @submit.prevent="submitDungeonCode">
+      <input
+        v-model="dungeonCode"
+        type="text"
+        class="dungeon-code__input"
+        aria-label="Unknown code"
+        placeholder="???"
+        autocomplete="off"
+        autocapitalize="off"
+        spellcheck="false"
+        data-testid="dungeon-code-input"
+      />
+    </form>
   </main>
 </template>
 
@@ -601,6 +621,38 @@ const gauntletsCleared = computed(() =>
   font-size: 0.9rem;
   line-height: 1.4;
   color: rgba(247, 240, 224, 0.4);
+}
+
+.dungeon-code {
+  display: flex;
+  justify-content: center;
+  margin-top: 14px;
+}
+
+.dungeon-code__input {
+  width: 150px;
+  padding: 5px 8px;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  letter-spacing: 0.16em;
+  color: var(--ink-cream);
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid rgba(247, 240, 224, 0.16);
+  border-radius: 0;
+  opacity: 0.45;
+  outline: none;
+  transition: opacity 0.15s ease, border-color 0.15s ease;
+}
+
+.dungeon-code__input::placeholder {
+  color: rgba(247, 240, 224, 0.28);
+}
+
+.dungeon-code__input:focus {
+  opacity: 1;
+  border-bottom-color: rgba(247, 240, 224, 0.5);
 }
 
 @media (max-width: 820px) {

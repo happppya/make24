@@ -100,6 +100,8 @@ export function usePuzzles(deps: {
   const submitting = ref(false)
 
   const dungeonProgress = ref<DungeonProgress>(readDungeonProgress())
+  /** A hidden code opens every dungeon door for this session. */
+  const dungeonBypass = ref(false)
   /** The gauntlet shown by the gauntlet screen, and remembered on the result. */
   const selectedGauntletId = ref<string | null>(null)
   const selectedGauntlet = computed(() => {
@@ -273,7 +275,7 @@ export function usePuzzles(deps: {
     if (!gauntlet) return
     const index = gauntlet.trials.findIndex((trial) => trial.id === trialId)
     if (index < 0) return
-    if (!isTrialUnlocked(dungeonProgress.value, gauntlet, index)) {
+    if (!dungeonBypass.value && !isTrialUnlocked(dungeonProgress.value, gauntlet, index)) {
       playSfx('error')
       return
     }
@@ -550,7 +552,14 @@ export function usePuzzles(deps: {
   }
 
   function trialUnlocked(gauntlet: DungeonGauntlet, trialIndex: number): boolean {
-    return isTrialUnlocked(dungeonProgress.value, gauntlet, trialIndex)
+    return dungeonBypass.value || isTrialUnlocked(dungeonProgress.value, gauntlet, trialIndex)
+  }
+
+  /** Accepts the hidden dungeon code; every door stays open for this session. */
+  function tryDungeonCode(code: string): boolean {
+    if (code.trim().toLowerCase() !== 'ilovecheating') return false
+    dungeonBypass.value = true
+    return true
   }
 
   function gauntletProgress(gauntlet: DungeonGauntlet): number {
@@ -562,7 +571,7 @@ export function usePuzzles(deps: {
   }
 
   function gauntletUnlocked(gauntletId: string): boolean {
-    return isGauntletUnlocked(dungeonProgress.value, gauntletId)
+    return dungeonBypass.value || isGauntletUnlocked(dungeonProgress.value, gauntletId)
   }
 
   function gauntletBest(gauntletId: string, trialId: string): number | null {
@@ -654,6 +663,7 @@ export function usePuzzles(deps: {
     trialCleared,
     trialRevealed: trialWasRevealed,
     trialUnlocked,
+    tryDungeonCode,
     gauntletProgress,
     gauntletComplete,
     gauntletUnlocked,

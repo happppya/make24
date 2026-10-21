@@ -113,6 +113,40 @@ describe('calendar and dungeon puzzles', () => {
     expect(wrapper.find('[data-testid="puzzle-submit-btn"]').exists()).toBe(true)
   })
 
+  it('opens every dungeon door when the hidden code is entered', async () => {
+    wrapper = mount(App)
+    await wrapper.find('[data-testid="open-dungeon"]').trigger('click')
+    await flushPromises()
+
+    const code = wrapper.find('[data-testid="dungeon-code-input"]')
+    expect(code.exists()).toBe(true)
+    expect(wrapper.find('[data-testid="gauntlet-last-light"]').attributes('disabled')).toBeDefined()
+
+    await code.setValue('not-the-code')
+    await wrapper.find('[data-testid="dungeon-code-form"]').trigger('submit')
+    expect(wrapper.find('[data-testid="gauntlet-last-light"]').attributes('disabled')).toBeDefined()
+
+    await code.setValue('ilovecheating')
+    await wrapper.find('[data-testid="dungeon-code-form"]').trigger('submit')
+    await flushPromises()
+
+    for (const id of ['foundry', 'abyss', 'scrapheap', 'last-light']) {
+      expect(
+        wrapper.find(`[data-testid="gauntlet-${id}"]`).attributes('disabled'),
+        id
+      ).toBeUndefined()
+    }
+
+    await wrapper.find('[data-testid="gauntlet-last-light"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="trial-last-light"]').attributes('disabled')).toBeUndefined()
+    await wrapper.find('[data-testid="trial-last-light"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('.screen-playing').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="puzzle-play-header"]').text()).toContain('Last Light')
+  })
+
   it('opens the second chapter with fractional and negative trials', async () => {
     // Chaos ramps its own gauntlets in order, so clear the three before the
     // Undertow to reach its negative targets.
