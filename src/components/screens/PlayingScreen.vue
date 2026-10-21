@@ -325,30 +325,32 @@ void [feltRef, sidebarRef, viewportRef]
               @ungroup="handleUngroup"
             />
           </div>
-        </div>
-      </div>
 
-      <!-- Pixel particles: merge sparks, split shards, operator motes, hit confetti -->
-      <div class="particle-layer" aria-hidden="true" data-testid="particle-layer">
-        <template v-for="burst in particleBursts" :key="burst.id">
-          <span
-            v-for="particle in burst.particles"
-            :key="`${burst.id}-${particle.id}`"
-            class="felt-particle"
-            :class="`felt-particle--${particle.shape}`"
-            :style="{
-              left: `${particle.originX}px`,
-              top: `${particle.originY}px`,
-              '--dx': `${particle.dx.toFixed(1)}px`,
-              '--dy': `${particle.dy.toFixed(1)}px`,
-              '--size': `${particle.size.toFixed(1)}px`,
-              '--rot': `${particle.rotation.toFixed(0)}deg`,
-              '--delay': `${particle.delay.toFixed(0)}ms`,
-              '--dur': `${particle.duration.toFixed(0)}ms`,
-              '--color': particle.color,
-            }"
-          ></span>
-        </template>
+          <!-- Pixel particles: merge sparks, split shards, operator motes, hit
+               confetti. The layer lives on the plane so bursts travel with the
+               camera instead of being left behind by a glide or manual pan. -->
+          <div class="particle-layer" aria-hidden="true" data-testid="particle-layer">
+            <template v-for="burst in particleBursts" :key="burst.id">
+              <span
+                v-for="particle in burst.particles"
+                :key="`${burst.id}-${particle.id}`"
+                class="felt-particle"
+                :class="`felt-particle--${particle.shape}`"
+                :style="{
+                  left: `${particle.originX}px`,
+                  top: `${particle.originY}px`,
+                  '--dx': `${particle.dx.toFixed(1)}px`,
+                  '--dy': `${particle.dy.toFixed(1)}px`,
+                  '--size': `${particle.size.toFixed(1)}px`,
+                  '--rot': `${particle.rotation.toFixed(0)}deg`,
+                  '--delay': `${particle.delay.toFixed(0)}ms`,
+                  '--dur': `${particle.duration.toFixed(0)}ms`,
+                  '--color': particle.color,
+                }"
+              ></span>
+            </template>
+          </div>
+        </div>
       </div>
 
       <!-- Operators: vertical rail, top right -->
@@ -1031,10 +1033,12 @@ void [feltRef, sidebarRef, viewportRef]
   width: var(--size);
   height: var(--size);
   background: var(--color);
-  box-shadow: 0 0 6px var(--color);
+  box-shadow:
+    0 0 8px var(--color),
+    0 0 2px #fff8dc;
   image-rendering: pixelated;
   opacity: 0;
-  animation: felt-particle-fly var(--dur) cubic-bezier(0.16, 0.78, 0.38, 1) var(--delay)
+  animation: felt-particle-fly var(--dur) cubic-bezier(0.12, 0.9, 0.3, 1) var(--delay)
     forwards;
 }
 

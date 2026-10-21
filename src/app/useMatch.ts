@@ -1,6 +1,11 @@
 import { computed, ref, watch, type Ref } from 'vue'
 import { playSfx } from '../audio/sfx'
-import { dealHand, generateTargetNumber, resolveConstantTarget } from '../engine/deck'
+import {
+  dealHand,
+  generateDecimalTarget,
+  generateTargetNumber,
+  resolveConstantTarget,
+} from '../engine/deck'
 import { constantById, constantByValue, type ConstantInfo } from '../engine/constants'
 import { decimalString } from '../engine/decimal'
 import { calculateBoardBreakdown } from '../engine/math'
@@ -133,15 +138,20 @@ export function useMatch(deps: {
     playSfx('deal')
 
     const constant = targetOverride === undefined ? resolveConstantTarget(settings) : null
+    const decimalTarget =
+      targetOverride === undefined && !constant && settings.targetPreset === 'decimals'
+        ? generateDecimalTarget(settings)
+        : null
     currentConstant.value = constant
-    const target = targetOverride ?? constant?.value ?? generateTargetNumber(settings)
+    const target =
+      targetOverride ?? constant?.value ?? decimalTarget?.value ?? generateTargetNumber(settings)
     currentTarget.value = Number(target)
     currentTargetExact.value =
       targetOverride !== undefined
         ? typeof targetOverride === 'string'
           ? decimalString(targetOverride)
           : String(targetOverride)
-        : constant?.exactValue ?? String(target)
+        : constant?.exactValue ?? decimalTarget?.exact ?? String(target)
     currentHand.value = dealHand(settings.numCards, settings.cardPool)
     workspaces.value = createAllWorkspaces(currentHand.value, settings.binds)
     activeWorkspaceIdx.value = 0

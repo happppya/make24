@@ -125,22 +125,28 @@ export function useJuice(viewportRef: Ref<HTMLElement | null>) {
    * Paints a pixel burst over the felt. Merge/operator fireworks land on the
    * piece that changed; splits and hits default to the middle of the felt.
    * A missing group falls back to the centre instead of dropping the effect.
+   *
+   * Origins are measured against the workspace plane, not the felt: the burst
+   * layer lives inside that plane, so a camera glide or a manual pan carries
+   * the particles along with the card they belong to.
    */
   function spawnParticles(kind: ParticleBurstKind, groupId?: string | null): void {
     if (prefersReducedMotion()) return
-    const felt = feltRef.value
-    if (!felt) return
+    const viewport = viewportRef.value
+    const plane = viewport?.querySelector<HTMLElement>('[data-testid="workspace-plane"]')
+    const layer = plane ?? feltRef.value
+    if (!layer) return
 
-    const feltBox = felt.getBoundingClientRect()
-    let x = felt.clientWidth / 2
-    let y = felt.clientHeight / 2
+    let x = layer.clientWidth / 2
+    let y = layer.clientHeight / 2
     const slot = groupId
-      ? viewportRef.value?.querySelector<HTMLElement>(`[data-testid="group-slot-${groupId}"]`)
+      ? viewport?.querySelector<HTMLElement>(`[data-testid="group-slot-${groupId}"]`)
       : null
     if (slot) {
       const slotBox = slot.getBoundingClientRect()
-      x = slotBox.left + slotBox.width / 2 - feltBox.left - felt.clientLeft
-      y = slotBox.top + slotBox.height / 2 - feltBox.top - felt.clientTop
+      const layerBox = layer.getBoundingClientRect()
+      x = slotBox.left + slotBox.width / 2 - layerBox.left - layer.clientLeft
+      y = slotBox.top + slotBox.height / 2 - layerBox.top - layer.clientTop
     }
 
     const id = ++particleSeed

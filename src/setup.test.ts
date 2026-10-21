@@ -32,7 +32,13 @@ import {
   realGamma,
   realInverseGamma,
 } from './engine/math'
-import { buildDeckPool, createCard, dealHand, generateTargetNumber } from './engine/deck'
+import {
+  buildDeckPool,
+  createCard,
+  dealHand,
+  generateDecimalTarget,
+  generateTargetNumber,
+} from './engine/deck'
 import {
   CONSTANT_CATALOG,
   constantById,
@@ -1051,6 +1057,45 @@ describe('Make 24 Remastered — Deck Pool, 5 Workspaces & Undo/Redo', () => {
     ).toBe(360)
   })
 
+  it('draws decimal targets as an integer plus a fixed-digit fraction', () => {
+    const draws = [0.5, 0.1, 0.2, 0.3, 0.0]
+    let index = 0
+    const target = generateDecimalTarget(
+      { decimalMin: 7, decimalMax: 7, decimalPlaces: 4 },
+      () => draws[index++] ?? 0.5
+    )
+    expect(target.exact).toBe('7.1230')
+    expect(target.value).toBe(7.123)
+
+    // The integer is drawn first, so a high roll takes the top of the range.
+    const high = generateDecimalTarget(
+      { decimalMin: 5, decimalMax: 9, decimalPlaces: 2 },
+      () => 0.999
+    )
+    expect(high.exact).toBe('9.99')
+
+    // The fraction is strictly above zero, and the range order does not matter.
+    const tiny = generateDecimalTarget(
+      { decimalMin: 12, decimalMax: 10, decimalPlaces: 3 },
+      () => 0
+    )
+    expect(tiny.exact).toBe('10.001')
+    expect(
+      generateTargetNumber(
+        {
+          targetPreset: 'decimals',
+          customMin: 1,
+          customMax: 2,
+          manualTarget: 24,
+          decimalMin: 7,
+          decimalMax: 7,
+          decimalPlaces: 3,
+        },
+        () => 0.5
+      )
+    ).toBe(7.555)
+  })
+
   it('ships a catalogue of famous constants with names and explanations', () => {
     expect(CONSTANT_CATALOG.length).toBeGreaterThanOrEqual(23)
     expect(new Set(CONSTANT_CATALOG.map((constant) => constant.id)).size).toBe(
@@ -1844,6 +1889,41 @@ describe('Make 24 Remastered — Playable UI Flow (App.vue)', () => {
     wrapper.unmount()
   })
 
+  it('offers a decimals target mode with an integer range and a 1–16 place slider', async () => {
+    const wrapper = mount(App)
+    await wrapper.find('[data-testid="enter-singleplayer"]').trigger('click')
+
+    await wrapper.find('#setting-target').setValue('decimals')
+    await nextTick()
+
+    const min = wrapper.find('[data-testid="setting-decimal-min"]')
+    const max = wrapper.find('[data-testid="setting-decimal-max"]')
+    const slider = wrapper.find('[data-testid="decimal-places"]')
+    expect(min.exists()).toBe(true)
+    expect(max.exists()).toBe(true)
+    expect(slider.attributes('min')).toBe('1')
+    expect(slider.attributes('max')).toBe('16')
+    expect(slider.attributes('type')).toBe('range')
+
+    await min.setValue('7')
+    await max.setValue('7')
+    await slider.setValue('4')
+    expect(wrapper.find('[data-testid="decimal-places-value"]').text()).toBe('4')
+
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0.5)
+    try {
+      await wrapper.find('[data-testid="start-round-btn"]').trigger('click')
+      await nextTick()
+    } finally {
+      random.mockRestore()
+    }
+
+    expect(wrapper.find('[data-testid="target-display"]').text()).toBe('7.5555')
+    expect(wrapper.findComponent(ScorePanel).props('targetExact')).toBe('7.5555')
+
+    wrapper.unmount()
+  })
+
   it('shows the running cost before a solution is complete', () => {
     const wrapper = mount(ScorePanel, {
       props: {
@@ -2131,7 +2211,11 @@ describe('Make 24 Remastered — Playable UI Flow (App.vue)', () => {
     await wrapper.find('[data-testid="start-round-btn"]').trigger('click')
 
     const particles = () => wrapper.findAll('.felt-particle')
-    expect(wrapper.find('[data-testid="particle-layer"]').exists()).toBe(true)
+    const layer = wrapper.find('[data-testid="particle-layer"]')
+    expect(layer.exists()).toBe(true)
+    // The layer rides on the pannable plane, so a camera glide cannot strand a
+    // burst at the card's old screen position.
+    expect(layer.element.parentElement?.getAttribute('data-testid')).toBe('workspace-plane')
     expect(particles()).toHaveLength(0)
 
     // Equipping a unary operator pops motes around the wrapped piece.
@@ -2164,6 +2248,44 @@ describe('Make 24 Remastered — Playable UI Flow (App.vue)', () => {
     expect(style).toMatch(/--dx: -?[\d.]+px/)
     expect(style).toMatch(/--dy: -?[\d.]+px/)
     expect(style).toMatch(/--color: #[0-9a-f]{6}/i)
+
+    wrapper.unmount()
+  })
+
+  it('places a burst at the card in plane coordinates so panning carries it', async () => {
+    const wrapper = mount(App)
+    await wrapper.find('[data-testid="enter-singleplayer"]').trigger('click')
+    await wrapper.find('[data-testid="start-round-btn"]').trigger('click')
+
+    const plane = wrapper.find('[data-testid="workspace-plane"]').element as HTMLElement
+    const slot = wrapper.findAll('[data-testid^="group-slot-"]')[0]!.element as HTMLElement
+    const rect = (left: number, top: number, width: number, height: number): DOMRect =>
+      ({
+        left,
+        top,
+        width,
+        height,
+        right: left + width,
+        bottom: top + height,
+        x: left,
+        y: top,
+        toJSON: () => ({}),
+      }) as DOMRect
+    vi.spyOn(plane, 'getBoundingClientRect').mockReturnValue(rect(100, 40, 800, 500))
+    vi.spyOn(slot, 'getBoundingClientRect').mockReturnValue(rect(300, 140, 80, 120))
+
+    // Arming a binary operator spawns motes on the already selected piece.
+    await wrapper.findAll('.expr-node--root')[0]!.trigger('click')
+    await wrapper.find('[data-testid="op-add"]').trigger('click')
+    await nextTick()
+    await nextTick()
+
+    const particle = wrapper.find('.felt-particle')
+    expect(particle.exists()).toBe(true)
+    // Slot centre (340, 200) relative to the plane's top-left (100, 40).
+    expect(particle.attributes('style')).toMatch(/left: 240px/)
+    expect(particle.attributes('style')).toMatch(/top: 160px/)
+    expect(wrapper.find('[data-testid="particle-layer"]').element.parentElement).toBe(plane)
 
     wrapper.unmount()
   })

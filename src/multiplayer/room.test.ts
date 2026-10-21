@@ -241,6 +241,40 @@ describe('multiplayer room — seating and lobby', () => {
     ).toBe('pi')
   })
 
+  it('deals a decimal target and clamps its range and precision', () => {
+    const room = createRoomState('decimals')
+    seat(room, 'p1', 'Host')
+
+    handleClientMessage(room, 'p1', {
+      t: 'update-settings',
+      settings: {
+        ...room.settings,
+        targetPreset: 'decimals',
+        decimalMin: 12,
+        decimalMax: 12,
+        decimalPlaces: 3,
+      },
+    })
+    expect(room.settings.targetPreset).toBe('decimals')
+    expect(room.settings.decimalPlaces).toBe(3)
+
+    startMatch(room)
+    expect(room.round?.targetExact).toMatch(/^12\.\d{3}$/)
+    expect(room.round?.target).toBeGreaterThanOrEqual(12.001)
+    expect(room.round?.target).toBeLessThanOrEqual(12.999)
+
+    // Precision and range are host-supplied, so they are clamped into play.
+    expect(
+      sanitizeSettings({ ...room.settings, decimalPlaces: 99 }, room.settings).decimalPlaces
+    ).toBe(16)
+    expect(
+      sanitizeSettings({ ...room.settings, decimalPlaces: 0 }, room.settings).decimalPlaces
+    ).toBe(1)
+    expect(
+      sanitizeSettings({ ...room.settings, decimalMin: -500_000 }, room.settings).decimalMin
+    ).toBe(-99_999)
+  })
+
   it('sanitises per-operator switches alongside the group switches', () => {
     const room = createRoomState('operators')
 

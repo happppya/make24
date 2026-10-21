@@ -1,7 +1,10 @@
 import {
+  DECIMAL_PLACES_MAX,
+  DECIMAL_PLACES_MIN,
   MANUAL_TARGET_MAX,
   MANUAL_TARGET_MIN,
   dealHand,
+  generateDecimalTarget,
   generateTargetNumber,
   resolveConstantTarget,
 } from '../engine/deck'
@@ -73,6 +76,9 @@ export function createDefaultSettings(): GameSettings {
     targetConstant: 'random',
     customMin: 10,
     customMax: 250,
+    decimalMin: 10,
+    decimalMax: 250,
+    decimalPlaces: 2,
     manualTarget: 24,
     approximationPercent: 0,
     scoringMode: 'cost-first',
@@ -109,6 +115,7 @@ const TARGET_PRESETS: TargetPreset[] = [
   'small',
   'big',
   'custom',
+  'decimals',
   'manual',
   'constant',
 ]
@@ -197,6 +204,11 @@ export function sanitizeSettings(input: unknown, base: GameSettings): GameSettin
     ),
     customMin: clampNumber(raw.customMin, -99999, 99999, base.customMin),
     customMax: clampNumber(raw.customMax, -99999, 99999, base.customMax),
+    decimalMin: Math.round(clampNumber(raw.decimalMin, -99999, 99999, base.decimalMin)),
+    decimalMax: Math.round(clampNumber(raw.decimalMax, -99999, 99999, base.decimalMax)),
+    decimalPlaces: Math.round(
+      clampNumber(raw.decimalPlaces, DECIMAL_PLACES_MIN, DECIMAL_PLACES_MAX, base.decimalPlaces)
+    ),
     manualTarget: clampNumber(raw.manualTarget, -99999, 99999, base.manualTarget),
     approximationPercent: clampNumber(raw.approximationPercent, 0, 100, base.approximationPercent),
     scoringMode: pick(raw.scoringMode, SCORING_MODES, base.scoringMode),
@@ -373,11 +385,20 @@ function dealRound(
   const roundNumber = (room.round?.number ?? 0) + 1
   const duration = modeDurationSeconds(room.settings.mode)
   const constant = manualTarget === undefined ? resolveConstantTarget(room.settings) : null
-  const target = manualTarget?.value ?? constant?.value ?? generateTargetNumber(room.settings)
+  const decimalTarget =
+    manualTarget === undefined && !constant && room.settings.targetPreset === 'decimals'
+      ? generateDecimalTarget(room.settings)
+      : null
+  const target =
+    manualTarget?.value ??
+    constant?.value ??
+    decimalTarget?.value ??
+    generateTargetNumber(room.settings)
   const round: RoundState = {
     number: roundNumber,
     target,
-    targetExact: manualTarget?.exact ?? constant?.exactValue ?? String(target),
+    targetExact:
+      manualTarget?.exact ?? constant?.exactValue ?? decimalTarget?.exact ?? String(target),
     constantId: (constant?.id as ConstantId | undefined) ?? null,
     hand: dealHand(room.settings.numCards, room.settings.cardPool),
     startedAt: now,

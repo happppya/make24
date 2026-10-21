@@ -75,7 +75,14 @@ export type GameMode =
   | 'best-5m'
   | 'best-10m'
 
-export type TargetPreset = 'just-24' | 'small' | 'big' | 'custom' | 'manual' | 'constant'
+export type TargetPreset =
+  | 'just-24'
+  | 'small'
+  | 'big'
+  | 'custom'
+  | 'decimals'
+  | 'manual'
+  | 'constant'
 
 export type CardPoolMode = '1-deck' | '2-decks' | '3-decks' | 'unlimited'
 
@@ -137,6 +144,11 @@ export interface GameSettings {
   targetConstant: ConstantChoice
   customMin: number
   customMax: number
+  /** Integer range whose drawn value is the whole part of a decimal target. */
+  decimalMin: number
+  decimalMax: number
+  /** Digits after the point in a decimal target, 1–16. */
+  decimalPlaces: number
   manualTarget: number
   approximationPercent: number
   /** Only bites when `approximationPercent` is above zero. */

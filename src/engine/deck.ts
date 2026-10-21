@@ -1,5 +1,6 @@
 import type { Card, CardPoolMode, GameSettings, Rank, Suit } from './types'
 import { constantById, pickConstant, type ConstantChoice } from './constants'
+import { toDecimal } from './decimal'
 
 const SUITS: Suit[] = ['clubs', 'diamonds', 'hearts', 'spades']
 const RANKS: Rank[] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
@@ -102,7 +103,25 @@ export const MANUAL_TARGET_MAX = 99_999
 type TargetSettings = Pick<
   GameSettings,
   'targetPreset' | 'customMin' | 'customMax' | 'manualTarget'
-> & { targetConstant?: ConstantChoice }
+> & { targetConstant?: ConstantChoice } & DecimalTargetSettings
+
+/** The range and precision a decimals-mode target draws from. */
+export interface DecimalTargetSettings {
+  decimalMin?: number
+  decimalMax?: number
+  decimalPlaces?: number
+}
+
+export interface DecimalTarget {
+  value: number
+  /** Canonical decimal string, keeping every drawn digit. */
+  exact: string
+}
+
+export const DECIMAL_TARGET_MIN = 10
+export const DECIMAL_TARGET_MAX = 250
+export const DECIMAL_PLACES_MIN = 1
+export const DECIMAL_PLACES_MAX = 16
 
 /** The catalogued constant a constant-mode round is aiming at, if any. */
 export function resolveConstantTarget(
@@ -114,6 +133,47 @@ export function resolveConstantTarget(
     return pickConstant(rng)
   }
   return constantById(settings.targetConstant) ?? pickConstant(rng)
+}
+
+/**
+ * A decimals-mode target: an integer from the range, then a random fraction
+ * strictly between 0 and 1 with exactly `decimalPlaces` digits. The integer is
+ * drawn first so the whole part is always the drawn integer, and the exact
+ * digits are returned alongside the numeric mirror for the board's HUD.
+ */
+export function generateDecimalTarget(
+  settings: DecimalTargetSettings,
+  rng: () => number = Math.random
+): DecimalTarget {
+  const rawMin = Number(settings.decimalMin)
+  const rawMax = Number(settings.decimalMax)
+  const min = Number.isFinite(rawMin) ? Math.ceil(rawMin) : DECIMAL_TARGET_MIN
+  const max = Number.isFinite(rawMax) ? Math.floor(rawMax) : DECIMAL_TARGET_MAX
+  let low = Math.min(min, max)
+  let high = Math.max(min, max)
+  if (high < low) {
+    // A fractional or single-point range still needs one whole number to draw.
+    low = Math.round(Number.isFinite(rawMin) ? rawMin : DECIMAL_TARGET_MIN)
+    high = low
+  }
+  const span = high - low + 1
+  const integer = low + Math.min(span - 1, Math.max(0, Math.floor(rng() * span)))
+
+  const rawPlaces = Number(settings.decimalPlaces)
+  const places = Number.isFinite(rawPlaces)
+    ? Math.min(DECIMAL_PLACES_MAX, Math.max(DECIMAL_PLACES_MIN, Math.round(rawPlaces)))
+    : 2
+
+  let digits = ''
+  for (let index = 0; index < places; index++) {
+    const digit = Math.min(9, Math.max(0, Math.floor(rng() * 10)))
+    digits += String(digit)
+  }
+  // A fraction of zero is excluded by the rules; nudge a pathological rng.
+  if (/^0+$/.test(digits)) digits = `${digits.slice(0, -1)}1`
+
+  const exact = toDecimal(integer).plus(toDecimal(`0.${digits}`)).toFixed(places)
+  return { value: Number(exact), exact }
 }
 
 export function generateTargetNumber(
@@ -136,6 +196,9 @@ export function generateTargetNumber(
       const intMax = Math.floor(max)
       if (intMax <= intMin) return intMin
       return intMin + Math.floor(rng() * (intMax - intMin + 1))
+    }
+    case 'decimals': {
+      return generateDecimalTarget(settings, rng).value
     }
     case 'manual': {
       return Number.isFinite(settings.manualTarget) ? settings.manualTarget : 24

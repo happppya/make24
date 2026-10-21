@@ -4,6 +4,12 @@ import LobbyFrame from '../LobbyFrame.vue'
 import { useGameContext } from '../../app/context'
 import { scoringModeLabel } from '../../app/labels'
 import { CONSTANT_CATALOG, constantById } from '../../engine/constants'
+import {
+  DECIMAL_PLACES_MAX,
+  DECIMAL_PLACES_MIN,
+  MANUAL_TARGET_MAX,
+  MANUAL_TARGET_MIN,
+} from '../../engine/deck'
 import { BIND_CARD_LIMITS, MAX_PER_DEAL_LIMIT, bindRuleLabels } from '../../engine/binds'
 import {
   OPERATOR_GROUPS,
@@ -171,6 +177,8 @@ function settingsTabNote(id: SettingsTabId): string {
           return '100–10k'
         case 'custom':
           return `${settings.customMin}–${settings.customMax}`
+        case 'decimals':
+          return `${settings.decimalMin}–${settings.decimalMax} + ${settings.decimalPlaces}dp`
         case 'manual':
           return 'chosen'
         default:
@@ -522,6 +530,7 @@ function onTabKeydown(event: KeyboardEvent): void {
             <option value="small">Small numbers (1 – 100)</option>
             <option value="big">Big numbers (100 – 10000)</option>
             <option value="custom">Custom range (Min – Max)</option>
+            <option value="decimals">Decimals (integer range + decimal places)</option>
             <option value="manual">Exact target, chosen before each round</option>
             <option value="constant">Famous constants (π, e, γ…)</option>
           </select>
@@ -575,6 +584,66 @@ function onTabKeydown(event: KeyboardEvent): void {
               class="input-arcade input-short"
             />
           </div>
+        </div>
+
+        <!-- Decimals: an integer plus a random fractional part. -->
+        <div v-if="settings.targetPreset === 'decimals'" class="decimal-field">
+          <div class="field-row field-subrow">
+            <div>
+              <label for="setting-decimal-min">Lowest integer</label>
+              <input
+                id="setting-decimal-min"
+                v-model.number="settings.decimalMin"
+                data-testid="setting-decimal-min"
+                type="number"
+                :min="MANUAL_TARGET_MIN"
+                :max="MANUAL_TARGET_MAX"
+                step="1"
+                class="input-arcade input-short"
+              />
+            </div>
+            <div>
+              <label for="setting-decimal-max">Highest integer</label>
+              <input
+                id="setting-decimal-max"
+                v-model.number="settings.decimalMax"
+                data-testid="setting-decimal-max"
+                type="number"
+                :min="MANUAL_TARGET_MIN"
+                :max="MANUAL_TARGET_MAX"
+                step="1"
+                class="input-arcade input-short"
+              />
+            </div>
+          </div>
+
+          <div class="field-row decimal-places">
+            <div class="decimal-places__head">
+              <label for="setting-decimal-places">Decimal places</label>
+              <span class="decimal-places__value" data-testid="decimal-places-value">
+                {{ settings.decimalPlaces }}
+              </span>
+            </div>
+            <input
+              id="setting-decimal-places"
+              v-model.number="settings.decimalPlaces"
+              data-testid="decimal-places"
+              type="range"
+              :min="DECIMAL_PLACES_MIN"
+              :max="DECIMAL_PLACES_MAX"
+              step="1"
+              class="decimal-slider"
+            />
+            <div class="decimal-places__scale" aria-hidden="true">
+              <span>{{ DECIMAL_PLACES_MIN }}</span>
+              <span>{{ DECIMAL_PLACES_MAX }}</span>
+            </div>
+          </div>
+
+          <p class="field-hint decimal-hint">
+            An integer is drawn from the range first, then a random fraction strictly between 0
+            and 1 with this many decimals is added. Every digit of the result is kept.
+          </p>
         </div>
 
         <!-- The exact number is chosen in the pre-round dialog, not here. -->
@@ -1349,6 +1418,98 @@ fieldset.settings-form:disabled {
   line-height: 1.4;
   border-left: 3px solid rgba(255, 190, 11, 0.35);
   padding-left: 10px;
+}
+
+.decimal-field {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border-left: 3px solid rgba(114, 239, 221, 0.35);
+  padding-left: 12px;
+}
+
+.decimal-hint {
+  margin: 0;
+  line-height: 1.4;
+}
+
+.decimal-places__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.decimal-places__head > label {
+  font-weight: 700;
+  font-size: 0.88rem;
+  color: var(--gold);
+}
+
+.decimal-places__value {
+  min-width: 44px;
+  padding: 3px 5px 2px;
+  border: 2px solid #09080f;
+  background: var(--gold);
+  color: #241703;
+  font-family: var(--font-pixel);
+  font-size: 0.54rem;
+  letter-spacing: 0.08em;
+  text-align: center;
+  box-shadow: inset 0 -2px 0 rgba(0, 0, 0, 0.24);
+}
+
+.decimal-slider {
+  display: block;
+  width: 100%;
+  height: 12px;
+  appearance: none;
+  -webkit-appearance: none;
+  background: linear-gradient(90deg, #2d5a46 0%, #4f8f70 100%);
+  border: 2px solid #09080f;
+  box-shadow: inset 0 2px 0 rgba(0, 0, 0, 0.45);
+  cursor: pointer;
+}
+
+.decimal-slider:focus-visible {
+  outline: 2px solid var(--gold-bright);
+  outline-offset: 3px;
+}
+
+.decimal-slider::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 15px;
+  height: 20px;
+  margin-top: -6px;
+  background: var(--gold-bright);
+  border: 2px solid #09080f;
+  box-shadow:
+    inset 0 -4px 0 rgba(0, 0, 0, 0.25),
+    0 2px 0 #09080f;
+  cursor: grab;
+}
+
+.decimal-slider::-moz-range-thumb {
+  width: 15px;
+  height: 20px;
+  border: 2px solid #09080f;
+  border-radius: 0;
+  background: var(--gold-bright);
+  box-shadow:
+    inset 0 -4px 0 rgba(0, 0, 0, 0.25),
+    0 2px 0 #09080f;
+  cursor: grab;
+}
+
+.decimal-places__scale {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-family: var(--font-pixel);
+  font-size: 0.46rem;
+  letter-spacing: 0.08em;
+  color: var(--ink-muted);
 }
 
 .inline-field {
