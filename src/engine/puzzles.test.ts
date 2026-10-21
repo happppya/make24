@@ -1,15 +1,59 @@
 import { describe, expect, it } from 'vitest'
 import {
   createPuzzle,
-  validatePuzzleAttempt,
+  difficultyRank,
+  PUZZLE_DIFFICULTIES,
   puzzleLeaderboardKey,
+  validatePuzzleAttempt,
+  type PeriodicPuzzleKind,
   type PuzzleAttempt,
 } from './puzzles'
 import type { ExprNode, OperatorCategory } from './types'
 
 const MONDAY = new Date('2026-10-19T10:00:00.000Z')
 
-describe('daily and weekly puzzles', () => {
+describe('calendar puzzles', () => {
+  it('builds one deterministic hourly puzzle per UTC hour', () => {
+    const start = createPuzzle('hourly', MONDAY)
+    const late = createPuzzle('hourly', new Date('2026-10-19T10:59:59.999Z'))
+    const next = createPuzzle('hourly', new Date('2026-10-19T11:00:00.000Z'))
+
+    expect(start.kind).toBe('hourly')
+    expect(start.key).toBe('2026-10-19T10')
+    expect(start.startsAt).toBe(Date.UTC(2026, 9, 19, 10))
+    expect(start.endsAt).toBe(Date.UTC(2026, 9, 19, 11))
+    expect(late).toMatchObject({
+      key: start.key,
+      name: start.name,
+      target: start.target,
+      hand: start.hand,
+    })
+    expect(next.key).toBe('2026-10-19T11')
+    expect(next.name).not.toBe(start.name)
+    expect(next.hand.map((card) => `${card.rank}${card.suit}`)).not.toEqual(
+      start.hand.map((card) => `${card.rank}${card.suit}`)
+    )
+    // Hourly boards live on the easy end of the ladder.
+    expect(difficultyRank(start.difficulty)).toBeLessThanOrEqual(1)
+  })
+
+  it('builds two distinct daily boards on the same UTC day', () => {
+    const first = createPuzzle('daily', MONDAY)
+    const second = createPuzzle('daily-2', MONDAY)
+
+    expect(first.kind).toBe('daily')
+    expect(second.kind).toBe('daily-2')
+    expect(second.key).toBe(first.key)
+    expect(second.startsAt).toBe(first.startsAt)
+    expect(second.endsAt).toBe(first.endsAt)
+    expect(second.name).not.toBe(first.name)
+    expect(second.target).not.toBe(first.target)
+    expect(second.hand.map((card) => `${card.rank}${card.suit}`)).not.toEqual(
+      first.hand.map((card) => `${card.rank}${card.suit}`)
+    )
+    expect(difficultyRank(second.difficulty)).toBeGreaterThanOrEqual(1)
+  })
+
   it('builds the same deterministic daily puzzle for a UTC day', () => {
     const morning = createPuzzle('daily', MONDAY)
     const evening = createPuzzle('daily', new Date('2026-10-19T23:59:59.000Z'))
@@ -17,11 +61,10 @@ describe('daily and weekly puzzles', () => {
     expect(morning.kind).toBe('daily')
     expect(morning.key).toBe('2026-10-19')
     expect(morning.name.length).toBeGreaterThan(3)
-    expect(morning.difficulty).toBe('medium')
+    expect(['easy', 'medium']).toContain(morning.difficulty)
     expect(morning.hand).toHaveLength(morning.settings.numCards)
-    expect(morning.settings.numCards).toBeGreaterThanOrEqual(4)
+    expect(morning.settings.numCards).toBeGreaterThanOrEqual(3)
     expect(morning.settings.numCards).toBeLessThanOrEqual(5)
-    expect(morning.target).toBeGreaterThan(0)
     expect(Number.isFinite(morning.target)).toBe(true)
     expect(evening).toMatchObject({
       key: morning.key,
@@ -64,12 +107,16 @@ describe('daily and weekly puzzles', () => {
     expect(nextMonday.name).not.toBe(monday.name)
   })
 
-  it('makes the weekly puzzle materially harder than the daily one', () => {
+  it('keeps the weekly trial on the high end of the ladder', () => {
     const daily = createPuzzle('daily', MONDAY)
+    const secondDaily = createPuzzle('daily-2', MONDAY)
     const weekly = createPuzzle('weekly', MONDAY)
 
-    expect(daily.difficulty).toBe('medium')
-    expect(weekly.difficulty).toBe('extreme')
+    expect(['expert', 'extreme', 'confounding', 'impossible']).toContain(weekly.difficulty)
+    expect(difficultyRank(weekly.difficulty)).toBeGreaterThan(difficultyRank(daily.difficulty))
+    expect(difficultyRank(weekly.difficulty)).toBeGreaterThan(
+      difficultyRank(secondDaily.difficulty)
+    )
     expect(weekly.settings.numCards).toBeGreaterThanOrEqual(6)
     expect(weekly.operatorGroups.length).toBeGreaterThan(daily.operatorGroups.length)
     expect(weekly.settings.approximationPercent).toBe(0)
@@ -85,10 +132,31 @@ describe('daily and weekly puzzles', () => {
     expect(new Set(puzzles.map((p) => p.operatorGroups.join('|'))).size).toBeGreaterThan(1)
   })
 
+  it('has seven ordered difficulty tiers with matching ranks', () => {
+    expect(PUZZLE_DIFFICULTIES.map((entry) => entry.id)).toEqual([
+      'easy',
+      'medium',
+      'hard',
+      'expert',
+      'extreme',
+      'confounding',
+      'impossible',
+    ])
+    for (let index = 1; index < PUZZLE_DIFFICULTIES.length; index += 1) {
+      expect(PUZZLE_DIFFICULTIES[index]!.rank).toBeGreaterThan(
+        PUZZLE_DIFFICULTIES[index - 1]!.rank
+      )
+    }
+  })
+
   it('makes every generated challenge solvable with its retained reference board', () => {
-    const periods: { kind: 'daily' | 'weekly'; date: Date }[] = []
+    const periods: { kind: PeriodicPuzzleKind; date: Date }[] = []
+    for (let hour = 0; hour < 72; hour += 1) {
+      periods.push({ kind: 'hourly', date: new Date(Date.UTC(2026, 9, 19, hour)) })
+    }
     for (let day = 0; day < 120; day += 1) {
       periods.push({ kind: 'daily', date: new Date(Date.UTC(2026, 9, 19 + day, 12)) })
+      periods.push({ kind: 'daily-2', date: new Date(Date.UTC(2026, 9, 19 + day, 12)) })
     }
     for (let week = 0; week < 16; week += 1) {
       periods.push({ kind: 'weekly', date: new Date(Date.UTC(2026, 9, 19 + week * 7, 12)) })
@@ -105,6 +173,7 @@ describe('daily and weekly puzzles', () => {
       expect(attempt.ok, `${kind} ${puzzle.key}: ${attempt.ok ? '' : attempt.error}`).toBe(true)
       if (!attempt.ok) continue
 
+      expect(puzzle.target).toBeGreaterThan(0)
       expect(attempt.finalValue).toBe(puzzle.target)
       expect(attempt.equation).toContain('=')
       expect(attempt.score).toBeGreaterThan(0)
@@ -143,7 +212,7 @@ describe('daily and weekly puzzles', () => {
 
   it('generates bind-themed boards that keep their locked groups in the reference solution', () => {
     let bindPuzzles = 0
-    const check = (kind: 'daily' | 'weekly', day: number) => {
+    const check = (kind: PeriodicPuzzleKind, day: number) => {
       const puzzle = createPuzzle(kind, new Date(Date.UTC(2026, 9, 19 + day, 12)))
       if (puzzle.bindLabels.length === 0) return
       bindPuzzles += 1
@@ -164,17 +233,27 @@ describe('daily and weekly puzzles', () => {
       ).toBe(true)
     }
 
-    for (let day = 0; day < 120; day += 1) check('daily', day)
+    for (let day = 0; day < 120; day += 1) {
+      check('daily', day)
+      check('daily-2', day)
+    }
     for (let week = 0; week < 16; week += 1) check('weekly', week * 7)
     expect(bindPuzzles).toBeGreaterThan(0)
   })
 
   it('has stable, distinct leaderboard keys per kind and period', () => {
+    const hourly = createPuzzle('hourly', MONDAY)
     const daily = createPuzzle('daily', MONDAY)
+    const secondDaily = createPuzzle('daily-2', MONDAY)
     const weekly = createPuzzle('weekly', MONDAY)
+    expect(puzzleLeaderboardKey(hourly)).toBe('hourly:2026-10-19T10')
     expect(puzzleLeaderboardKey(daily)).toBe('daily:2026-10-19')
+    expect(puzzleLeaderboardKey(secondDaily)).toBe('daily-2:2026-10-19')
     expect(puzzleLeaderboardKey(weekly)).toBe('weekly:2026-W43')
-    expect(puzzleLeaderboardKey(daily)).not.toBe(puzzleLeaderboardKey(weekly))
+    expect(
+      new Set([hourly, daily, secondDaily, weekly].map((puzzle) => puzzleLeaderboardKey(puzzle)))
+        .size
+    ).toBe(4)
   })
 })
 

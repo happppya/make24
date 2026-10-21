@@ -106,17 +106,19 @@ from `lobby`.
 
 ## Puzzle leaderboards over HTTP
 
-The daily/weekly boards are not room state, so they use a small HTTP surface on
-the same server rather than a socket:
+The calendar puzzle boards are not room state, so they use a small HTTP surface
+on the same server rather than a socket:
 
 - `GET /puzzles/:kind/:key/leaderboard` returns `{ entries, serverTime }`.
 - `POST /puzzles/:kind/:key/leaderboard` takes `{ playerName, expression }` and
   returns `{ entries, rank, improved, serverTime }`.
 
-`kind` is `daily` or `weekly`; `key` is the UTC date or ISO week. The server
-rebuilds the expression against the generated puzzle, requires every dealt card
-exactly once, rejects disabled operators and stale keys, and recomputes the score
-from the target and puzzle rules. Names are trimmed to 24 characters; a repeat
+`kind` is `hourly`, `daily`, `daily-2` or `weekly`; `key` is the UTC hour stamp,
+the UTC date (both dailies share the date but not the kind), or the ISO week. The
+server rebuilds the expression against the generated puzzle, requires every dealt
+card exactly once, rejects disabled operators and stale keys, and recomputes the
+score from the target and puzzle rules. Dungeon trials have no server board: the
+campaign and its progress are device-local. Names are trimmed to 24 characters; a repeat
 name only replaces its row when the new score is lower. The top 50 per board are
 kept and persisted in `data/puzzle-leaderboards.json` (override with
 `PUZZLE_LEADERBOARD_FILE`). Caddy must proxy `/puzzles/*` alongside `/ws` and
@@ -164,9 +166,13 @@ rejected.
   transport, proving the seam.
 - `src/multiplayer/puzzleLeaderboard.test.ts` — persistent top-score storage and
   the HTTP board: valid submission, stale key, incomplete board, oversized body.
-- `src/engine/puzzles.test.ts` — deterministic daily/weekly generation, names,
-  difficulty, variation and reference-solution validation.
-- `src/puzzles.test.ts` — the main-menu entry, puzzle hub and in-game top-three.
+- `src/engine/puzzles.test.ts` — deterministic hourly, both daily and weekly
+  generation, names, the difficulty ladder, variation and reference-solution
+  validation.
+- `src/engine/dungeon.test.ts` — gauntlet content, per-gauntlet difficulty ramps,
+  deterministic trial generation, solvability and unlock progression.
+- `src/puzzles.test.ts` — the main-menu entries, the four calendar cards, the
+  dungeon map/gauntlet flow and the in-game top-three.
 - `src/setup.test.ts` — the rendered selector (name, public/private, code entry)
   and the waiting banner/locked board a mid-round joiner sees.
 

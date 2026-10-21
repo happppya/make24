@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useGameContext } from '../../app/context'
+import { gauntletById, nextTrialIn } from '../../engine/dungeon'
 import { formatNumber } from '../../engine/math'
+import { PUZZLE_KIND_LABELS, puzzleDifficultyMeta } from '../../engine/puzzles'
 
 const {
   menuOpen,
@@ -12,14 +14,59 @@ const {
   topThree,
   retryPuzzle,
   exitPuzzleToHub,
+  nextDungeonTrial,
+  gauntletProgress,
+  gauntletComplete,
+  nextGauntletId,
+  openGauntlet,
+  openDungeon,
 } = useGameContext()
 
 const top = computed(() => (lastResult.value ? topThree(lastResult.value.puzzle) : []))
-const kindLabel = computed(() =>
-  lastResult.value?.puzzle.kind === 'weekly' ? 'WEEKLY · EXTREME' : 'DAILY · MEDIUM'
+const dungeon = computed(() => lastResult.value?.dungeon ?? null)
+const gauntlet = computed(() =>
+  dungeon.value ? gauntletById(dungeon.value.gauntletId) ?? null : null
 )
+const clearedCount = computed(() =>
+  gauntlet.value ? gauntletProgress(gauntlet.value) : 0
+)
+const gauntletDone = computed(() =>
+  gauntlet.value ? gauntletComplete(gauntlet.value) : false
+)
+const nextTrial = computed(() =>
+  dungeon.value ? nextTrialIn(dungeon.value.gauntletId, dungeon.value.trialId) : null
+)
+const nextTrialTitle = computed(() => nextTrial.value?.title ?? '')
+const nextGauntlet = computed(() => {
+  const id = gauntlet.value ? nextGauntletId(gauntlet.value.id) : null
+  return id ? gauntletById(id) ?? null : null
+})
+const nextGauntletName = computed(() => nextGauntlet.value?.name ?? '')
+
+function enterNextGauntlet(): void {
+  const next = nextGauntlet.value
+  if (next) openGauntlet(next.id)
+}
+
+const kindLabel = computed(() => {
+  const result = lastResult.value
+  if (!result) return ''
+  if (result.dungeon) {
+    return `DUNGEON · ${puzzleDifficultyMeta(result.puzzle.difficulty).label}`
+  }
+  return `${PUZZLE_KIND_LABELS[result.puzzle.kind]} · ${puzzleDifficultyMeta(result.puzzle.difficulty).label}`
+})
+const metaLabel = computed(() => {
+  const result = lastResult.value
+  if (!result) return ''
+  if (result.puzzle.dungeon) {
+    return `TRIAL ${result.puzzle.dungeon.trialNumber} / ${result.puzzle.dungeon.trialCount}`
+  }
+  return result.puzzle.key
+})
 const statusLabel = computed(() => {
   if (!lastResult.value) return ''
+  if (lastResult.value.dungeon) return 'Campaign ledger'
   return boardState(lastResult.value.puzzle) === 'online'
     ? 'Shared board'
     : 'Saved on this device'
@@ -28,16 +75,20 @@ const statusLabel = computed(() => {
 
 <template>
 <main v-if="lastResult" class="screen-puzzle-result" :inert="menuOpen || tutorialOpen">
-  <div class="puzzle-result-cabinet" :class="`puzzle-result-cabinet--${lastResult.puzzle.kind}`">
+  <div
+    class="puzzle-result-cabinet"
+    :class="`puzzle-result-cabinet--${dungeon ? 'dungeon' : lastResult.puzzle.kind}`"
+  >
     <div class="puzzle-result-marquee">
       <span>{{ kindLabel }}</span>
-      <span>{{ lastResult.puzzle.key }}</span>
+      <span>{{ metaLabel }}</span>
     </div>
 
     <div class="puzzle-result-stamp" :class="{ 'puzzle-result-stamp--local': lastResult.source === 'local' }">
-      {{ lastResult.improved ? 'BEST LOGGED' : 'BOARD LOGGED' }}
+      {{ dungeon ? 'TRIAL CLEARED' : lastResult.improved ? 'BEST LOGGED' : 'BOARD LOGGED' }}
     </div>
 
+    <p v-if="gauntlet" class="puzzle-result-gauntlet">{{ gauntlet.name }}</p>
     <h1>{{ lastResult.puzzle.name }}</h1>
     <p class="puzzle-result-score">
       <span>{{ formatNumber(lastResult.score) }}</span>
@@ -64,14 +115,37 @@ const statusLabel = computed(() => {
       </div>
     </div>
 
+    <section v-if="dungeon && gauntlet" class="puzzle-result-board" data-testid="dungeon-result-progress">
+      <div class="puzzle-result-board__head">
+        <h2>Gauntlet progress</h2>
+        <span>{{ clearedCount }} / {{ gauntlet.trials.length }} cleared</span>
+      </div>
+      <div class="puzzle-result-progress">
+        <span
+          :style="{ width: `${Math.round((clearedCount / gauntlet.trials.length) * 100)}%` }"
+        ></span>
+      </div>
+      <p class="puzzle-result-progress__note">
+        <template v-if="gauntletDone && nextGauntlet">
+          Every trial is cleared. {{ nextGauntletName }} is open.
+        </template>
+        <template v-else-if="gauntletDone">
+          The final gauntlet is cleared. There is nothing left below this floor.
+        </template>
+        <template v-else-if="nextTrial">
+          Next up: {{ nextTrialTitle }}.
+        </template>
+      </p>
+    </section>
+
     <p v-if="lastResult.note" class="puzzle-result-note" role="status">
       {{ lastResult.note }}
     </p>
 
-    <section class="puzzle-result-board">
+    <section v-if="!dungeon" class="puzzle-result-board">
       <div class="puzzle-result-board__head">
         <h2>Top 3 scores</h2>
-        <span>{{ lastResult.puzzle.kind === 'daily' ? 'Daily' : 'Weekly' }} board</span>
+        <span>{{ PUZZLE_KIND_LABELS[lastResult.puzzle.kind] }} board</span>
       </div>
       <ol v-if="top.length">
         <li v-for="(row, index) in top" :key="`${row.playerName}-${row.submittedAt}`">
@@ -86,7 +160,43 @@ const statusLabel = computed(() => {
       </p>
     </section>
 
-    <div class="puzzle-result-actions">
+    <div v-if="dungeon" class="puzzle-result-actions">
+      <button
+        v-if="nextTrial && !gauntletDone"
+        type="button"
+        class="btn-arcade btn-arcade--gold"
+        data-testid="next-trial-btn"
+        @click="nextDungeonTrial"
+      >
+        Next Trial: {{ nextTrialTitle }}
+      </button>
+      <button
+        v-else-if="gauntletDone && nextGauntlet"
+        type="button"
+        class="btn-arcade btn-arcade--gold"
+        data-testid="next-gauntlet-btn"
+        @click="enterNextGauntlet"
+      >
+        Enter {{ nextGauntletName }}
+      </button>
+      <button
+        v-else
+        type="button"
+        class="btn-arcade btn-arcade--gold"
+        data-testid="dungeon-map-btn"
+        @click="openDungeon"
+      >
+        Return to the Dungeon
+      </button>
+      <button type="button" class="btn-arcade" data-testid="retry-puzzle-btn" @click="retryPuzzle">
+        Retry Trial
+      </button>
+      <button type="button" class="btn-arcade" data-testid="back-to-gauntlet-btn" @click="exitPuzzleToHub">
+        Back to Gauntlet
+      </button>
+    </div>
+
+    <div v-else class="puzzle-result-actions">
       <button type="button" class="btn-arcade btn-arcade--gold" data-testid="retry-puzzle-btn" @click="retryPuzzle">
         Try Again
       </button>
@@ -121,6 +231,11 @@ const statusLabel = computed(() => {
   box-shadow: inset 0 0 60px rgba(254, 74, 73, 0.08), 0 12px 0 #09080f;
 }
 
+.puzzle-result-cabinet--dungeon {
+  border-color: #c77dff;
+  box-shadow: inset 0 0 60px rgba(199, 125, 255, 0.1), 0 12px 0 #09080f;
+}
+
 .puzzle-result-marquee {
   display: flex;
   align-items: center;
@@ -138,6 +253,11 @@ const statusLabel = computed(() => {
 .puzzle-result-cabinet--weekly .puzzle-result-marquee {
   border-color: rgba(254, 74, 73, 0.5);
   color: #ff9daa;
+}
+
+.puzzle-result-cabinet--dungeon .puzzle-result-marquee {
+  border-color: rgba(199, 125, 255, 0.55);
+  color: #e0c2ff;
 }
 
 .puzzle-result-stamp {
@@ -187,6 +307,19 @@ const statusLabel = computed(() => {
 .puzzle-result-cabinet--weekly .puzzle-result-score > span {
   color: #ffb3bd;
   text-shadow: 0 5px 0 #7a1212, 0 9px 0 #09080f;
+}
+
+.puzzle-result-cabinet--dungeon .puzzle-result-score > span {
+  color: #e8c8ff;
+  text-shadow: 0 5px 0 #5a2b7a, 0 9px 0 #09080f;
+}
+
+.puzzle-result-gauntlet {
+  margin: 0 0 2px;
+  font-family: var(--font-pixel);
+  font-size: 0.54rem;
+  letter-spacing: 0.16em;
+  color: #c77dff;
 }
 
 .puzzle-result-score small {
@@ -328,6 +461,27 @@ const statusLabel = computed(() => {
   border: 1px dashed rgba(242, 201, 76, 0.25);
   color: var(--ink-muted);
   font-family: var(--font-mono);
+}
+
+.puzzle-result-progress {
+  height: 12px;
+  background: #09080f;
+  border: 2px solid #2a2438;
+  overflow: hidden;
+}
+
+.puzzle-result-progress span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #5a2b7a, #c77dff);
+  transition: width 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.puzzle-result-progress__note {
+  margin: 8px 0 0;
+  font-family: var(--font-mono);
+  font-size: 0.92rem;
+  color: var(--ink-muted);
 }
 
 .puzzle-result-actions {

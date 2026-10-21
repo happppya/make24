@@ -146,7 +146,7 @@ table.example.com {
 Caddy obtains a certificate automatically once `table.example.com` resolves to
 the reserved IP and ports 80/443 reach the box. It handles the WebSocket
 upgrade without extra configuration. `/puzzles/*` must stay in the matcher: the
-daily and weekly boards are plain HTTP endpoints on the same server.
+hourly, both daily and weekly boards are plain HTTP endpoints on the same server.
 
 Puzzle scores persist in `data/puzzle-leaderboards.json` under the service's
 working directory (override with `PUZZLE_LEADERBOARD_FILE`). `git reset --hard`

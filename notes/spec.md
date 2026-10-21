@@ -58,18 +58,51 @@ Dragons are attempted before rooks, and each kind has its own cap of 0–6 group
 
 A bind costs no operator points and produces its product as a normal group value that can be used by operators and merged with other groups. It is locked: it cannot be ungrouped, and every multiplayer or puzzle submission is validated against the deterministic deal so a claimed bind cannot be split back into loose cards or invented from a different set of cards.
 
-## Daily & Weekly Puzzles
+## Puzzles
 
-The main menu has a **Puzzles** entry. Both modes are solo attempts at a shared board: every player gets the same fixed hand, target and operator rules for that UTC day or ISO week. There is no clock, and the goal is the lowest score. A score only counts when every dealt card is used exactly once in one finished expression.
+The main menu has two entries: **Puzzles** for the calendar boards and **The Dungeon** for the fixed campaign. Every puzzle is a solo attempt at one fixed board: the same hand, target and operator rules for everyone in that period or trial. There is no clock, and the goal is the lowest score. A score only counts when every dealt card is used exactly once in one finished expression.
 
-- **Daily:** medium difficulty, four or five cards. The recipe rotates through arithmetic, factorials, analysis, binary computing and combinatorics, so adjacent days ask for different tools.
-- **Weekly:** extreme difficulty, six to eight cards and a target in the thousands or millions. The weekly recipe turns on most or all operator families and uses larger card pools; it runs from Monday 00:00 UTC to the next Monday.
-- Puzzles are generated deterministically from their UTC period. A hand is dealt, an expression is built from only the allowed operators, and the target is that expression's value. The generated expression is retained as a reference solution so every puzzle is playable by construction: it spends every dealt card exactly once and is checked by the same validator as player submissions. If the search cannot produce a recipe-shaped expression, the generator falls back to an all-cards fold and enables Add in that puzzle's rules, so even the last-resort board stays legal. A regression sweep replays the reference board of 120 daily and 16 weekly periods through the validator.
-- Names are procedurally generated from the period (for example `Gilded Garden 745`), so every daily and weekly puzzle has its own name.
+### Difficulty ladder
+
+Puzzles are ranked on seven tiers, easiest first: **easy, medium, hard, expert, extreme, confounding, impossible**. The tier fixes the hand size, operator families, target band, bind rules and penalty rules the generator draws from. Every calendar card, dungeon trial and play header shows its tier, and the puzzle hub has a compact legend for the whole ladder.
+
+### Calendar boards
+
+The **Puzzles** screen carries four boards at once:
+
+- **Hourly:** a fresh board at the top of every UTC hour, on the easy end. Most hours are easy; every fifth hour asks for a medium board.
+- **Daily I:** the first of two UTC-day boards, easy or medium.
+- **Daily II:** the second UTC-day board, medium or hard. It uses a different seed, hand and target from Daily I even though both close at the same midnight.
+- **Weekly:** one board from Monday 00:00 UTC to the next Monday, on the high end of the ladder (expert, extreme, confounding; one week in eight is impossible). It uses the largest hands, the most operator families and the biggest targets.
+
+The hub shows each board's tier, reset countdown, target, card count, operator groups, binds and top three. The name field is shared by all four leaderboards. Hourly and daily cards update their countdowns every thirty seconds, and the hour rolls over in place if the screen is left open.
+
+- Puzzles are generated deterministically from their UTC period. A hand is dealt, an expression is built from only the allowed operators, and the target is that expression's value. The generated expression is retained as a reference solution so every puzzle is playable by construction: it spends every dealt card exactly once and is checked by the same validator as player submissions. If the search cannot produce a recipe-shaped expression, the generator falls back to an all-cards fold and enables Add in that puzzle's rules, so even the last-resort board stays legal. A regression sweep replays the reference boards of 72 hourly, 120 Daily I, 120 Daily II and 16 weekly periods through the validator.
+- Names are procedurally generated from the period (for example `Gilded Garden 745` or `Quick Bell 486123`), so every calendar puzzle has its own name.
 - The lobby's card count, target settings, operator toggles, card pool, forbidden-move rules and scoring mode are all used by the puzzle generator. Puzzle rules cannot be edited by the player.
-- Some daily and weekly recipes are bind-themed: they enable Dragons, Rooks or both at fixed card ranges and per-deal caps, and only generate hands that actually form one. Their reference solution starts from those bound groups, so the target is always reachable from the locked opening board. The puzzle hub and play header show the enabled bind rules.
+- Some calendar recipes are bind-themed: they enable Dragons, Rooks or both at fixed card ranges and per-deal caps, and only generate hands that actually form one. Their reference solution starts from those bound groups, so the target is always reachable from the locked opening board. The puzzle hub and play header show the enabled bind rules.
 
-Each puzzle has a leaderboard sorted by ascending score, then earliest submission. The top three rows are visible in the puzzle hub and in a compact strip above the felt while solving. The board is stored by the table server in `data/puzzle-leaderboards.json` and exposed over HTTP under `/puzzles/`; if that server cannot be reached, scores are kept on the device and the screen says so. Names are the only identity: a repeat submission under the same name replaces that row only when the new score is lower. The server rebuilds the submitted card board, checks every card and operator against the generated puzzle, recomputes the score, and refuses stale puzzle keys.
+Each calendar puzzle has a leaderboard sorted by ascending score, then earliest submission. The top three rows are visible in the puzzle hub and in a compact strip above the felt while solving. The board is stored by the table server in `data/puzzle-leaderboards.json` and exposed over HTTP under `/puzzles/:kind/:key/leaderboard`, where the kind is `hourly`, `daily`, `daily-2` or `weekly`; if that server cannot be reached, scores are kept on the device and the screen says so. Names are the only identity: a repeat submission under the same name replaces that row only when the new score is lower. The server rebuilds the submitted card board, checks every card and operator against the generated puzzle, recomputes the score, and refuses stale puzzle keys.
+
+## The Dungeon
+
+**The Dungeon** on the main menu opens a fixed campaign of seven themed gauntlets, six trials each (42 trials). A gauntlet is a tailored series with its own operator cabinet, narrative theme and difficulty ramp; a trial is one fixed puzzle.
+
+| Gauntlet | Theme | Opening → gatekeeper |
+| --- | --- | --- |
+| I. The Cellar | Loose cards, arithmetic, roots and logs | easy → hard |
+| II. The Foundry | Factorials, powers and growing targets | easy → expert |
+| III. The Signal Room | Bits, shifts, digit joins and whole numbers | easy → extreme |
+| IV. The Observatory | Trig, logarithms and reciprocal routes | easy → extreme |
+| V. The Menagerie | Combinations, permutations and derangements | easy → extreme |
+| VI. The Clockwork Vault | Binds, locked groups and keyed hands | medium → confounding |
+| VII. The Abyss | Every operator, no mercy | extreme → impossible |
+
+- Every gauntlet's six trials step upward in difficulty, and its last trial is marked as the gatekeeper. Across the campaign the ladder climbs from easy arithmetic in the cellar to an impossible door at the bottom.
+- Trials unlock in order: the first trial of the first gauntlet is always open, each cleared trial opens the next, and clearing all six opens the next gauntlet. Locked trials and locked gauntlets show what has to be cleared first.
+- Dungeon boards are generated deterministically from the gauntlet id and trial id, not from the clock: every player and every run sees the same hand, target and rules. The recipe, card count, target band, binds and penalties come from the trial's difficulty and theme. Every trial retains a reference solution and is replayed through the normal validator by a regression test.
+- Scoring is the ordinary puzzle score (operator costs plus any forbidden-move penalties). Only the lowest score per trial is kept. Progress and best scores are stored on the device; the dungeon has no shared leaderboard because the campaign is a personal run.
+- The dungeon map shows campaign progress, each gauntlet's theme, difficulty span and cleared count. A gauntlet screen lists all six trials with their tier, card count, target (hidden until unlocked), binds and best score. The result screen offers the next trial, the next gauntlet when the gatekeeper falls, a retry, or a return to the gauntlet.
 
 ## Live Gameplay
 
@@ -93,7 +126,7 @@ Every operator is evaluated with a 50-significant-digit decimal engine, not with
 
 By default every number in the game shows up to five decimal places. During gameplay the score sidebar has a **DECIMALS** slider from 0 to 32: moving it reformats the target, every card-group header, the equation ribbon and the final result live, up to 32 decimal places (the engine keeps 50 significant digits internally). The last position reads `ALL 32`. The setting is kept on the device between sessions, and a reset control returns to five.
 
-The deterministic daily/weekly search uses fast double probes for the thousands of candidate trees it tests; only the chosen reference board is rebuilt through the exact decimal engine before it becomes the puzzle. Puzzles still require integer targets, so their acceptance is exact.
+The deterministic calendar and dungeon search uses fast double probes for the thousands of candidate trees it tests; only the chosen reference board is rebuilt through the exact decimal engine before it becomes the puzzle. Puzzles still require integer targets, so their acceptance is exact.
 
 ### Round End
 

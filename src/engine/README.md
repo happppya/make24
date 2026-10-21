@@ -12,7 +12,8 @@ and in the table server. If a rule changes, it changes here — the spec in
 | [approxMath.ts](approxMath.ts) | Fast double probes used only by deterministic puzzle search; the winning tree is rebuilt exactly |
 | [deck.ts](deck.ts) | Deck pools, sprite paths, dealing a hand, generating the round target |
 | [binds.ts](binds.ts) | Automatic opening binds: Dragon runs, Rook copies, products and per-kind card ranges and caps |
-| [puzzles.ts](puzzles.ts) | Deterministic daily/weekly periods, names, generated hands/targets, reference solutions and attempt validation |
+| [puzzles.ts](puzzles.ts) | The seven difficulty tiers, deterministic hourly, two daily and weekly periods, recipe cabinet, generated hands/targets, reference solutions and attempt validation |
+| [dungeon.ts](dungeon.ts) | The fixed dungeon campaign: seven themed gauntlets, their trials, generation and pure unlock/progress helpers |
 | [constants.ts](constants.ts) | The forty famous constants used by the constants target mode: values, symbols, and the line explaining each one |
 | [workspace.ts](workspace.ts) | The five workspaces: groups, positions, selection, merging, ungroup, undo/redo, tidy |
 
@@ -26,9 +27,10 @@ Things worth knowing before editing:
 - `src/engine/puzzles.ts` is shared by the browser and the table server: the
   same UTC period must produce the same hand, target and rules on both sides.
   `createPuzzle()` builds a valid all-cards expression first and uses its value
-  as the target; `validatePuzzleAttempt()` replays a submitted board against the
-  hand, checks enabled operators, recomputes the score and is the only scoring
-  path for boards.
+  as the target; `createDungeonPuzzle()` runs the same generator from a fixed
+  gauntlet/trial seed. `validatePuzzleAttempt()` replays a submitted board
+  against the hand, checks enabled operators, recomputes the score and is the
+  only scoring path for boards.
 - Every evaluator returns an `EvalResult` with `ok: false` and a message instead
   of throwing or returning `NaN`, so an illegal board can be reported in the UI.
   On success `exactValue` is the canonical 50-digit decimal string; `value` is
@@ -48,5 +50,6 @@ Things worth knowing before editing:
   from constants (`DEFAULT_CARDS_PER_ROW`, spacing, centre) rather than from the
   DOM, so the same state renders at any screen size.
 
-Covered by [../setup.test.ts](../setup.test.ts), [decimal.test.ts](decimal.test.ts)
-and [puzzles.test.ts](puzzles.test.ts); run them with `npm run test`.
+Covered by [../setup.test.ts](../setup.test.ts), [decimal.test.ts](decimal.test.ts),
+[puzzles.test.ts](puzzles.test.ts) and [dungeon.test.ts](dungeon.test.ts); run
+them with `npm run test`.

@@ -9,6 +9,8 @@ import `useGame` or talk to the server.
 | [CardGroupNode.vue](CardGroupNode.vue) | One board piece, recursive: a card, or a merged group showing its equation header |
 | [ScorePanel.vue](ScorePanel.vue) | Left HUD: target, live value, error band, score and the per-source cost breakdown |
 | [LobbyFrame.vue](LobbyFrame.vue) | The chrome both lobby screens share: marquee header, back button, page frame |
+| [DifficultyChip.vue](DifficultyChip.vue) | The shared seven-tier difficulty badge used by calendar, dungeon and result screens |
+| [PuzzleCadenceCard.vue](PuzzleCadenceCard.vue) | One calendar board card: tier, reset clock, target, rules, top three and play button |
 | [TutorialOverlay.vue](TutorialOverlay.vue) | The player's guide, opened from the title screen |
 | [TutorialShot.vue](TutorialShot.vue) | An annotated screenshot: image, numbered pins and legend |
 | [screens/](screens) | One component per game phase (see its README) |

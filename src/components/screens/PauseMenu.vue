@@ -1,10 +1,13 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { useGameContext } from '../../app/context'
+import { PUZZLE_KIND_LABELS, puzzleDifficultyMeta } from '../../engine/puzzles'
 
 const {
   phase,
   settings,
   activePuzzle,
+  lastResult,
   menuOpen,
   closeMenu,
   menuGoToLobby,
@@ -12,6 +15,33 @@ const {
   sfxOn,
   onToggleSfx,
 } = useGameContext()
+
+const badge = computed(() => {
+  if (phase.value === 'title') return 'START SCREEN'
+  if (phase.value === 'dungeon' || phase.value === 'dungeon-gauntlet') return 'THE DUNGEON'
+  if (phase.value === 'puzzles') return 'PUZZLES'
+  const puzzle = activePuzzle.value
+  if (puzzle) {
+    const kind = puzzle.kind === 'dungeon' ? 'DUNGEON TRIAL' : PUZZLE_KIND_LABELS[puzzle.kind]
+    return `${kind} · ${puzzleDifficultyMeta(puzzle.difficulty).label}`
+  }
+  return settings.isMultiplayer ? 'MULTIPLAYER' : 'SINGLEPLAYER'
+})
+
+const backLabel = computed(() => {
+  const puzzle = activePuzzle.value
+  if (!puzzle) return 'Lobby & Settings'
+  if (puzzle.kind !== 'dungeon') return 'Back to Puzzles'
+  return lastResult.value?.dungeon ? 'Back to Gauntlet' : 'Leave Trial'
+})
+
+const backDisabled = computed(
+  () =>
+    phase.value === 'lobby' ||
+    phase.value === 'puzzles' ||
+    phase.value === 'dungeon' ||
+    phase.value === 'dungeon-gauntlet'
+)
 </script>
 
 <template>
@@ -26,18 +56,7 @@ const {
 >
   <div class="pause-card">
     <div class="pause-card__marquee">
-      <span class="pause-card__badge">          {{
-            phase === 'title'
-              ? 'START SCREEN'
-              : activePuzzle
-                ? activePuzzle.kind === 'daily'
-                  ? 'DAILY PUZZLE'
-                  : 'WEEKLY PUZZLE'
-                : settings.isMultiplayer
-                  ? 'MULTIPLAYER'
-                  : 'SINGLEPLAYER'
-          }}
-      </span>
+      <span class="pause-card__badge">{{ badge }}</span>
       <span class="pause-card__title">MENU</span>
     </div>
 
@@ -54,10 +73,10 @@ const {
         type="button"
         class="btn-arcade btn-arcade--block"
         data-testid="menu-lobby"
-        :disabled="phase === 'lobby' || phase === 'puzzles'"
+        :disabled="backDisabled"
         @click="menuGoToLobby"
       >
-        {{ activePuzzle ? 'Back to Puzzles' : 'Lobby & Settings' }}
+        {{ backLabel }}
       </button>
       <button
         type="button"

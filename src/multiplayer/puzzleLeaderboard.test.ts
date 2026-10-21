@@ -116,6 +116,32 @@ describe('puzzle leaderboard HTTP API', () => {
     expect(await health.json()).toMatchObject({ ok: true, puzzles: 1 })
   })
 
+  it('serves hourly and second-daily boards through the same API', async () => {
+    const hourly = createPuzzle('hourly', new Date(NOW))
+    const secondDaily = createPuzzle('daily-2', new Date(NOW))
+    server = await createMultiplayerServer({
+      port: 0,
+      now: () => NOW,
+      puzzleLeaderboardPath: tempFile(),
+    })
+    const base = `http://127.0.0.1:${server.port}`
+
+    for (const [kind, puzzle] of [
+      ['hourly', hourly],
+      ['daily-2', secondDaily],
+    ] as const) {
+      const attempt = validatePuzzleAttempt(puzzle, puzzle.referenceSolution)
+      expect(attempt.ok).toBe(true)
+      const response = await fetch(`${base}/puzzles/${kind}/${puzzle.key}/leaderboard`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ playerName: 'Ada', expression: puzzle.referenceSolution }),
+      })
+      expect(response.status).toBe(200)
+      expect(await response.json()).toMatchObject({ rank: 1 })
+    }
+  })
+
   it('rejects stale puzzle keys and boards that do not use every card', async () => {
     const puzzle = createPuzzle('daily', new Date(NOW))
     server = await createMultiplayerServer({

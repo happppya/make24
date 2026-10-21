@@ -24,8 +24,8 @@ import {
   createPuzzle,
   puzzlePeriod,
   validatePuzzleAttempt,
+  type PeriodicPuzzleKind,
   type PuzzleDefinition,
-  type PuzzleKind,
 } from '../src/engine/puzzles'
 import { PuzzleLeaderboardStore, normalizePlayerName } from './puzzleLeaderboard'
 
@@ -49,7 +49,7 @@ export interface ServerOptions {
   heartbeatMs?: number
   maxRooms?: number
   log?: (line: string) => void
-  /** JSON file for daily/weekly boards; null/omitted keeps them in memory. */
+  /** JSON file for calendar puzzle boards; null keeps them in memory. */
   puzzleLeaderboardPath?: string | null
   /** Injectable clock so puzzle HTTP tests can pin a UTC period. */
   now?: () => number
@@ -143,7 +143,7 @@ export async function createMultiplayerServer(options: ServerOptions = {}): Prom
   }
 
   /** The current period's puzzle, cached by kind + key. */
-  function currentPuzzle(kind: PuzzleKind, key: string): PuzzleDefinition | null {
+  function currentPuzzle(kind: PeriodicPuzzleKind, key: string): PuzzleDefinition | null {
     const currentKey = puzzlePeriod(kind, new Date(now())).key
     if (currentKey !== key) return null
     const cacheKey = `${kind}:${key}`
@@ -157,7 +157,7 @@ export async function createMultiplayerServer(options: ServerOptions = {}): Prom
   async function handlePuzzleHttp(
     req: IncomingMessage,
     res: import('node:http').ServerResponse,
-    kind: PuzzleKind,
+    kind: PeriodicPuzzleKind,
     key: string
   ): Promise<void> {
     const boardKey = `${kind}:${key}`
@@ -234,14 +234,14 @@ export async function createMultiplayerServer(options: ServerOptions = {}): Prom
     }
 
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`)
-    const puzzleMatch = /^\/puzzles\/(daily|weekly)\/([^/]+)\/leaderboard$/.exec(
+    const puzzleMatch = /^\/puzzles\/(hourly|daily|daily-2|weekly)\/([^/]+)\/leaderboard$/.exec(
       url.pathname
     )
     if (puzzleMatch) {
       void handlePuzzleHttp(
         req,
         res,
-        puzzleMatch[1] as PuzzleKind,
+        puzzleMatch[1] as PeriodicPuzzleKind,
         decodeURIComponent(puzzleMatch[2]!)
       ).catch((error) => {
         log(`puzzle request failed: ${error instanceof Error ? error.message : String(error)}`)

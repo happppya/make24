@@ -199,6 +199,10 @@ export function useGame() {
     puzzles.openPuzzleHub()
   }
 
+  function goToDungeon(): void {
+    puzzles.openDungeon()
+  }
+
   function enterLobby(isMultiplayer: boolean): void {
     closeTargetPrompt()
     settings.isMultiplayer = isMultiplayer
@@ -472,7 +476,7 @@ export function useGame() {
 
   onBeforeUnmount(() => {
     match.stopDeadlineClock()
-    puzzles.stopPolling()
+    puzzles.dispose()
     leaveRoom()
     disposeJuice()
     disposeRoom()
@@ -508,6 +512,7 @@ export function useGame() {
     goToTitle,
     goToLobby,
     goToPuzzles,
+    goToDungeon,
     enterLobby,
     playAgainFromGameOver,
     startMatchFromLobby,

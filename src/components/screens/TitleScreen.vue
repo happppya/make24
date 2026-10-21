@@ -7,6 +7,7 @@ const {
   tutorialOpen,
   enterLobby,
   goToPuzzles,
+  goToDungeon,
   openTutorial,
   tutorialTriggerRef,
 } = useGameContext()
@@ -78,18 +79,36 @@ void tutorialTriggerRef
       </button>
     </div>
 
-    <button
-      type="button"
-      class="title-puzzles"
-      data-testid="open-puzzles"
-      @click="goToPuzzles"
-    >
-      <span class="title-puzzles__sigil" aria-hidden="true">◆</span>
-      <span class="title-puzzles__body">
-        <span class="title-puzzles__title">PUZZLES</span>
-      </span>
-      <span class="title-puzzles__arrow" aria-hidden="true">▸</span>
-    </button>
+    <div class="title-entries">
+      <button
+        type="button"
+        class="title-puzzles"
+        data-testid="open-puzzles"
+        @click="goToPuzzles"
+      >
+        <span class="title-puzzles__sigil" aria-hidden="true">◆</span>
+        <span class="title-puzzles__body">
+          <span class="title-puzzles__title">PUZZLES</span>
+          <span class="title-puzzles__copy">Hourly · 2 daily · weekly</span>
+        </span>
+        <span class="title-puzzles__arrow" aria-hidden="true">▸</span>
+      </button>
+
+      <button
+        type="button"
+        class="title-puzzles title-puzzles--dungeon"
+        aria-label="The Dungeon"
+        data-testid="open-dungeon"
+        @click="goToDungeon"
+      >
+        <span class="title-puzzles__sigil" aria-hidden="true">♜</span>
+        <span class="title-puzzles__body">
+          <span class="title-puzzles__title">THE DUNGEON</span>
+          <span class="title-puzzles__copy">7 gauntlets · 42 trials</span>
+        </span>
+        <span class="title-puzzles__arrow" aria-hidden="true">▸</span>
+      </button>
+    </div>
 
     <button
       ref="tutorialTriggerRef"
@@ -320,13 +339,20 @@ void tutorialTriggerRef
   transition: translate 0.16s ease;
 }
 
-/* Puzzle entry: a wide banner under the two mode slabs, with its own cadence. */
+/* Puzzle entries: two cadence banners under the mode slabs. */
+.title-entries {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  width: min(860px, 100%);
+}
+
 .title-puzzles {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: 14px;
-  width: min(860px, 100%);
+  gap: 12px;
+  width: 100%;
   padding: 12px 18px;
   text-align: left;
   background:
@@ -363,7 +389,9 @@ void tutorialTriggerRef
 
 .title-puzzles__body {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
   min-width: 0;
 }
 
@@ -372,6 +400,14 @@ void tutorialTriggerRef
   font-size: 0.85rem;
   letter-spacing: 0.06em;
   color: var(--gold-bright);
+  white-space: nowrap;
+}
+
+.title-puzzles__copy {
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  line-height: 1.2;
+  color: var(--ink-muted);
   white-space: nowrap;
 }
 
@@ -384,6 +420,32 @@ void tutorialTriggerRef
 .title-puzzles:hover .title-puzzles__arrow,
 .title-puzzles:focus-visible .title-puzzles__arrow {
   translate: 4px 0;
+}
+
+/* Dungeon entry: the same slab with a crimson, gate-side palette. */
+.title-puzzles--dungeon {
+  background:
+    linear-gradient(90deg, rgba(254, 74, 73, 0.14), transparent 48%),
+    linear-gradient(180deg, #2b1a2d 0%, #150f1d 100%);
+  border-color: rgba(254, 74, 73, 0.7);
+}
+
+.title-puzzles--dungeon:hover,
+.title-puzzles--dungeon:focus-visible {
+  border-color: #ff8fa3;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 12px 0 #09080f,
+    0 0 25px rgba(254, 74, 73, 0.28);
+}
+
+.title-puzzles--dungeon .title-puzzles__sigil,
+.title-puzzles--dungeon .title-puzzles__arrow {
+  color: #ff8fa3;
+}
+
+.title-puzzles--dungeon .title-puzzles__title {
+  color: #ffc2ca;
 }
 
 /* Tutorial entry: a slim manual tab under the puzzle banner */
@@ -489,13 +551,20 @@ void tutorialTriggerRef
     .mode-btn {
       padding: 14px 16px;
     }
+    .title-entries {
+      grid-template-columns: 1fr;
+      width: min(420px, 100%);
+    }
     .title-puzzles {
       padding: 10px 12px;
     }
     .title-puzzles__body {
       flex-direction: column;
       align-items: flex-start;
-      gap: 4px;
+      gap: 3px;
+    }
+    .title-puzzles__copy {
+      font-size: 0.72rem;
     }
     .hero-heading {
       flex-direction: column;

@@ -1,36 +1,70 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { useGameContext } from '../../app/context'
 import { formatNumber } from '../../engine/math'
+import { PUZZLE_KIND_LABELS, puzzleDifficultyMeta } from '../../engine/puzzles'
 
 const {
   activePuzzle,
+  activeGauntlet,
   activeTopThree,
   activeStatus,
+  gauntletProgress,
   missingCards,
   canSubmit,
   puzzleSubmitError,
   submitting,
 } = useGameContext()
+
+const badgeLabel = computed(() => {
+  const puzzle = activePuzzle.value
+  if (!puzzle) return ''
+  const kind = puzzle.kind === 'dungeon' ? 'DUNGEON' : PUZZLE_KIND_LABELS[puzzle.kind]
+  return `${kind} · ${puzzleDifficultyMeta(puzzle.difficulty).label}`
+})
+
+const subLabel = computed(() => {
+  const puzzle = activePuzzle.value
+  if (!puzzle) return ''
+  if (puzzle.dungeon) {
+    return `Trial ${puzzle.dungeon.trialNumber} of ${puzzle.dungeon.trialCount} · use all ${puzzle.settings.numCards} cards`
+  }
+  return `${puzzle.key} · use all ${puzzle.settings.numCards} cards`
+})
+
+const dungeonCleared = computed(() =>
+  activeGauntlet.value ? gauntletProgress(activeGauntlet.value) : 0
+)
 </script>
 
 <template>
   <section v-if="activePuzzle" class="puzzle-play-header" data-testid="puzzle-play-header">
     <div class="puzzle-play-header__identity">
-      <span class="puzzle-play-header__badge">
-        {{ activePuzzle.kind === 'daily' ? 'DAILY · MEDIUM' : 'WEEKLY · EXTREME' }}
-      </span>
+      <span class="puzzle-play-header__badge">{{ badgeLabel }}</span>
       <div>
         <strong>{{ activePuzzle.name }}</strong>
-        <span class="puzzle-play-header__sub">
-          {{ activePuzzle.key }} · use all {{ activePuzzle.settings.numCards }} cards
-        </span>
+        <span class="puzzle-play-header__sub">{{ subLabel }}</span>
         <span v-if="activePuzzle.bindLabels.length" class="puzzle-play-header__binds">
           Binds: {{ activePuzzle.bindLabels.join(' · ') }}
         </span>
       </div>
     </div>
 
-    <div class="puzzle-play-header__board" aria-label="Top three puzzle scores">
+    <div
+      v-if="activePuzzle.kind === 'dungeon'"
+      class="puzzle-play-header__board"
+      aria-label="Gauntlet progress"
+    >
+      <span class="puzzle-play-header__board-title">
+        GAUNTLET
+        <em>{{ activePuzzle.dungeon?.gauntletName }}</em>
+      </span>
+      <span class="puzzle-play-header__dungeon">
+        {{ dungeonCleared }} / {{ activePuzzle.dungeon?.trialCount }} trials cleared
+      </span>
+    </div>
+
+    <div v-else class="puzzle-play-header__board" aria-label="Top three puzzle scores">
       <span class="puzzle-play-header__board-title">
         TOP 3
         <em>{{ activeStatus === 'online' ? 'shared' : activeStatus === 'local' ? 'local' : 'reading' }}</em>
@@ -183,6 +217,12 @@ const {
   font-family: var(--font-mono);
   font-size: 0.82rem;
   color: var(--ink-muted);
+}
+
+.puzzle-play-header__dungeon {
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  color: var(--ink-cream);
 }
 
 .puzzle-play-header__state {

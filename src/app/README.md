@@ -11,8 +11,9 @@ the merged result so any screen can inject it with `useGameContext()` from
 | [useMatch.ts](useMatch.ts) | Round state: hand, target, workspaces, local leaderboard, server room mirror, round clock |
 | [useStandings.ts](useStandings.ts) | View models for seats, round winners and the series winner |
 | [useRoom.ts](useRoom.ts) | Lobby browser, create/join/leave, ready-up, host settings sync |
-| [usePuzzles.ts](usePuzzles.ts) | Daily/weekly hub, puzzle run lifecycle, shared/local leaderboards, submission |
+| [usePuzzles.ts](usePuzzles.ts) | Hourly, two daily and weekly hub, dungeon map and gauntlet navigation, run lifecycle, boards, submission and progress |
 | [puzzleBoards.ts](puzzleBoards.ts) | Puzzle HTTP endpoints, local score storage, name persistence |
+| [dungeonProgress.ts](dungeonProgress.ts) | Device-local dungeon clears and best scores |
 | [useJuice.ts](useJuice.ts) | Sound, screen shake, floating cues, bobbing pieces, camera glide, felt particle bursts |
 | [particles.ts](particles.ts) | Seeded pixel-burst maths for merges, splits, operators, errors and target hits |
 | [useBoardGestures.ts](useBoardGestures.ts) | Dragging pieces, panning the felt, tidy and recenter |

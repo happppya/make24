@@ -54,7 +54,7 @@ export function useMatch(deps: {
   /** Canonical target value; constants carry more digits than the number mirror. */
   const currentTargetExact = ref('24')
   const currentConstant = ref<ConstantInfo | null>(null)
-  /** A daily/weekly run has its own submission screen, not round-end flow. */
+  /** A puzzle run has its own submission screen, not round-end flow. */
   const puzzleMode = ref(false)
   const currentHand = ref<Card[]>([])
   const workspaces = ref<WorkspaceState[]>([])
@@ -161,7 +161,7 @@ export function useMatch(deps: {
     phase.value = 'lobby'
   }
 
-  /** Deals a fixed daily/weekly hand; the puzzle screen owns submission. */
+  /** Deals a fixed puzzle hand; the puzzle screen owns submission. */
   function startPuzzleRound(puzzle: PuzzleDefinition): void {
     puzzleMode.value = true
     stopDeadlineClock()

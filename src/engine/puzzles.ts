@@ -33,8 +33,58 @@ import type {
   UnaryOperator,
 } from './types'
 
-export type PuzzleKind = 'daily' | 'weekly'
-export type PuzzleDifficulty = 'medium' | 'extreme'
+/** Calendar puzzles; `dungeon` is a fixed trial from the dungeon campaign. */
+export type PuzzleKind = 'hourly' | 'daily' | 'daily-2' | 'weekly' | 'dungeon'
+/** Calendar puzzles share one period-driven generator. */
+export type PeriodicPuzzleKind = Exclude<PuzzleKind, 'dungeon'>
+
+export type PuzzleDifficulty =
+  | 'easy'
+  | 'medium'
+  | 'hard'
+  | 'expert'
+  | 'extreme'
+  | 'confounding'
+  | 'impossible'
+
+export interface PuzzleDifficultyMeta {
+  id: PuzzleDifficulty
+  label: string
+  /** Higher is harder; the dungeon ramp and tests use this. */
+  rank: number
+  accent: string
+  blurb: string
+}
+
+/** The seven-step ladder every puzzle is ranked on, easiest first. */
+export const PUZZLE_DIFFICULTIES: PuzzleDifficultyMeta[] = [
+  { id: 'easy', label: 'EASY', rank: 0, accent: '#6fd68a', blurb: 'A loose hand and room to breathe.' },
+  { id: 'medium', label: 'MEDIUM', rank: 1, accent: '#72efdd', blurb: 'Powers and factorials join the table.' },
+  { id: 'hard', label: 'HARD', rank: 2, accent: '#ffbe0b', blurb: 'More cards, narrower routes, real detours.' },
+  { id: 'expert', label: 'EXPERT', rank: 3, accent: '#ff9daa', blurb: 'Most of the cabinet, and it expects fluency.' },
+  { id: 'extreme', label: 'EXTREME', rank: 4, accent: '#fe4a49', blurb: 'Seven cards or more, targets in the millions.' },
+  { id: 'confounding', label: 'CONFOUNDING', rank: 5, accent: '#c77dff', blurb: 'Every shortcut is priced and the hand is hostile.' },
+  { id: 'impossible', label: 'IMPOSSIBLE', rank: 6, accent: '#ff4fd8', blurb: 'Solvable. Barely. Bring a plan and a pencil.' },
+]
+
+const DIFFICULTY_BY_ID = new Map(PUZZLE_DIFFICULTIES.map((entry) => [entry.id, entry]))
+
+export function puzzleDifficultyMeta(id: PuzzleDifficulty): PuzzleDifficultyMeta {
+  return DIFFICULTY_BY_ID.get(id) ?? PUZZLE_DIFFICULTIES[0]!
+}
+
+export function difficultyRank(id: PuzzleDifficulty): number {
+  return puzzleDifficultyMeta(id).rank
+}
+
+/** Short labels for badges, e.g. `HOURLY` / `DAILY I` / `WEEKLY`. */
+export const PUZZLE_KIND_LABELS: Record<PuzzleKind, string> = {
+  hourly: 'HOURLY',
+  daily: 'DAILY I',
+  'daily-2': 'DAILY II',
+  weekly: 'WEEKLY',
+  dungeon: 'DUNGEON',
+}
 
 export interface PuzzlePeriod {
   key: string
@@ -48,6 +98,8 @@ export interface PuzzleDefinition {
   name: string
   difficulty: PuzzleDifficulty
   difficultyNote: string
+  /** Recipe that shaped the hand, useful for previews and debugging. */
+  recipeId: string
   startsAt: number
   endsAt: number
   target: number
@@ -60,6 +112,15 @@ export interface PuzzleDefinition {
   operatorGroupLabels: string[]
   /** Enabled opening binds, e.g. `Dragon 3–6 ×2` / `Rook 2 ×1`. */
   bindLabels: string[]
+  /** Present only on dungeon trials. */
+  dungeon?: {
+    gauntletId: string
+    gauntletName: string
+    trialId: string
+    /** 1-based position in the gauntlet. */
+    trialNumber: number
+    trialCount: number
+  }
   /**
    * A deterministic solution generated alongside the target. It is used to
    * prove the puzzle is playable and is never shown by the UI before submission.
@@ -86,8 +147,10 @@ export type PuzzleAttempt =
     }
   | { ok: false; error: string }
 
-interface PuzzleRecipe {
+export interface PuzzleRecipe {
+  id: string
   label: string
+  difficulty: PuzzleDifficulty
   note: string
   groups: OperatorCategory[]
   cardPools: CardPoolMode[]
@@ -105,6 +168,7 @@ interface PuzzleRecipe {
   requireBind?: boolean
 }
 
+const HOUR_MS = 3_600_000
 const DAY_MS = 86_400_000
 const WEEK_MS = 7 * DAY_MS
 
@@ -182,62 +246,177 @@ const MAX_TARGET_MAGNITUDE = 1e9
 const MAX_HAND_ATTEMPTS = 14
 const MAX_EXPRESSION_ATTEMPTS = 28
 
-const DAILY_RECIPES: PuzzleRecipe[] = [
+const ALL_OPERATOR_GROUPS: OperatorCategory[] = [
+  'basic',
+  'powers',
+  'factorial',
+  'trig',
+  'inverse',
+  'computing',
+  'concat',
+  'analysis',
+  'combinatorics',
+]
+
+/** Defaults shared by every recipe; each recipe overrides what it needs. */
+const RECIPE_DEFAULTS = {
+  approximationPercent: 0,
+  scoringMode: 'cost-first' as SolutionScoringMode,
+  forbiddenMoves: { ...DEFAULT_FORBIDDEN_MOVES },
+  forbiddenMovePenalty: DEFAULT_FORBIDDEN_MOVE_PENALTY,
+}
+
+/** Compact bind rule builder: `[min, max, perDeal]`, or false for off. */
+function bindRules(
+  dragon: false | [number, number, number],
+  rook: false | [number, number, number]
+): BindRulesConfig {
+  const rules = createDefaultBindRules()
+  if (dragon) {
+    rules.dragon = { enabled: true, minCards: dragon[0], maxCards: dragon[1], maxPerDeal: dragon[2] }
+  }
+  if (rook) {
+    rules.rook = { enabled: true, minCards: rook[0], maxCards: rook[1], maxPerDeal: rook[2] }
+  }
+  return rules
+}
+
+/**
+ * The full recipe cabinet. A recipe fixes the operator families, hand size,
+ * target band and penalties for one puzzle; difficulty only decides which pool
+ * the calendar draws from. Dungeon trials name their recipe directly.
+ */
+const RECIPES: PuzzleRecipe[] = [
+  /* ---------------------------------- easy ---------------------------------- */
   {
+    ...RECIPE_DEFAULTS,
+    id: 'easy-first-light',
+    label: 'First light',
+    difficulty: 'easy',
+    note: 'Three or four loose cards and plain arithmetic. The door is open.',
+    groups: ['basic'],
+    cardPools: ['1-deck', 'unlimited'],
+    cardCounts: [3, 4],
+    targetMin: 8,
+    targetMax: 80,
+    minOperators: 2,
+  },
+  {
+    ...RECIPE_DEFAULTS,
+    id: 'easy-small-change',
+    label: 'Small change',
+    difficulty: 'easy',
+    note: 'A short hand where one root or power opens the obvious route.',
+    groups: ['basic', 'powers'],
+    cardPools: ['1-deck'],
+    cardCounts: [3, 4],
+    targetMin: 12,
+    targetMax: 200,
+    minOperators: 2,
+  },
+  {
+    ...RECIPE_DEFAULTS,
+    id: 'easy-short-hand',
+    label: 'Short hand',
+    difficulty: 'easy',
+    note: 'Four cards, a reciprocal to spare and nothing too spiky.',
+    groups: ['basic', 'powers', 'inverse'],
+    cardPools: ['1-deck'],
+    cardCounts: [4],
+    targetMin: 16,
+    targetMax: 240,
+    minOperators: 2,
+  },
+  {
+    ...RECIPE_DEFAULTS,
+    id: 'easy-factorial',
+    label: 'Small factorials',
+    difficulty: 'easy',
+    note: 'A small hand with a licence to grow it fast.',
+    groups: ['basic', 'powers', 'factorial'],
+    cardPools: ['1-deck', '2-decks'],
+    cardCounts: [3, 4],
+    targetMin: 24,
+    targetMax: 1_000,
+    minOperators: 2,
+  },
+  {
+    ...RECIPE_DEFAULTS,
+    id: 'easy-signal',
+    label: 'Bits and digits',
+    difficulty: 'easy',
+    note: 'Whole-number tricks only: shifts, bitwise gates and digit joins.',
+    groups: ['basic', 'computing', 'concat'],
+    cardPools: ['1-deck'],
+    cardCounts: [3, 4],
+    targetMin: 20,
+    targetMax: 500,
+    minOperators: 2,
+  },
+  {
+    ...RECIPE_DEFAULTS,
+    id: 'easy-observatory',
+    label: 'Moonrise',
+    difficulty: 'easy',
+    note: 'A gentle first look through trig and powers.',
+    groups: ['basic', 'powers', 'trig'],
+    cardPools: ['1-deck'],
+    cardCounts: [3, 4],
+    targetMin: 12,
+    targetMax: 360,
+    minOperators: 2,
+    disabledOperators: ['tan'],
+  },
+  {
+    ...RECIPE_DEFAULTS,
+    id: 'easy-combinatorics',
+    label: 'Pairs',
+    difficulty: 'easy',
+    note: 'Choose and arrange a small hand into a friendly target.',
+    groups: ['basic', 'powers', 'combinatorics'],
+    cardPools: ['1-deck'],
+    cardCounts: [3, 4],
+    targetMin: 10,
+    targetMax: 500,
+    minOperators: 2,
+  },
+
+  /* --------------------------------- medium --------------------------------- */
+  {
+    ...RECIPE_DEFAULTS,
+    id: 'medium-classic',
     label: 'Classic',
-    note: 'Four or five cards, clean arithmetic, one root or power to spare.',
+    difficulty: 'medium',
+    note: 'Four or five cards, clean arithmetic and a dragon at the deal.',
     groups: ['basic', 'powers', 'inverse'],
     cardPools: ['1-deck', 'unlimited'],
     cardCounts: [4, 5],
     targetMin: 20,
     targetMax: 2_000,
     minOperators: 3,
-    approximationPercent: 0,
-    scoringMode: 'cost-first',
-    forbiddenMoves: { ...DEFAULT_FORBIDDEN_MOVES },
-    forbiddenMovePenalty: DEFAULT_FORBIDDEN_MOVE_PENALTY,
-    binds: {
-      dragon: { enabled: true, minCards: 3, maxCards: 6, maxPerDeal: 1 },
-      rook: { enabled: false, minCards: 2, maxCards: 5, maxPerDeal: 1 },
-    },
+    binds: bindRules([3, 5, 1], false),
     requireBind: true,
   },
   {
+    ...RECIPE_DEFAULTS,
+    id: 'medium-factorials',
     label: 'Factorials',
-    note: 'A small hand with a licence to grow it fast.',
+    difficulty: 'medium',
+    note: 'A rook opens the deal; factorials close it.',
     groups: ['basic', 'powers', 'factorial'],
     cardPools: ['1-deck', '2-decks'],
     cardCounts: [4, 5],
     targetMin: 120,
     targetMax: 200_000,
     minOperators: 4,
-    approximationPercent: 0,
-    scoringMode: 'cost-first',
-    forbiddenMoves: { ...DEFAULT_FORBIDDEN_MOVES },
-    forbiddenMovePenalty: DEFAULT_FORBIDDEN_MOVE_PENALTY,
-    binds: {
-      dragon: { enabled: false, minCards: 3, maxCards: 6, maxPerDeal: 1 },
-      rook: { enabled: true, minCards: 2, maxCards: 5, maxPerDeal: 1 },
-    },
+    binds: bindRules(false, [2, 4, 1]),
     requireBind: true,
   },
   {
-    label: 'Analysis',
-    note: 'Exponential growth, logarithms and one reciprocal route.',
-    groups: ['basic', 'powers', 'analysis', 'inverse'],
-    cardPools: ['1-deck', 'unlimited'],
-    cardCounts: [4, 5],
-    targetMin: 10,
-    targetMax: 50_000,
-    minOperators: 4,
-    approximationPercent: 0,
-    scoringMode: 'balanced',
-    forbiddenMoves: { ...DEFAULT_FORBIDDEN_MOVES, oneToPower: false },
-    forbiddenMovePenalty: DEFAULT_FORBIDDEN_MOVE_PENALTY,
-    disabledOperators: ['tan'],
-  },
-  {
+    ...RECIPE_DEFAULTS,
+    id: 'medium-machine',
     label: 'Machine',
+    difficulty: 'medium',
     note: 'Build a number out of bits, shifts and digit joins.',
     groups: ['basic', 'computing', 'concat'],
     cardPools: ['1-deck', 'unlimited'],
@@ -245,75 +424,162 @@ const DAILY_RECIPES: PuzzleRecipe[] = [
     targetMin: 50,
     targetMax: 200_000,
     minOperators: 3,
-    approximationPercent: 0,
-    scoringMode: 'cost-first',
-    forbiddenMoves: { ...DEFAULT_FORBIDDEN_MOVES },
-    forbiddenMovePenalty: DEFAULT_FORBIDDEN_MOVE_PENALTY,
     disabledOperators: ['bitnot'],
-    binds: {
-      dragon: { enabled: true, minCards: 3, maxCards: 6, maxPerDeal: 1 },
-      rook: { enabled: false, minCards: 2, maxCards: 5, maxPerDeal: 1 },
-    },
+    binds: bindRules([3, 5, 1], false),
     requireBind: true,
   },
   {
+    ...RECIPE_DEFAULTS,
+    id: 'medium-observatory',
+    label: 'Observatory',
+    difficulty: 'medium',
+    note: 'Trig degrees, roots and one reciprocal route to the target.',
+    groups: ['basic', 'powers', 'trig', 'inverse'],
+    cardPools: ['1-deck'],
+    cardCounts: [4, 5],
+    targetMin: 30,
+    targetMax: 50_000,
+    minOperators: 3,
+    disabledOperators: ['tan'],
+    binds: bindRules([3, 5, 1], false),
+    requireBind: true,
+  },
+  {
+    ...RECIPE_DEFAULTS,
+    id: 'medium-combinatorics',
     label: 'Combinatorics',
+    difficulty: 'medium',
     note: 'Choose, arrange and derange the hand into a target.',
+    groups: ['basic', 'powers', 'combinatorics'],
+    cardPools: ['1-deck', '2-decks'],
+    cardCounts: [4, 5],
+    targetMin: 100,
+    targetMax: 100_000,
+    minOperators: 3,
+    disabledOperators: ['subfact'],
+    binds: bindRules(false, [2, 4, 1]),
+    requireBind: true,
+  },
+  {
+    ...RECIPE_DEFAULTS,
+    id: 'medium-foundry',
+    label: 'Foundry',
+    difficulty: 'medium',
+    note: 'Factorials and powers stacked on a rook, with a five-figure target.',
+    groups: ['basic', 'powers', 'factorial', 'inverse'],
+    cardPools: ['1-deck', '2-decks'],
+    cardCounts: [4, 5],
+    targetMin: 500,
+    targetMax: 500_000,
+    minOperators: 4,
+    binds: bindRules(false, [2, 4, 2]),
+    requireBind: true,
+  },
+
+  /* ---------------------------------- hard ---------------------------------- */
+  {
+    ...RECIPE_DEFAULTS,
+    id: 'hard-analysis',
+    label: 'Analysis',
+    difficulty: 'hard',
+    note: 'Exponential growth, logarithms and one reciprocal route.',
+    groups: ['basic', 'powers', 'analysis', 'inverse'],
+    cardPools: ['1-deck', 'unlimited'],
+    cardCounts: [4, 5],
+    targetMin: 10,
+    targetMax: 50_000,
+    minOperators: 4,
+    scoringMode: 'balanced',
+    forbiddenMoves: { ...DEFAULT_FORBIDDEN_MOVES, oneToPower: false },
+    disabledOperators: ['tan'],
+  },
+  {
+    ...RECIPE_DEFAULTS,
+    id: 'hard-combinatorics',
+    label: 'Herd logic',
+    difficulty: 'hard',
+    note: 'Two locked groups and every counting operator in the cabinet.',
     groups: ['basic', 'powers', 'factorial', 'combinatorics'],
     cardPools: ['1-deck', '2-decks'],
     cardCounts: [4, 5],
     targetMin: 100,
     targetMax: 500_000,
     minOperators: 4,
-    approximationPercent: 0,
     scoringMode: 'balanced',
-    forbiddenMoves: {
-      factorialInvgamma: false,
-      oneToPower: false,
-    },
-    forbiddenMovePenalty: DEFAULT_FORBIDDEN_MOVE_PENALTY,
+    forbiddenMoves: { factorialInvgamma: false, oneToPower: false },
     disabledOperators: ['subfact'],
-    binds: {
-      dragon: { enabled: true, minCards: 3, maxCards: 6, maxPerDeal: 2 },
-      rook: { enabled: true, minCards: 2, maxCards: 5, maxPerDeal: 2 },
-    },
+    binds: bindRules([3, 5, 2], [2, 4, 2]),
     requireBind: true,
   },
-]
-
-const WEEKLY_RECIPES: PuzzleRecipe[] = [
   {
-    label: 'The whole cabinet',
-    note: 'Every operator family is live. Seven or eight cards, no training wheels.',
-    groups: [
-      'basic',
-      'powers',
-      'factorial',
-      'trig',
-      'inverse',
-      'computing',
-      'concat',
-      'analysis',
-      'combinatorics',
-    ],
+    ...RECIPE_DEFAULTS,
+    id: 'hard-signal',
+    label: 'Relay',
+    difficulty: 'hard',
+    note: 'Five cards, a dragon, and targets that only whole numbers can reach.',
+    groups: ['basic', 'powers', 'computing', 'concat'],
     cardPools: ['1-deck', '2-decks'],
-    cardCounts: [7, 8],
-    targetMin: 10_000,
-    targetMax: 9_999_999,
-    minOperators: 9,
-    approximationPercent: 0,
-    scoringMode: 'accuracy-first',
-    forbiddenMoves: { factorialInvgamma: true, oneToPower: true },
-    forbiddenMovePenalty: 300,
-    disabledOperators: ['tan'],
-    binds: {
-      dragon: { enabled: true, minCards: 3, maxCards: 6, maxPerDeal: 3 },
-      rook: { enabled: true, minCards: 2, maxCards: 5, maxPerDeal: 3 },
-    },
+    cardCounts: [5],
+    targetMin: 100,
+    targetMax: 500_000,
+    minOperators: 4,
+    binds: bindRules([3, 5, 2], false),
     requireBind: true,
   },
   {
+    ...RECIPE_DEFAULTS,
+    id: 'hard-observatory',
+    label: 'Parallax',
+    difficulty: 'hard',
+    note: 'Trig and logarithms share the eyepiece. Mind the domain errors.',
+    groups: ['basic', 'powers', 'trig', 'inverse', 'analysis'],
+    cardPools: ['1-deck'],
+    cardCounts: [5],
+    targetMin: 100,
+    targetMax: 1_000_000,
+    minOperators: 4,
+    scoringMode: 'balanced',
+    disabledOperators: ['tan'],
+    binds: bindRules([3, 5, 1], false),
+    requireBind: true,
+  },
+  {
+    ...RECIPE_DEFAULTS,
+    id: 'hard-factorial',
+    label: 'Anvil hour',
+    difficulty: 'hard',
+    note: 'Five or six cards and enough factorial weight to bend the target.',
+    groups: ['basic', 'powers', 'factorial', 'combinatorics'],
+    cardPools: ['1-deck', '2-decks'],
+    cardCounts: [5, 6],
+    targetMin: 500,
+    targetMax: 1_000_000,
+    minOperators: 5,
+    binds: bindRules(false, [2, 4, 2]),
+    requireBind: true,
+  },
+  {
+    ...RECIPE_DEFAULTS,
+    id: 'hard-vault',
+    label: 'First lock',
+    difficulty: 'hard',
+    note: 'Every card starts welded into a bind. Work from the groups you are given.',
+    groups: ['basic', 'powers', 'factorial', 'computing', 'concat'],
+    cardPools: ['2-decks', '3-decks'],
+    cardCounts: [5, 6],
+    targetMin: 200,
+    targetMax: 1_000_000,
+    minOperators: 4,
+    binds: bindRules([3, 5, 2], [2, 4, 2]),
+    requireBind: true,
+  },
+
+  /* --------------------------------- expert --------------------------------- */
+  {
+    ...RECIPE_DEFAULTS,
+    id: 'expert-deep-end',
     label: 'Deep end',
+    difficulty: 'expert',
     note: 'Six or seven cards, exotic operators, and a target in the millions.',
     groups: [
       'basic',
@@ -329,19 +595,321 @@ const WEEKLY_RECIPES: PuzzleRecipe[] = [
     cardCounts: [6, 7],
     targetMin: 50_000,
     targetMax: 9_999_999,
-    minOperators: 8,
-    approximationPercent: 0,
+    minOperators: 7,
     scoringMode: 'accuracy-first',
     forbiddenMoves: { factorialInvgamma: true, oneToPower: false },
     forbiddenMovePenalty: 250,
     disabledOperators: ['gamma'],
-    binds: {
-      dragon: { enabled: true, minCards: 3, maxCards: 6, maxPerDeal: 2 },
-      rook: { enabled: true, minCards: 2, maxCards: 5, maxPerDeal: 2 },
-    },
+    binds: bindRules([3, 5, 2], [2, 4, 2]),
+    requireBind: true,
+  },
+  {
+    ...RECIPE_DEFAULTS,
+    id: 'expert-cabinet',
+    label: 'The whole cabinet',
+    difficulty: 'expert',
+    note: 'Every operator family is live. Six or seven cards, no training wheels.',
+    groups: ALL_OPERATOR_GROUPS,
+    cardPools: ['1-deck', '2-decks'],
+    cardCounts: [6, 7],
+    targetMin: 10_000,
+    targetMax: 9_999_999,
+    minOperators: 8,
+    scoringMode: 'accuracy-first',
+    forbiddenMoves: { factorialInvgamma: true, oneToPower: true },
+    forbiddenMovePenalty: 300,
+    disabledOperators: ['tan'],
+    binds: bindRules([3, 5, 3], [2, 4, 3]),
+    requireBind: true,
+  },
+  {
+    ...RECIPE_DEFAULTS,
+    id: 'expert-signal',
+    label: 'Long wire',
+    difficulty: 'expert',
+    note: 'Six cards of shifts, joins and logarithms, with two binds at the deal.',
+    groups: ['basic', 'powers', 'computing', 'concat', 'analysis'],
+    cardPools: ['2-decks', 'unlimited'],
+    cardCounts: [6],
+    targetMin: 5_000,
+    targetMax: 2_000_000,
+    minOperators: 6,
+    scoringMode: 'balanced',
+    binds: bindRules([3, 5, 2], [2, 4, 2]),
+    requireBind: true,
+  },
+  {
+    ...RECIPE_DEFAULTS,
+    id: 'expert-observatory',
+    label: 'Event horizon',
+    difficulty: 'expert',
+    note: 'Trig, analysis and factorials aimed at a seven-figure sky.',
+    groups: ['basic', 'powers', 'trig', 'inverse', 'analysis', 'factorial'],
+    cardPools: ['1-deck', 'unlimited'],
+    cardCounts: [6],
+    targetMin: 1_000,
+    targetMax: 2_000_000,
+    minOperators: 6,
+    scoringMode: 'balanced',
+    disabledOperators: ['tan'],
+    binds: bindRules([3, 5, 2], false),
+    requireBind: true,
+  },
+  {
+    ...RECIPE_DEFAULTS,
+    id: 'expert-menagerie',
+    label: 'Stirling cage',
+    difficulty: 'expert',
+    note: 'A rook of duplicates and every way to count them.',
+    groups: ['basic', 'powers', 'factorial', 'combinatorics', 'analysis'],
+    cardPools: ['2-decks', '3-decks'],
+    cardCounts: [6],
+    targetMin: 2_000,
+    targetMax: 2_000_000,
+    minOperators: 6,
+    disabledOperators: ['subfact'],
+    binds: bindRules(false, [2, 4, 2]),
+    requireBind: true,
+  },
+  {
+    ...RECIPE_DEFAULTS,
+    id: 'expert-vault',
+    label: 'The escapement',
+    difficulty: 'expert',
+    note: 'Six or seven cards welded into up to three opening groups.',
+    groups: ['basic', 'powers', 'factorial', 'computing', 'concat'],
+    cardPools: ['2-decks', '3-decks'],
+    cardCounts: [6, 7],
+    targetMin: 1_000,
+    targetMax: 2_000_000,
+    minOperators: 5,
+    forbiddenMoves: { factorialInvgamma: true, oneToPower: false },
+    forbiddenMovePenalty: 250,
+    binds: bindRules([3, 5, 3], [2, 4, 3]),
+    requireBind: true,
+  },
+
+  /* --------------------------------- extreme -------------------------------- */
+  {
+    ...RECIPE_DEFAULTS,
+    id: 'extreme-cabinet',
+    label: 'Pressure',
+    difficulty: 'extreme',
+    note: 'Seven cards, the whole cabinet, and a dragon and rook already fused.',
+    groups: ALL_OPERATOR_GROUPS,
+    cardPools: ['2-decks', '3-decks'],
+    cardCounts: [7],
+    targetMin: 100_000,
+    targetMax: 9_999_999,
+    minOperators: 8,
+    scoringMode: 'accuracy-first',
+    forbiddenMoves: { factorialInvgamma: true, oneToPower: true },
+    forbiddenMovePenalty: 300,
+    disabledOperators: ['tan'],
+    binds: bindRules([3, 5, 3], [2, 4, 3]),
+    requireBind: true,
+  },
+  {
+    ...RECIPE_DEFAULTS,
+    id: 'extreme-abyss',
+    label: 'Black tide',
+    difficulty: 'extreme',
+    note: 'Eight cards. Every family. Both forbidden shortcuts are live and expensive.',
+    groups: ALL_OPERATOR_GROUPS,
+    cardPools: ['2-decks', '3-decks', 'unlimited'],
+    cardCounts: [8],
+    targetMin: 500_000,
+    targetMax: 9_999_999,
+    minOperators: 9,
+    scoringMode: 'accuracy-first',
+    forbiddenMoves: { factorialInvgamma: true, oneToPower: true },
+    forbiddenMovePenalty: 300,
+    binds: bindRules([3, 5, 3], [2, 4, 3]),
+    requireBind: true,
+  },
+  {
+    ...RECIPE_DEFAULTS,
+    id: 'extreme-observatory',
+    label: 'The quiet sky',
+    difficulty: 'extreme',
+    note: 'Seven cards aimed by trig, analysis and counting operators.',
+    groups: ['basic', 'powers', 'trig', 'inverse', 'analysis', 'combinatorics'],
+    cardPools: ['2-decks', 'unlimited'],
+    cardCounts: [7],
+    targetMin: 100_000,
+    targetMax: 5_000_000,
+    minOperators: 8,
+    scoringMode: 'accuracy-first',
+    forbiddenMoves: { factorialInvgamma: true, oneToPower: false },
+    forbiddenMovePenalty: 250,
+    disabledOperators: ['tan'],
+    binds: bindRules([3, 5, 2], [2, 4, 2]),
+    requireBind: true,
+  },
+  {
+    ...RECIPE_DEFAULTS,
+    id: 'extreme-signal',
+    label: 'Dead channel',
+    difficulty: 'extreme',
+    note: 'Seven cards of bits, joins and logarithms. Whole numbers or nothing.',
+    groups: ['basic', 'powers', 'computing', 'concat', 'analysis'],
+    cardPools: ['2-decks', '3-decks'],
+    cardCounts: [7],
+    targetMin: 100_000,
+    targetMax: 5_000_000,
+    minOperators: 8,
+    scoringMode: 'accuracy-first',
+    forbiddenMoves: { factorialInvgamma: true, oneToPower: false },
+    forbiddenMovePenalty: 250,
+    binds: bindRules([3, 5, 2], [2, 4, 2]),
+    requireBind: true,
+  },
+  {
+    ...RECIPE_DEFAULTS,
+    id: 'extreme-vault',
+    label: 'Master key',
+    difficulty: 'extreme',
+    note: 'Up to four locked groups before you press a single operator.',
+    groups: ALL_OPERATOR_GROUPS,
+    cardPools: ['3-decks', 'unlimited'],
+    cardCounts: [7],
+    targetMin: 100_000,
+    targetMax: 5_000_000,
+    minOperators: 7,
+    scoringMode: 'accuracy-first',
+    forbiddenMoves: { factorialInvgamma: true, oneToPower: true },
+    forbiddenMovePenalty: 300,
+    binds: bindRules([3, 5, 4], [2, 4, 4]),
+    requireBind: true,
+  },
+  {
+    ...RECIPE_DEFAULTS,
+    id: 'extreme-menagerie',
+    label: 'Ringmaster',
+    difficulty: 'extreme',
+    note: 'Seven cards of arrangements, derangements and digit joins.',
+    groups: ['basic', 'powers', 'factorial', 'combinatorics', 'analysis', 'concat'],
+    cardPools: ['2-decks', '3-decks'],
+    cardCounts: [7],
+    targetMin: 50_000,
+    targetMax: 5_000_000,
+    minOperators: 8,
+    scoringMode: 'accuracy-first',
+    forbiddenMoves: { factorialInvgamma: true, oneToPower: false },
+    forbiddenMovePenalty: 250,
+    disabledOperators: ['subfact'],
+    binds: bindRules([3, 5, 3], [2, 4, 3]),
+    requireBind: true,
+  },
+
+  /* ------------------------------- confounding ------------------------------ */
+  {
+    ...RECIPE_DEFAULTS,
+    id: 'confounding-almanac',
+    label: 'Fractured almanac',
+    difficulty: 'confounding',
+    note: 'Eight cards, every operator, and both forbidden moves charging 400.',
+    groups: ALL_OPERATOR_GROUPS,
+    cardPools: ['2-decks', '3-decks', 'unlimited'],
+    cardCounts: [8],
+    targetMin: 1_000_000,
+    targetMax: 9_999_999,
+    minOperators: 9,
+    scoringMode: 'accuracy-first',
+    forbiddenMoves: { factorialInvgamma: true, oneToPower: true },
+    forbiddenMovePenalty: 400,
+    binds: bindRules([3, 5, 3], [2, 4, 3]),
+    requireBind: true,
+  },
+  {
+    ...RECIPE_DEFAULTS,
+    id: 'confounding-ninth',
+    label: 'The ninth door',
+    difficulty: 'confounding',
+    note: 'Eight or nine cards and a five-hundred-point toll on every shortcut.',
+    groups: ALL_OPERATOR_GROUPS,
+    cardPools: ['3-decks', 'unlimited'],
+    cardCounts: [8, 9],
+    targetMin: 2_000_000,
+    targetMax: 9_999_999,
+    minOperators: 10,
+    scoringMode: 'accuracy-first',
+    forbiddenMoves: { factorialInvgamma: true, oneToPower: true },
+    forbiddenMovePenalty: 500,
+    binds: bindRules([3, 5, 3], [2, 4, 3]),
+    requireBind: true,
+  },
+  {
+    ...RECIPE_DEFAULTS,
+    id: 'confounding-void',
+    label: 'Nothing answers',
+    difficulty: 'confounding',
+    note: 'Nine cards, four binds and a six-hundred-point penalty lurking in the dark.',
+    groups: ALL_OPERATOR_GROUPS,
+    cardPools: ['3-decks', 'unlimited'],
+    cardCounts: [9],
+    targetMin: 3_000_000,
+    targetMax: 9_999_999,
+    minOperators: 10,
+    scoringMode: 'accuracy-first',
+    forbiddenMoves: { factorialInvgamma: true, oneToPower: true },
+    forbiddenMovePenalty: 600,
+    binds: bindRules([3, 5, 4], [2, 4, 4]),
+    requireBind: true,
+  },
+
+  /* -------------------------------- impossible ------------------------------- */
+  {
+    ...RECIPE_DEFAULTS,
+    id: 'impossible-meridian',
+    label: 'Null meridian',
+    difficulty: 'impossible',
+    note: 'Nine cards, every operator, both binds capped at four and an 800-point toll.',
+    groups: ALL_OPERATOR_GROUPS,
+    cardPools: ['3-decks', 'unlimited'],
+    cardCounts: [9],
+    targetMin: 5_000_000,
+    targetMax: 9_999_999,
+    minOperators: 11,
+    scoringMode: 'accuracy-first',
+    forbiddenMoves: { factorialInvgamma: true, oneToPower: true },
+    forbiddenMovePenalty: 800,
+    binds: bindRules([3, 5, 4], [2, 4, 4]),
+    requireBind: true,
+  },
+  {
+    ...RECIPE_DEFAULTS,
+    id: 'impossible-echo',
+    label: 'Abyss eternal',
+    difficulty: 'impossible',
+    note: 'The last door: nine cards, every trap armed, and a four-figure penalty.',
+    groups: ALL_OPERATOR_GROUPS,
+    cardPools: ['3-decks', 'unlimited'],
+    cardCounts: [9],
+    targetMin: 3_000_000,
+    targetMax: 9_999_999,
+    minOperators: 11,
+    scoringMode: 'accuracy-first',
+    forbiddenMoves: { factorialInvgamma: true, oneToPower: true },
+    forbiddenMovePenalty: 1_000,
+    binds: bindRules([3, 5, 4], [2, 4, 4]),
     requireBind: true,
   },
 ]
+
+const RECIPE_BY_ID = new Map(RECIPES.map((recipe) => [recipe.id, recipe]))
+
+/** Recipes grouped by the difficulty their calendar slot draws from. */
+const RECIPES_BY_DIFFICULTY = new Map<PuzzleDifficulty, PuzzleRecipe[]>(
+  PUZZLE_DIFFICULTIES.map((difficulty) => [
+    difficulty.id,
+    RECIPES.filter((recipe) => recipe.difficulty === difficulty.id),
+  ])
+)
+
+export function puzzleRecipe(id: string): PuzzleRecipe | undefined {
+  return RECIPE_BY_ID.get(id)
+}
 
 const DAILY_ADJECTIVES = [
   'Quiet',
@@ -385,6 +953,42 @@ const DAILY_NOUNS = [
   'Window',
 ]
 
+const HOURLY_ADJECTIVES = [
+  'Quick',
+  'Brass',
+  'Spry',
+  'Brief',
+  'Lucky',
+  'Ticking',
+  'Minute',
+  'Chiming',
+  'Short',
+  'Nimble',
+  'Warm',
+  'Brisk',
+  'Little',
+  'Silver',
+]
+
+const HOURLY_NOUNS = [
+  'Bell',
+  'Coin',
+  'Flick',
+  'Match',
+  'Cup',
+  'Lamp',
+  'Key',
+  'Step',
+  'Spark',
+  'Whistle',
+  'Page',
+  'Door',
+  'Tune',
+  'Stitch',
+  'Turn',
+  'Note',
+]
+
 const WEEKLY_ADJECTIVES = [
   'Obsidian',
   'Fractured',
@@ -423,9 +1027,22 @@ const WEEKLY_NOUNS = [
   'Vault',
 ]
 
-/** Stable UTC period for a puzzle kind: a civil day or an ISO week. */
-export function puzzlePeriod(kind: PuzzleKind, now: Date = new Date()): PuzzlePeriod {
-  if (kind === 'daily') {
+/**
+ * Stable UTC period for a calendar puzzle: a civil hour, a civil day (both
+ * dailies share the day but not the kind), or an ISO week.
+ */
+export function puzzlePeriod(kind: PeriodicPuzzleKind, now: Date = new Date()): PuzzlePeriod {
+  if (kind === 'hourly') {
+    const start = new Date(Math.floor(now.getTime() / HOUR_MS) * HOUR_MS)
+    const startsAt = start.getTime()
+    return {
+      key: `${start.getUTCFullYear()}-${pad(start.getUTCMonth() + 1)}-${pad(start.getUTCDate())}T${pad(start.getUTCHours())}`,
+      startsAt,
+      endsAt: startsAt + HOUR_MS,
+    }
+  }
+
+  if (kind === 'daily' || kind === 'daily-2') {
     const start = new Date(
       Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
     )
@@ -449,7 +1066,7 @@ export function puzzlePeriod(kind: PuzzleKind, now: Date = new Date()): PuzzlePe
   }
 }
 
-/** `daily:2026-10-19` / `weekly:2026-W43`, shared by local and server boards. */
+/** `hourly:2026-10-20T14` / `daily-2:2026-10-19`, shared by local and server boards. */
 export function puzzleLeaderboardKey(puzzle: Pick<PuzzleDefinition, 'kind' | 'key'>): string {
   return `${puzzle.kind}:${puzzle.key}`
 }
@@ -457,17 +1074,21 @@ export function puzzleLeaderboardKey(puzzle: Pick<PuzzleDefinition, 'kind' | 'ke
 /** One deterministic board per period; screens can mount without a re-search. */
 const puzzleCache = new Map<string, PuzzleDefinition>()
 
-/** Builds the puzzle for one UTC period. The result is fully deterministic. */
-export function createPuzzle(kind: PuzzleKind, now: Date = new Date()): PuzzleDefinition {
-  const period = puzzlePeriod(kind, now)
-  const cacheKey = `${kind}:${period.key}`
-  const cached = puzzleCache.get(cacheKey)
-  if (cached) return cached
-  const seed = hashSeed(`make24:${kind}:${period.key}`)
-  const rng = mulberry32(seed)
-  const recipes = kind === 'daily' ? DAILY_RECIPES : WEEKLY_RECIPES
-  const recipe =
-    recipes[periodIndex(kind, period.startsAt) % recipes.length]!
+interface PuzzleBuildRequest {
+  kind: PuzzleKind
+  key: string
+  name: string
+  difficulty: PuzzleDifficulty
+  recipe: PuzzleRecipe
+  seed: string
+  startsAt: number
+  endsAt: number
+}
+
+/** Shared generator behind calendar puzzles and dungeon trials. */
+function buildPuzzle(request: PuzzleBuildRequest): PuzzleDefinition {
+  const { kind, recipe } = request
+  const rng = mulberry32(hashSeed(request.seed))
 
   const cardCount = recipe.cardCounts[Math.floor(rng() * recipe.cardCounts.length)]!
   const cardPool = recipe.cardPools[Math.floor(rng() * recipe.cardPools.length)]!
@@ -497,9 +1118,10 @@ export function createPuzzle(kind: PuzzleKind, now: Date = new Date()): PuzzleDe
       const approxValue = candidate.value
       if (
         !Number.isFinite(approxValue) ||
+        approxValue <= 0 ||
         !Number.isInteger(approxValue) ||
-        Math.abs(approxValue) < recipe.targetMin ||
-        Math.abs(approxValue) > recipe.targetMax ||
+        approxValue < recipe.targetMin ||
+        approxValue > recipe.targetMax ||
         countOperators(candidate) < requiredOperators
       ) {
         continue
@@ -512,9 +1134,10 @@ export function createPuzzle(kind: PuzzleKind, now: Date = new Date()): PuzzleDe
       const value = rebuilt.value
       if (
         !Number.isFinite(value) ||
+        value <= 0 ||
         !Number.isInteger(value) ||
-        Math.abs(value) < recipe.targetMin ||
-        Math.abs(value) > recipe.targetMax
+        value < recipe.targetMin ||
+        value > recipe.targetMax
       ) {
         continue
       }
@@ -553,12 +1176,13 @@ export function createPuzzle(kind: PuzzleKind, now: Date = new Date()): PuzzleDe
 
   const puzzle: PuzzleDefinition = {
     kind,
-    key: period.key,
-    name: puzzleName(kind, period),
-    difficulty: kind === 'daily' ? 'medium' : 'extreme',
+    key: request.key,
+    name: request.name,
+    difficulty: request.difficulty,
     difficultyNote: recipe.note,
-    startsAt: period.startsAt,
-    endsAt: period.endsAt,
+    recipeId: recipe.id,
+    startsAt: request.startsAt,
+    endsAt: request.endsAt,
     target,
     hand,
     settings,
@@ -568,6 +1192,106 @@ export function createPuzzle(kind: PuzzleKind, now: Date = new Date()): PuzzleDe
     ),
     bindLabels: bindRuleLabels(bindRules),
     referenceSolution,
+  }
+  return puzzle
+}
+
+/**
+ * The difficulty a calendar slot asks for. Hourly and daily puzzles stay on the
+ * easy end; the weekly trial always sits on the high end of the ladder.
+ */
+function difficultyForPeriod(kind: PeriodicPuzzleKind, index: number): PuzzleDifficulty {
+  switch (kind) {
+    case 'hourly':
+      return index % 5 === 4 ? 'medium' : 'easy'
+    case 'daily':
+      return index % 3 === 2 ? 'medium' : 'easy'
+    case 'daily-2':
+      return index % 4 === 3 ? 'hard' : 'medium'
+    case 'weekly': {
+      const ladder: PuzzleDifficulty[] = [
+        'expert',
+        'extreme',
+        'confounding',
+        'extreme',
+        'expert',
+        'extreme',
+        'confounding',
+        'impossible',
+      ]
+      return ladder[index % ladder.length]!
+    }
+  }
+}
+
+/** Builds the calendar puzzle for one UTC period. Fully deterministic. */
+export function createPuzzle(kind: PeriodicPuzzleKind, now: Date = new Date()): PuzzleDefinition {
+  const period = puzzlePeriod(kind, now)
+  const cacheKey = `${kind}:${period.key}`
+  const cached = puzzleCache.get(cacheKey)
+  if (cached) return cached
+
+  const index = periodIndex(kind, period.startsAt)
+  const difficulty = difficultyForPeriod(kind, index)
+  const pool = RECIPES_BY_DIFFICULTY.get(difficulty) ?? RECIPES
+  const recipe = pool[index % pool.length]!
+  const puzzle = buildPuzzle({
+    kind,
+    key: period.key,
+    name: puzzleName(kind, period),
+    difficulty,
+    recipe,
+    seed: `make24:${kind}:${period.key}`,
+    startsAt: period.startsAt,
+    endsAt: period.endsAt,
+  })
+  puzzleCache.set(cacheKey, puzzle)
+  return puzzle
+}
+
+export interface DungeonPuzzleRequest {
+  gauntletId: string
+  gauntletName: string
+  trialId: string
+  /** 1-based position in the gauntlet, for the play header. */
+  trialNumber: number
+  trialCount: number
+  title: string
+  difficulty: PuzzleDifficulty
+  recipeId: string
+}
+
+/**
+ * Builds one fixed dungeon trial. The trial id and gauntlet seed the generator,
+ * so a trial is identical for every player and every run. Returns null only if
+ * the content names a recipe that no longer exists.
+ */
+export function createDungeonPuzzle(
+  request: DungeonPuzzleRequest
+): PuzzleDefinition | null {
+  const recipe = RECIPE_BY_ID.get(request.recipeId)
+  if (!recipe) return null
+  const key = `${request.gauntletId}/${request.trialId}`
+  const cacheKey = `dungeon:${key}`
+  const cached = puzzleCache.get(cacheKey)
+  if (cached) return cached
+
+  const puzzle = buildPuzzle({
+    kind: 'dungeon',
+    key,
+    name: request.title,
+    difficulty: request.difficulty,
+    recipe,
+    seed: `make24:dungeon:${key}`,
+    startsAt: 0,
+    endsAt: 0,
+  })
+  puzzle.dungeon = {
+    gauntletId: request.gauntletId,
+    gauntletName: request.gauntletName,
+    trialId: request.trialId,
+    trialNumber: request.trialNumber,
+    trialCount: request.trialCount,
   }
   puzzleCache.set(cacheKey, puzzle)
   return puzzle
@@ -870,22 +1594,30 @@ function buildAllowedOperators(
 
 /* ---------------------------------- naming ---------------------------------- */
 
-function puzzleName(kind: PuzzleKind, period: PuzzlePeriod): string {
-  const adjectives = kind === 'daily' ? DAILY_ADJECTIVES : WEEKLY_ADJECTIVES
-  const nouns = kind === 'daily' ? DAILY_NOUNS : WEEKLY_NOUNS
+function puzzleName(kind: PeriodicPuzzleKind, period: PuzzlePeriod): string {
+  const [adjectives, nouns] =
+    kind === 'weekly'
+      ? [WEEKLY_ADJECTIVES, WEEKLY_NOUNS]
+      : kind === 'hourly'
+        ? [HOURLY_ADJECTIVES, HOURLY_NOUNS]
+        : [DAILY_ADJECTIVES, DAILY_NOUNS]
   const seed = hashSeed(`name:${kind}:${period.key}`)
   const adjective = adjectives[seed % adjectives.length]!
   const noun = nouns[Math.floor(seed / adjectives.length) % nouns.length]!
   // The full period ordinal guarantees a new name even after the word lists
-  // cycle; three digits would repeat after 1,000 days.
-  const ordinal = periodIndex(kind, period.startsAt)
+  // cycle; three digits would repeat after 1,000 days. Both dailies share a
+  // date, so their ordinals are interleaved to keep the names distinct even
+  // when the word lists land on the same pairing.
+  const index = periodIndex(kind, period.startsAt)
+  const ordinal = kind === 'daily' ? index * 2 : kind === 'daily-2' ? index * 2 + 1 : index
   return `${adjective} ${noun} ${String(ordinal).padStart(3, '0')}`
 }
 
 /* --------------------------------- calendar --------------------------------- */
 
-function periodIndex(kind: PuzzleKind, startsAt: number): number {
-  if (kind === 'daily') return Math.floor(startsAt / DAY_MS)
+function periodIndex(kind: PeriodicPuzzleKind, startsAt: number): number {
+  if (kind === 'hourly') return Math.floor(startsAt / HOUR_MS)
+  if (kind === 'daily' || kind === 'daily-2') return Math.floor(startsAt / DAY_MS)
   return Math.floor((startsAt - Date.UTC(2020, 0, 6)) / WEEK_MS)
 }
 

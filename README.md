@@ -3,10 +3,11 @@
 A pixel-art twist on the Make 24 numbers game. Cards are dealt, you merge them
 with operators until one group hits the target, and the **cheapest** board wins
 the round — every operator costs points, so the elegant route beats the long one.
-Playable solo or online against friends in real time, with a deterministic
-medium daily puzzle and an extreme weekly puzzle on shared leaderboards. Optional
-opening **binds** fuse consecutive ranks or duplicate cards into free locked
-groups before play starts. Numbers run on a 50-digit decimal engine; the board,
+Playable solo or online against friends in real time, with an hourly board, two
+daily boards and a weekly trial on shared leaderboards, plus **The Dungeon** —
+seven themed gauntlets of six fixed trials that climb from easy to impossible.
+Optional opening **binds** fuse consecutive ranks or duplicate cards into free
+locked groups before play starts. Numbers run on a 50-digit decimal engine; the board,
 target and results show five decimal places by default, and a gameplay slider
 reveals up to 32 decimal places (the engine keeps 50 significant digits).
 
@@ -18,10 +19,10 @@ npm run dev            # game at http://localhost:5173
 npm run dev:server     # multiplayer table server on port 8787 (only needed online)
 ```
 
-Solo play needs just the frontend. Online play, and the shared daily/weekly
+Solo play needs just the frontend. Online play, and the shared calendar puzzle
 leaderboards, need the table server too, or a deployed one pointed at with
 `VITE_MULTIPLAYER_URL` (see [.env.example](.env.example)). Without it, puzzle
-scores stay on the device.
+scores stay on the device. The dungeon is always local.
 
 New to the game? The title screen's **Tutorial** button is the player's guide,
 and [notes/spec.md](notes/spec.md) has the rules in full.

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import DungeonMapScreen from './components/screens/DungeonMapScreen.vue'
+import GauntletScreen from './components/screens/GauntletScreen.vue'
 import GameOverScreen from './components/screens/GameOverScreen.vue'
 import LobbyBrowserScreen from './components/screens/LobbyBrowserScreen.vue'
 import LobbySetupScreen from './components/screens/LobbySetupScreen.vue'
@@ -35,6 +37,8 @@ void shellRef
     <!-- One screen per phase; each one injects the shared game context. -->
     <TitleScreen v-if="phase === 'title'" />
     <PuzzleHubScreen v-else-if="phase === 'puzzles'" />
+    <DungeonMapScreen v-else-if="phase === 'dungeon'" />
+    <GauntletScreen v-else-if="phase === 'dungeon-gauntlet'" />
     <LobbyBrowserScreen v-else-if="phase === 'lobby-select'" />
     <LobbySetupScreen v-else-if="phase === 'lobby'" />
     <PlayingScreen v-else-if="phase === 'playing'" />

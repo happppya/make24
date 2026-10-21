@@ -259,6 +259,8 @@ export interface PlayerInfo {
 export type ScreenPhase =
   | 'title'
   | 'puzzles'
+  | 'dungeon'
+  | 'dungeon-gauntlet'
   | 'lobby-select'
   | 'lobby'
   | 'playing'
