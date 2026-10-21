@@ -87,7 +87,9 @@ Each calendar puzzle has a leaderboard sorted by ascending score, then earliest 
 
 ## The Dungeon
 
-**The Dungeon** on the main menu opens a fixed campaign of seven themed gauntlets, six trials each (42 trials). A gauntlet is a tailored series with its own operator cabinet, narrative theme and difficulty ramp; a trial is one fixed puzzle.
+**The Dungeon** on the main menu opens a fixed campaign of two chapters, seven themed gauntlets each, six trials per gauntlet (84 trials). A gauntlet is a tailored series with its own operator cabinet, narrative theme and difficulty ramp; a trial is one fixed puzzle.
+
+### Chapter I — Into the Abyss
 
 | Gauntlet | Theme | Opening → gatekeeper |
 | --- | --- | --- |
@@ -99,8 +101,22 @@ Each calendar puzzle has a leaderboard sorted by ascending score, then earliest 
 | VI. The Clockwork Vault | Binds, locked groups and keyed hands | medium → confounding |
 | VII. The Abyss | Every operator, no mercy | extreme → impossible |
 
-- Every gauntlet's six trials step upward in difficulty, and its last trial is marked as the gatekeeper. Across the campaign the ladder climbs from easy arithmetic in the cellar to an impossible door at the bottom.
-- Trials unlock in order: the first trial of the first gauntlet is always open, each cleared trial opens the next, and clearing all six opens the next gauntlet. Locked trials and locked gauntlets show what has to be cleared first.
+### Chapter II — Trials of Chaos
+
+| Gauntlet | Theme | Opening → gatekeeper |
+| --- | --- | --- |
+| I. The Decimal Sea | Fractional targets that never land on a whole number | medium → extreme |
+| II. The Scrapheap | Eight or nine cards, obscure operators, add and multiply removed | hard → impossible |
+| III. The Billion Vault | Targets in the tens and hundreds of millions | expert → impossible |
+| IV. The Undertow | Every target is negative | medium → impossible |
+| V. The Hourglass | Binds, shifts and digit joins under heavy tolls | hard → confounding |
+| VI. The Sphinx's Ledger | Counting routes, arrangements and locked cages | hard → impossible |
+| VII. The Last Light | Every operator, nine cards, four-figure tolls | extreme → impossible |
+
+- Every gauntlet's six trials step upward in difficulty, and its last trial is marked as the gatekeeper. Chapter I climbs from easy arithmetic in the cellar to an impossible door at the bottom; Chapter II opens at medium and ends at the deepest impossible boards. Gauntlets are numbered I–VII within their chapter.
+- Both chapters are open from the start: the first gauntlet of each is always available. Inside a chapter, trials unlock in order — each cleared trial opens the next, and clearing all six opens the next gauntlet. Chapters do not gate each other. Locked trials and locked gauntlets show what has to be cleared first.
+- Trials of Chaos adds target kinds beyond the positive whole numbers used elsewhere: **fractional** targets keep the reference board's exact decimal value (the HUD shows that exact value and the validator compares against it), and **negative** targets sit below zero. The Scrapheap and The Last Light push hand size and obscure operators to the limit; The Billion Vault pushes targets toward 999,999,999.
+- A trial in progress can be given up on: the **Give Up** button asks once, then **Show Solution** reveals the trial's reference board and equation on the result screen. Giving up marks the trial cleared so the next one opens (and the next gauntlet, once the gatekeeper falls), but it earns no best score — the trial card reads `REVEALED` instead of a best. A later real solve replaces the reveal with its score.
 - Dungeon boards are generated deterministically from the gauntlet id and trial id, not from the clock: every player and every run sees the same hand, target and rules. The recipe, card count, target band, binds and penalties come from the trial's difficulty and theme. Every trial retains a reference solution and is replayed through the normal validator by a regression test.
 - Scoring is the ordinary puzzle score (operator costs plus any forbidden-move penalties). Only the lowest score per trial is kept. Progress and best scores are stored on the device; the dungeon has no shared leaderboard because the campaign is a personal run.
 - The dungeon map shows campaign progress, each gauntlet's theme, difficulty span and cleared count. A gauntlet screen lists all six trials with their tier, card count, target (hidden until unlocked), binds and best score. The result screen offers the next trial, the next gauntlet when the gatekeeper falls, a retry, or a return to the gauntlet.
@@ -127,7 +143,7 @@ Every operator is evaluated with a 50-significant-digit decimal engine, not with
 
 By default every number in the game shows up to five decimal places. During gameplay the score sidebar has a **DECIMALS** slider from 0 to 32: moving it reformats the target, every card-group header, the equation ribbon and the final result live, up to 32 decimal places (the engine keeps 50 significant digits internally). The last position reads `ALL 32`. The setting is kept on the device between sessions, and a reset control returns to five.
 
-The deterministic calendar and dungeon search uses fast double probes for the thousands of candidate trees it tests; only the chosen reference board is rebuilt through the exact decimal engine before it becomes the puzzle. Puzzles still require integer targets, so their acceptance is exact.
+The deterministic calendar and dungeon search uses fast double probes for the thousands of candidate trees it tests; only the chosen reference board is rebuilt through the exact decimal engine before it becomes the puzzle. Calendar puzzles and Chapter I of the dungeon still use positive integer targets, so their acceptance is exact. Trials of Chaos may set fractional targets (kept as exact decimal strings) or negative targets; the board's exact value is compared against the exact target, with the recipe's tiny tolerance where one is set.
 
 ### Round End
 

@@ -14,13 +14,13 @@ Each phase screen:
 | --- | --- | --- |
 | [TitleScreen.vue](TitleScreen.vue) | `title` | Solo/multiplayer entry, Puzzles and The Dungeon entries, and the tutorial button |
 | [PuzzleHubScreen.vue](PuzzleHubScreen.vue) | `puzzles` | Hourly, Daily I, Daily II and Weekly cards with rules, reset clocks and top-three boards |
-| [DungeonMapScreen.vue](DungeonMapScreen.vue) | `dungeon` | Campaign progress and the seven themed gauntlets, with locked doors |
+| [DungeonMapScreen.vue](DungeonMapScreen.vue) | `dungeon` | Campaign progress and the two chapter groups of seven gauntlets each, with locked doors |
 | [GauntletScreen.vue](GauntletScreen.vue) | `dungeon-gauntlet` | One gauntlet's six trials, their tiers, targets, locks and best scores |
 | [LobbyBrowserScreen.vue](LobbyBrowserScreen.vue) | `lobby-select` | Name, public lobby list, create public/private, join by code |
 | [LobbySetupScreen.vue](LobbySetupScreen.vue) | `lobby` | Seats, ready-up, and the full table settings including bind toggles (host-only) |
-| [PlayingScreen.vue](PlayingScreen.vue) | `playing` | HUD sidebar (with the decimal-precision slider), felt board, operator rails, board tools; swaps to puzzle submit/quit controls |
+| [PlayingScreen.vue](PlayingScreen.vue) | `playing` | HUD sidebar (with the decimal-precision slider), felt board, operator rails, board tools; swaps to puzzle submit/quit controls, plus a two-step give-up reveal on dungeon trials |
 | [RoundEndScreen.vue](RoundEndScreen.vue) | `round-end` | Round result, submitted boards, winning card replay, standings |
-| [PuzzleResultScreen.vue](PuzzleResultScreen.vue) | `puzzle-result` | Puzzle score, rank, local/offline note and top scores; dungeon results show gauntlet progress, next trial and next-door actions |
+| [PuzzleResultScreen.vue](PuzzleResultScreen.vue) | `puzzle-result` | Puzzle score, rank, local/offline note and top scores; dungeon results show gauntlet progress, next trial and next-door actions, and a given-up trial shows its reference solution board |
 | [GameOverScreen.vue](GameOverScreen.vue) | `game-over` | Series winner, final standings, host-run rematch via the lobby |
 | [PauseMenu.vue](PauseMenu.vue) | n/a | Overlay for any phase: resume, lobby, main menu, sound |
 | [TargetChoiceDialog.vue](TargetChoiceDialog.vue) | n/a | Pre-round exact-target chooser for solo and the multiplayer host |

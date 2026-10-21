@@ -137,17 +137,18 @@ export function useJuice(viewportRef: Ref<HTMLElement | null>) {
     const layer = plane ?? feltRef.value
     if (!layer) return
 
-    let x = layer.clientWidth / 2
-    let y = layer.clientHeight / 2
     const slot = groupId
       ? viewport?.querySelector<HTMLElement>(`[data-testid="group-slot-${groupId}"]`)
       : null
-    if (slot) {
-      const slotBox = slot.getBoundingClientRect()
-      const layerBox = layer.getBoundingClientRect()
-      x = slotBox.left + slotBox.width / 2 - layerBox.left - layer.clientLeft
-      y = slotBox.top + slotBox.height / 2 - layerBox.top - layer.clientTop
-    }
+    // A burst with no target piece starts at the middle of the felt as it is
+    // shown now; the plane moves with the camera, so its own origin is not the
+    // felt centre once the board is panned.
+    const layerBox = layer.getBoundingClientRect()
+    const anchor = slot
+      ? slot.getBoundingClientRect()
+      : (viewport ?? layer).getBoundingClientRect()
+    const x = anchor.left + anchor.width / 2 - layerBox.left - layer.clientLeft
+    const y = anchor.top + anchor.height / 2 - layerBox.top - layer.clientTop
 
     const id = ++particleSeed
     particleBursts.value = [

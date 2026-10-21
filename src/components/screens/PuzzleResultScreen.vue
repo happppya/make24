@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import SolutionBoard from '../SolutionBoard.vue'
 import { useGameContext } from '../../app/context'
 import { gauntletById, nextTrialIn } from '../../engine/dungeon'
 import { formatNumber } from '../../engine/math'
@@ -23,6 +24,7 @@ const {
 } = useGameContext()
 
 const top = computed(() => (lastResult.value ? topThree(lastResult.value.puzzle) : []))
+const revealed = computed(() => Boolean(lastResult.value?.revealed))
 const dungeon = computed(() => lastResult.value?.dungeon ?? null)
 const gauntlet = computed(() =>
   dungeon.value ? gauntletById(dungeon.value.gauntletId) ?? null : null
@@ -84,22 +86,34 @@ const statusLabel = computed(() => {
       <span>{{ metaLabel }}</span>
     </div>
 
-    <div class="puzzle-result-stamp" :class="{ 'puzzle-result-stamp--local': lastResult.source === 'local' }">
-      {{ dungeon ? 'TRIAL CLEARED' : lastResult.improved ? 'BEST LOGGED' : 'BOARD LOGGED' }}
+    <div
+      class="puzzle-result-stamp"
+      :class="{ 'puzzle-result-stamp--local': lastResult.source === 'local' }"
+      data-testid="puzzle-result-stamp"
+    >
+      {{
+        revealed
+          ? 'SOLUTION REVEALED'
+          : dungeon
+            ? 'TRIAL CLEARED'
+            : lastResult.improved
+              ? 'BEST LOGGED'
+              : 'BOARD LOGGED'
+      }}
     </div>
 
     <p v-if="gauntlet" class="puzzle-result-gauntlet">{{ gauntlet.name }}</p>
     <h1>{{ lastResult.puzzle.name }}</h1>
     <p class="puzzle-result-score">
       <span>{{ formatNumber(lastResult.score) }}</span>
-      <small>points</small>
+      <small>{{ revealed ? 'reference score' : 'points' }}</small>
     </p>
     <p class="puzzle-result-equation">{{ lastResult.equation }}</p>
 
     <div class="puzzle-result-meta">
       <div>
         <span>Target</span>
-        <strong>{{ formatNumber(lastResult.puzzle.target) }}</strong>
+        <strong>{{ formatNumber(lastResult.puzzle.targetExact ?? lastResult.puzzle.target) }}</strong>
       </div>
       <div>
         <span>Your ledger</span>
@@ -114,6 +128,19 @@ const statusLabel = computed(() => {
         <strong>{{ statusLabel }}</strong>
       </div>
     </div>
+
+    <section v-if="revealed" class="puzzle-result-board" data-testid="revealed-solution">
+      <div class="puzzle-result-board__head">
+        <h2>Reference solution</h2>
+        <span>Every card, one route to the target</span>
+      </div>
+      <SolutionBoard :node="lastResult.puzzle.referenceSolution" />
+    </section>
+
+    <p v-if="revealed" class="puzzle-result-note" role="status">
+      You gave up on this trial. It counts as cleared and the next one is open, but
+      it adds no best score.
+    </p>
 
     <section v-if="dungeon && gauntlet" class="puzzle-result-board" data-testid="dungeon-result-progress">
       <div class="puzzle-result-board__head">

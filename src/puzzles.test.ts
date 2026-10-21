@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import App from './App.vue'
+import { DUNGEON_GAUNTLETS } from './engine/dungeon'
 
 const board = {
   entries: [
@@ -85,9 +86,16 @@ describe('calendar and dungeon puzzles', () => {
     expect(wrapper.find('.screen-dungeon').exists()).toBe(true)
     expect(wrapper.text()).toContain('The Cellar')
     expect(wrapper.text()).toContain('The Abyss')
-    expect(wrapper.text()).toContain('42')
+    expect(wrapper.text()).toContain('84')
+    // Two chapters, each with its first gauntlet open.
+    expect(wrapper.find('[data-testid="dungeon-group-into-the-abyss"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="dungeon-group-trials-of-chaos"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('Into the Abyss')
+    expect(wrapper.text()).toContain('Trials of Chaos')
     expect(wrapper.find('[data-testid="gauntlet-cellar"]').attributes('disabled')).toBeUndefined()
     expect(wrapper.find('[data-testid="gauntlet-foundry"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('[data-testid="gauntlet-decimal-sea"]').attributes('disabled')).toBeUndefined()
+    expect(wrapper.find('[data-testid="gauntlet-scrapheap"]').attributes('disabled')).toBeDefined()
 
     await wrapper.find('[data-testid="gauntlet-cellar"]').trigger('click')
     await flushPromises()
@@ -103,6 +111,80 @@ describe('calendar and dungeon puzzles', () => {
     expect(header.text()).toContain('Trial 1 of 6')
     expect(header.text()).toContain('The Cellar')
     expect(wrapper.find('[data-testid="puzzle-submit-btn"]').exists()).toBe(true)
+  })
+
+  it('opens the second chapter with fractional and negative trials', async () => {
+    // Chaos ramps its own gauntlets in order, so clear the three before the
+    // Undertow to reach its negative targets.
+    const progress: Record<string, { score: number; clearedAt: number }> = {}
+    for (const id of ['decimal-sea', 'scrapheap', 'billion-vault']) {
+      const gauntlet = DUNGEON_GAUNTLETS.find((entry) => entry.id === id)!
+      for (const trial of gauntlet.trials) {
+        progress[`${gauntlet.id}/${trial.id}`] = { score: 100, clearedAt: 1 }
+      }
+    }
+    window.localStorage.setItem('make24-dungeon-progress-v1', JSON.stringify(progress))
+
+    wrapper = mount(App)
+    await wrapper.find('[data-testid="open-dungeon"]').trigger('click')
+    await flushPromises()
+
+    await wrapper.find('[data-testid="gauntlet-decimal-sea"]').trigger('click')
+    await flushPromises()
+    const saltwater = wrapper.find('[data-testid="trial-saltwater"]')
+    // Fractional targets keep their digits after the point.
+    expect(saltwater.find('.trial-card__stats').text()).toMatch(/\d\.\d/)
+
+    await wrapper.find('[data-testid="gauntlet-back-btn"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-testid="gauntlet-undertow"]').trigger('click')
+    await flushPromises()
+    const lowTide = wrapper.find('[data-testid="trial-low-tide"]')
+    expect(lowTide.find('.trial-card__stats').text()).toMatch(/-\d/)
+
+    await lowTide.trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.screen-playing').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="target-display"]').text()).toMatch(/^-/)
+  })
+
+  it('lets a player give up on a dungeon trial, reveals the solution and opens the next one', async () => {
+    wrapper = mount(App)
+    await wrapper.find('[data-testid="open-dungeon"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-testid="gauntlet-cellar"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-testid="trial-first-light"]').trigger('click')
+    await flushPromises()
+
+    // Other puzzle kinds have no next challenge, so they offer no give-up.
+    expect(wrapper.find('[data-testid="puzzle-reveal-btn"]').exists()).toBe(false)
+
+    await wrapper.find('[data-testid="puzzle-give-up-btn"]').trigger('click')
+    expect(wrapper.find('[data-testid="give-up-note"]').exists()).toBe(true)
+    await wrapper.find('[data-testid="puzzle-keep-trying-btn"]').trigger('click')
+    expect(wrapper.find('[data-testid="puzzle-give-up-btn"]').exists()).toBe(true)
+    expect(window.localStorage.getItem('make24-dungeon-progress-v1')).toBeNull()
+
+    await wrapper.find('[data-testid="puzzle-give-up-btn"]').trigger('click')
+    await wrapper.find('[data-testid="puzzle-reveal-btn"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('.screen-puzzle-result').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="puzzle-result-stamp"]').text()).toContain(
+      'SOLUTION REVEALED'
+    )
+    expect(wrapper.find('[data-testid="revealed-solution"]').exists()).toBe(true)
+    const progress = JSON.parse(
+      window.localStorage.getItem('make24-dungeon-progress-v1') ?? '{}'
+    )
+    expect(progress['cellar/first-light']).toMatchObject({ revealed: true })
+
+    await wrapper.find('[data-testid="back-to-gauntlet-btn"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.screen-gauntlet').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="trial-mousetrap"]').attributes('disabled')).toBeUndefined()
+    expect(wrapper.find('[data-testid="trial-first-light"]').text()).toContain('REVEALED')
   })
 
   it('starts the hourly board from its card', async () => {

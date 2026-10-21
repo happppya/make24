@@ -104,7 +104,7 @@ void tutorialTriggerRef
         <span class="title-puzzles__sigil" aria-hidden="true">♜</span>
         <span class="title-puzzles__body">
           <span class="title-puzzles__title">THE DUNGEON</span>
-          <span class="title-puzzles__copy">7 gauntlets · 42 trials</span>
+          <span class="title-puzzles__copy">14 gauntlets · 84 trials</span>
         </span>
         <span class="title-puzzles__arrow" aria-hidden="true">▸</span>
       </button>

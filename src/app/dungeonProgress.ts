@@ -24,6 +24,7 @@ export function readDungeonProgress(): DungeonProgress {
       progress[key] = {
         score: row.score,
         clearedAt: typeof row.clearedAt === 'number' ? row.clearedAt : 0,
+        ...(row.revealed === true ? { revealed: true } : {}),
       }
     }
     return progress
@@ -52,9 +53,28 @@ export function recordDungeonClear(
 ): DungeonProgress {
   const key = dungeonTrialKey(gauntletId, trialId)
   const existing = progress[key]
-  if (existing && existing.score <= score) return progress
+  // A revealed trial has no earned score, so the first real solve replaces it
+  // even when the reference route was cheaper.
+  if (existing && !existing.revealed && existing.score <= score) return progress
   return {
     ...progress,
     [key]: { score, clearedAt: Date.now() },
+  }
+}
+
+/**
+ * Gives up on a trial: records it as cleared (so the next one unlocks) without
+ * a score. A trial already cleared with a real score keeps that best.
+ */
+export function recordDungeonReveal(
+  progress: DungeonProgress,
+  gauntletId: string,
+  trialId: string
+): DungeonProgress {
+  const key = dungeonTrialKey(gauntletId, trialId)
+  if (progress[key]) return progress
+  return {
+    ...progress,
+    [key]: { score: 0, clearedAt: Date.now(), revealed: true },
   }
 }

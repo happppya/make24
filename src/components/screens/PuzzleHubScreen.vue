@@ -111,7 +111,7 @@ const {
     <p class="puzzle-footnote">
       Scores are submitted only when you finish a board with every dealt card. The
       lowest score wins; ties go to the earlier submission. Looking for more?
-      <strong>The Dungeon</strong> runs seven themed gauntlets from the main menu.
+      <strong>The Dungeon</strong> runs two chapters of seven themed gauntlets from the main menu.
     </p>
   </main>
 </template>

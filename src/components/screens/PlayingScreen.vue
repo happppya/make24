@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useGameContext } from '../../app/context'
 import { decimalPlaces } from '../../app/displayPrecision'
 import { formatScore, formatTimer, opKeyLabel } from '../../app/labels'
@@ -24,6 +24,7 @@ const {
   canSubmit,
   submitting,
   finishPuzzle,
+  revealDungeonSolution,
   exitPuzzleToHub,
   roundNumber,
   currentTarget,
@@ -71,6 +72,12 @@ const {
   particleBursts,
   glideToGroups,
 } = useGameContext()
+
+/** Give Up asks once before the trial's solution is revealed. */
+const confirmingGiveUp = ref(false)
+watch(activePuzzle, () => {
+  confirmingGiveUp.value = false
+})
 
 /** The ribbon follows the same display width as the target and board headers. */
 const equationText = computed(() => {
@@ -180,6 +187,39 @@ void [feltRef, sidebarRef, viewportRef]
           >
             {{ submitting ? 'Saving…' : 'Submit Solution' }}
           </button>
+          <template v-if="activePuzzle.kind === 'dungeon'">
+            <template v-if="confirmingGiveUp">
+              <p class="give-up-note" data-testid="give-up-note">
+                Reveal the solution? This trial counts as cleared and opens the
+                next one, but it earns no best score.
+              </p>
+              <button
+                type="button"
+                class="btn-arcade btn-arcade--crimson btn-arcade--block"
+                data-testid="puzzle-reveal-btn"
+                @click="revealDungeonSolution"
+              >
+                Show Solution
+              </button>
+              <button
+                type="button"
+                class="btn-arcade btn-arcade--block"
+                data-testid="puzzle-keep-trying-btn"
+                @click="confirmingGiveUp = false"
+              >
+                Keep Trying
+              </button>
+            </template>
+            <button
+              v-else
+              type="button"
+              class="btn-arcade btn-arcade--crimson btn-arcade--block"
+              data-testid="puzzle-give-up-btn"
+              @click="confirmingGiveUp = true"
+            >
+              Give Up
+            </button>
+          </template>
           <button
             type="button"
             class="btn-arcade btn-arcade--block"
@@ -849,6 +889,17 @@ void [feltRef, sidebarRef, viewportRef]
   gap: 8px;
 }
 
+.give-up-note {
+  margin: 0;
+  padding: 7px 9px;
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  line-height: 1.3;
+  color: #ffb3bd;
+  background: rgba(254, 74, 73, 0.1);
+  border: 1px solid rgba(254, 74, 73, 0.4);
+}
+
 /* Equation ribbon above the felt */
 .equation-ribbon {
   display: flex;
@@ -1019,13 +1070,16 @@ void [feltRef, sidebarRef, viewportRef]
 }
 
 /* Particle bursts live above the cards and below the operator rail. Each span
-   starts at its felt-local origin and flies outward with a little gravity. */
+   starts at its plane-local origin and flies outward with a little gravity.
+   The layer's own box starts at the plane origin (the felt centre), so cards to
+   the left or above it sit outside that box; it must not clip, or those bursts
+   vanish. The workspace viewport already clips effects to the felt. */
 .particle-layer {
   position: absolute;
   inset: 0;
   z-index: 24;
   pointer-events: none;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .felt-particle {

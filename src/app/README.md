@@ -13,7 +13,7 @@ the merged result so any screen can inject it with `useGameContext()` from
 | [useRoom.ts](useRoom.ts) | Lobby browser, create/join/leave, ready-up, host settings sync |
 | [usePuzzles.ts](usePuzzles.ts) | Hourly, two daily and weekly hub, dungeon map and gauntlet navigation, run lifecycle, boards, submission and progress |
 | [puzzleBoards.ts](puzzleBoards.ts) | Puzzle HTTP endpoints, local score storage, name persistence |
-| [dungeonProgress.ts](dungeonProgress.ts) | Device-local dungeon clears and best scores |
+| [dungeonProgress.ts](dungeonProgress.ts) | Device-local dungeon clears, best scores and reveal-only clears |
 | [useJuice.ts](useJuice.ts) | Sound, screen shake, floating cues, bobbing pieces, camera glide, felt particle bursts |
 | [particles.ts](particles.ts) | Seeded pixel-burst maths for merges, splits, operators, errors and target hits |
 | [useBoardGestures.ts](useBoardGestures.ts) | Dragging pieces, panning the felt, tidy and recenter |

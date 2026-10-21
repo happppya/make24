@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   DUNGEON_GAUNTLETS,
+  DUNGEON_GROUPS,
   DUNGEON_TRIAL_COUNT,
   dungeonClearedCount,
   gauntletById,
@@ -12,6 +13,7 @@ import {
   nextGauntletAfter,
   nextTrialIn,
   trialBest,
+  trialRevealed,
   type DungeonProgress,
 } from './dungeon'
 import {
@@ -23,11 +25,20 @@ import {
 import type { ExprNode } from './types'
 
 describe('dungeon content', () => {
-  it('lays out seven themed gauntlets of six trials each', () => {
-    expect(DUNGEON_GAUNTLETS).toHaveLength(7)
-    expect(DUNGEON_TRIAL_COUNT).toBe(42)
+  it('lays out two chapters of seven themed gauntlets, six trials each', () => {
+    expect(DUNGEON_GROUPS).toHaveLength(2)
+    expect(DUNGEON_GAUNTLETS).toHaveLength(14)
+    expect(DUNGEON_TRIAL_COUNT).toBe(84)
+    expect(DUNGEON_GROUPS[0]!.name).toBe('Into the Abyss')
+    expect(DUNGEON_GROUPS[1]!.name).toBe('Trials of Chaos')
+    for (const group of DUNGEON_GROUPS) {
+      expect(group.chapter).toMatch(/^CHAPTER /)
+      expect(group.gauntlets).toHaveLength(7)
+      expect(group.theme.length).toBeGreaterThan(10)
+    }
 
     const gauntletIds = new Set<string>()
+    const trialIds = new Set<string>()
     for (const gauntlet of DUNGEON_GAUNTLETS) {
       expect(gauntletIds.has(gauntlet.id)).toBe(false)
       gauntletIds.add(gauntlet.id)
@@ -40,6 +51,8 @@ describe('dungeon content', () => {
       expect(new Set(gauntlet.trials.map((trial) => trial.id)).size).toBe(6)
 
       for (const trial of gauntlet.trials) {
+        expect(trialIds.has(trial.id)).toBe(false)
+        trialIds.add(trial.id)
         expect(trial.title.length).toBeGreaterThan(2)
         expect(trial.blurb.length).toBeGreaterThan(20)
         expect(puzzleRecipe(trial.recipeId)).toBeDefined()
@@ -65,6 +78,12 @@ describe('dungeon content', () => {
     expect(
       difficultyRank(DUNGEON_GAUNTLETS.at(-1)!.trials[0]!.difficulty)
     ).toBeGreaterThan(difficultyRank(DUNGEON_GAUNTLETS[0]!.trials[0]!.difficulty))
+
+    // Trials of Chaos is the harder chapter: it opens at medium or above.
+    for (const gauntlet of DUNGEON_GROUPS[1]!.gauntlets) {
+      expect(difficultyRank(gauntlet.trials[0]!.difficulty)).toBeGreaterThanOrEqual(1)
+      expect(difficultyRank(gauntlet.trials.at(-1)!.difficulty)).toBeGreaterThanOrEqual(2)
+    }
   })
 
   it('generates every trial deterministically with a playable reference board', () => {
@@ -100,13 +119,52 @@ describe('dungeon content', () => {
           `${gauntlet.id}/${trial.id}: ${attempt.ok ? '' : attempt.error}`
         ).toBe(true)
         if (!attempt.ok) continue
-        expect(puzzle.target).toBeGreaterThan(0)
-        expect(attempt.finalValue).toBe(puzzle.target)
+        const recipe = puzzleRecipe(trial.recipeId)!
+        if (recipe.allowNegative) {
+          expect(puzzle.target, `${gauntlet.id}/${trial.id} should target a negative`).toBeLessThan(0)
+        } else {
+          expect(puzzle.target).toBeGreaterThan(0)
+        }
+        if (recipe.allowFractional) {
+          expect(Number.isInteger(puzzle.target)).toBe(false)
+          expect(puzzle.targetExact).toBeDefined()
+          expect(Number(puzzle.targetExact)).toBeCloseTo(puzzle.target, 6)
+          expect(attempt.finalValue).toBeCloseTo(puzzle.target, 6)
+        } else {
+          expect(puzzle.targetExact).toBeUndefined()
+          expect(attempt.finalValue).toBe(puzzle.target)
+        }
         expect(sortedCardIds(puzzle.referenceSolution)).toEqual(
           puzzle.hand.map((card) => card.id).sort()
         )
         expect(puzzle.settings.allowedOperators.basic).toBe(true)
       }
+    }
+  })
+
+  it('gives every Trials of Chaos gauntlet the theme it advertises', () => {
+    const gauntlet = (id: string) => DUNGEON_GAUNTLETS.find((entry) => entry.id === id)!
+    const puzzleFor = (gauntletId: string) =>
+      gauntlet(gauntletId).trials.map((trial) => getDungeonPuzzle(gauntletId, trial.id)!)
+
+    for (const puzzle of puzzleFor('decimal-sea')) {
+      expect(Number.isInteger(puzzle.target)).toBe(false)
+      expect(puzzle.targetExact).toBeDefined()
+    }
+    for (const puzzle of puzzleFor('scrapheap')) {
+      expect(puzzle.settings.numCards).toBeGreaterThanOrEqual(8)
+      expect(puzzle.settings.allowedOperators.operators.mult).toBe(false)
+      expect(puzzle.settings.allowedOperators.operators.add).toBe(false)
+    }
+    for (const trial of gauntlet('billion-vault').trials) {
+      const puzzle = getDungeonPuzzle('billion-vault', trial.id)!
+      expect(puzzle.target, trial.id).toBeGreaterThanOrEqual(10_000_000)
+    }
+    for (const puzzle of puzzleFor('undertow')) {
+      expect(puzzle.target).toBeLessThan(0)
+    }
+    for (const puzzle of puzzleFor('last-light')) {
+      expect(puzzle.settings.numCards).toBeGreaterThanOrEqual(8)
     }
   })
 
@@ -141,12 +199,16 @@ describe('dungeon progression', () => {
     return next
   }
 
-  it('opens the first trial only until it is cleared', () => {
+  it('opens the first trial and the first gauntlet of each chapter', () => {
     const empty: DungeonProgress = {}
+    const chaos = DUNGEON_GROUPS[1]!
     expect(isTrialUnlocked(empty, cellar, 0)).toBe(true)
     expect(isTrialUnlocked(empty, cellar, 1)).toBe(false)
     expect(isGauntletUnlocked(empty, cellar.id)).toBe(true)
     expect(isGauntletUnlocked(empty, foundry.id)).toBe(false)
+    // Both chapters are open from the start, but each ramps on its own.
+    expect(isGauntletUnlocked(empty, chaos.gauntlets[0]!.id)).toBe(true)
+    expect(isGauntletUnlocked(empty, chaos.gauntlets[1]!.id)).toBe(false)
 
     const firstCleared: DungeonProgress = {
       [`${cellar.id}/${cellar.trials[0]!.id}`]: { score: 90, clearedAt: 1 },
@@ -155,6 +217,17 @@ describe('dungeon progression', () => {
     expect(isTrialUnlocked(firstCleared, cellar, 2)).toBe(false)
     expect(gauntletClearedCount(firstCleared, cellar)).toBe(1)
     expect(gauntletIsCleared(firstCleared, cellar)).toBe(false)
+  })
+
+  it('treats a revealed trial as cleared so the next one opens', () => {
+    const progress: DungeonProgress = {
+      [`${cellar.id}/${cellar.trials[0]!.id}`]: { score: 0, clearedAt: 1, revealed: true },
+    }
+
+    expect(trialRevealed(progress, cellar.id, cellar.trials[0]!.id)).toBe(true)
+    expect(trialRevealed(progress, cellar.id, cellar.trials[1]!.id)).toBe(false)
+    expect(isTrialUnlocked(progress, cellar, 1)).toBe(true)
+    expect(isTrialUnlocked(progress, cellar, 2)).toBe(false)
   })
 
   it('unlocks the next gauntlet only after every trial is cleared', () => {
@@ -167,6 +240,12 @@ describe('dungeon progression', () => {
     expect(nextTrialIn(cellar.id, cellar.trials.at(-1)!.id)).toBeNull()
     expect(nextGauntletAfter(cellar.id)?.id).toBe(foundry.id)
     expect(nextGauntletAfter(DUNGEON_GAUNTLETS.at(-1)!.id)).toBeNull()
+    // Clearing Chapter I does not skip the second gauntlet of Chapter II.
+    const abyss = DUNGEON_GROUPS[0]!.gauntlets.at(-1)!
+    expect(nextGauntletAfter(abyss.id)?.id).toBe('decimal-sea')
+    const abyssCleared = clear({}, abyss.id)
+    expect(isGauntletUnlocked(abyssCleared, 'scrapheap')).toBe(false)
+    expect(isGauntletUnlocked(abyssCleared, 'decimal-sea')).toBe(true)
   })
 })
 

@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import DifficultyChip from '../DifficultyChip.vue'
 import { useGameContext } from '../../app/context'
-import { gauntletById, getDungeonPuzzle } from '../../engine/dungeon'
+import { gauntletById, gauntletGroup, getDungeonPuzzle } from '../../engine/dungeon'
 import { formatNumber } from '../../engine/math'
 
 const {
@@ -13,12 +13,17 @@ const {
   gauntletProgress,
   gauntletBest,
   trialCleared,
+  trialRevealed,
   trialUnlocked,
   startDungeonTrial,
   openDungeon,
   openGauntlet,
   nextGauntletId,
 } = useGameContext()
+
+const group = computed(() =>
+  selectedGauntlet.value ? gauntletGroup(selectedGauntlet.value.id) ?? null : null
+)
 
 const trials = computed(() => {
   const gauntlet = selectedGauntlet.value
@@ -29,6 +34,7 @@ const trials = computed(() => {
     number: String(index + 1).padStart(2, '0'),
     puzzle: getDungeonPuzzle(gauntlet.id, trial.id),
     cleared: trialCleared(gauntlet.id, trial.id),
+    revealed: trialRevealed(gauntlet.id, trial.id),
     unlocked: trialUnlocked(gauntlet, index),
     best: gauntletBest(gauntlet.id, trial.id),
     finale: index === gauntlet.trials.length - 1,
@@ -49,6 +55,7 @@ const nextId = computed(() =>
 const nextGauntlet = computed(() => (nextId.value ? gauntletById(nextId.value) ?? null : null))
 
 function trialStatus(entry: (typeof trials.value)[number]): string {
+  if (entry.revealed) return 'REVEALED'
   if (entry.cleared) return 'CLEARED'
   if (!entry.unlocked) return 'SEALED'
   return 'READY'
@@ -59,8 +66,9 @@ function trialStatus(entry: (typeof trials.value)[number]): string {
   <main v-if="selectedGauntlet" class="screen-gauntlet" :inert="menuOpen || tutorialOpen">
     <div class="gauntlet-marquee" :style="{ '--gauntlet-accent': selectedGauntlet.accent }">
       <div class="gauntlet-marquee__left">
-        <span class="gauntlet-marquee__badge">THE DUNGEON</span>
+        <span class="gauntlet-marquee__badge">{{ group?.chapter ?? 'THE DUNGEON' }}</span>
         <span class="gauntlet-marquee__name">{{ selectedGauntlet.name }}</span>
+        <span v-if="group" class="gauntlet-marquee__group">{{ group.name }}</span>
       </div>
       <button
         type="button"
@@ -156,7 +164,9 @@ function trialStatus(entry: (typeof trials.value)[number]): string {
             </span>
             <span>
               <em>Target</em>
-              <strong>{{ entry.unlocked ? formatNumber(entry.puzzle.target) : '???' }}</strong>
+              <strong>
+                {{ entry.unlocked ? formatNumber(entry.puzzle.targetExact ?? entry.puzzle.target) : '???' }}
+              </strong>
             </span>
             <span>
               <em>Operators</em>
@@ -170,7 +180,8 @@ function trialStatus(entry: (typeof trials.value)[number]): string {
 
           <span class="trial-card__foot">
             <span v-if="entry.unlocked" class="trial-card__ledger">
-              <template v-if="entry.best !== null">
+              <template v-if="entry.revealed">Solution seen</template>
+              <template v-else-if="entry.best !== null">
                 Best <strong>{{ formatNumber(entry.best) }}</strong>
               </template>
               <template v-else>No score yet</template>
@@ -250,6 +261,12 @@ function trialStatus(entry: (typeof trials.value)[number]): string {
   font-size: 1.1rem;
   color: var(--ink-cream);
   text-shadow: 0 3px 0 #09080f;
+}
+
+.gauntlet-marquee__group {
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  color: var(--ink-muted);
 }
 
 .gauntlet-hero {

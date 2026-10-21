@@ -13,9 +13,11 @@ import {
   isTrialUnlocked,
   nextTrialIn,
   trialBest,
+  trialRevealed,
   type DungeonGauntlet,
   type DungeonProgress,
 } from '../engine/dungeon'
+import { formatFullEquation } from '../engine/math'
 import { countCardsInNode } from '../engine/workspace'
 import {
   createPuzzle,
@@ -24,11 +26,17 @@ import {
   type PuzzleDefinition,
   type PuzzleKind,
   type PuzzleLeaderboardEntry,
+  validatePuzzleAttempt,
 } from '../engine/puzzles'
 import type { GameSettings, ScreenPhase } from '../engine/types'
 import { randomPlayerName } from '../multiplayer/playerNames'
 import { cloneSettings } from './defaults'
-import { readDungeonProgress, recordDungeonClear, saveDungeonProgress } from './dungeonProgress'
+import {
+  readDungeonProgress,
+  recordDungeonClear,
+  recordDungeonReveal,
+  saveDungeonProgress,
+} from './dungeonProgress'
 import {
   bestPuzzleScore,
   fetchPuzzleBoard,
@@ -54,6 +62,8 @@ export interface PuzzleResult {
   note: string | null
   /** Set when the attempt was a dungeon trial. */
   dungeon: { gauntletId: string; trialId: string } | null
+  /** The player gave up and the reference solution was revealed. */
+  revealed?: boolean
 }
 
 const PERIODIC_KINDS: PeriodicPuzzleKind[] = ['hourly', 'daily', 'daily-2', 'weekly']
@@ -418,6 +428,41 @@ export function usePuzzles(deps: {
     phase.value = 'puzzle-result'
   }
 
+  /**
+   * Gives up on the current dungeon trial: reveals its stored reference
+   * solution and marks the trial cleared so the next one opens.
+   */
+  function revealDungeonSolution(): void {
+    const puzzle = activePuzzle.value
+    const dungeon = puzzle?.dungeon
+    if (!puzzle || !dungeon) return
+    const attempt = validatePuzzleAttempt(puzzle, puzzle.referenceSolution)
+
+    dungeonProgress.value = recordDungeonReveal(
+      dungeonProgress.value,
+      dungeon.gauntletId,
+      dungeon.trialId
+    )
+    saveDungeonProgress(dungeonProgress.value)
+    selectedGauntletId.value = dungeon.gauntletId
+    submitError.value = null
+    lastResult.value = {
+      puzzle,
+      score: attempt.ok ? attempt.score : 0,
+      equation: attempt.ok
+        ? attempt.equation
+        : formatFullEquation(puzzle.referenceSolution),
+      rank: null,
+      improved: false,
+      source: 'dungeon',
+      note: null,
+      dungeon: { gauntletId: dungeon.gauntletId, trialId: dungeon.trialId },
+      revealed: true,
+    }
+    phase.value = 'puzzle-result'
+    playSfx('select')
+  }
+
   function retryPuzzle(): void {
     const puzzle = activePuzzle.value
     if (!puzzle) return
@@ -498,6 +543,10 @@ export function usePuzzles(deps: {
 
   function trialCleared(gauntletId: string, trialId: string): boolean {
     return isTrialCleared(dungeonProgress.value, gauntletId, trialId)
+  }
+
+  function trialWasRevealed(gauntletId: string, trialId: string): boolean {
+    return trialRevealed(dungeonProgress.value, gauntletId, trialId)
   }
 
   function trialUnlocked(gauntlet: DungeonGauntlet, trialIndex: number): boolean {
@@ -597,11 +646,13 @@ export function usePuzzles(deps: {
     startPuzzle,
     startDungeonTrial,
     finishPuzzle,
+    revealDungeonSolution,
     retryPuzzle,
     nextDungeonTrial,
     exitPuzzleToHub,
     leavePuzzleForTitle,
     trialCleared,
+    trialRevealed: trialWasRevealed,
     trialUnlocked,
     gauntletProgress,
     gauntletComplete,

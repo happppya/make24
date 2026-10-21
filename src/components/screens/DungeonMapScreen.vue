@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import DifficultyChip from '../DifficultyChip.vue'
 import { useGameContext } from '../../app/context'
-import { DUNGEON_GAUNTLETS } from '../../engine/dungeon'
+import { DUNGEON_GAUNTLETS, DUNGEON_GROUPS } from '../../engine/dungeon'
 
 const {
   menuOpen,
@@ -18,25 +18,36 @@ const {
 
 const ROMAN = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII']
 
-const entries = computed(() =>
-  DUNGEON_GAUNTLETS.map((gauntlet, index) => ({
-    gauntlet,
-    index,
-    numeral: ROMAN[index] ?? String(index + 1),
-    unlocked: gauntletUnlocked(gauntlet.id),
-    complete: gauntletComplete(gauntlet),
-    cleared: gauntletProgress(gauntlet),
-    firstDifficulty: gauntlet.trials[0]!.difficulty,
-    lastDifficulty: gauntlet.trials[gauntlet.trials.length - 1]!.difficulty,
-    lockedBy: DUNGEON_GAUNTLETS[index - 1]?.name ?? null,
-  }))
+const groups = computed(() =>
+  DUNGEON_GROUPS.map((group) => {
+    const gauntlets = group.gauntlets.map((gauntlet, index) => ({
+      gauntlet,
+      numeral: ROMAN[index] ?? String(index + 1),
+      unlocked: gauntletUnlocked(gauntlet.id),
+      complete: gauntletComplete(gauntlet),
+      cleared: gauntletProgress(gauntlet),
+      firstDifficulty: gauntlet.trials[0]!.difficulty,
+      lastDifficulty: gauntlet.trials[gauntlet.trials.length - 1]!.difficulty,
+      lockedBy: group.gauntlets[index - 1]?.name ?? null,
+    }))
+    return {
+      group,
+      gauntlets,
+      clearedTrials: gauntlets.reduce((total, entry) => total + entry.cleared, 0),
+      totalTrials: group.gauntlets.reduce(
+        (total, gauntlet) => total + gauntlet.trials.length,
+        0
+      ),
+      clearedGauntlets: gauntlets.filter((entry) => entry.complete).length,
+    }
+  })
 )
 
 const percent = computed(() =>
   dungeonTotal.value === 0 ? 0 : Math.round((dungeonCleared.value / dungeonTotal.value) * 100)
 )
-const gauntletsCleared = computed(
-  () => entries.value.filter((entry) => entry.complete).length
+const gauntletsCleared = computed(() =>
+  groups.value.reduce((total, group) => total + group.clearedGauntlets, 0)
 )
 </script>
 
@@ -45,7 +56,7 @@ const gauntletsCleared = computed(
     <div class="dungeon-marquee">
       <div class="dungeon-marquee__left">
         <span class="dungeon-marquee__badge">THE DUNGEON</span>
-        <span class="dungeon-marquee__name">Seven Gauntlets</span>
+        <span class="dungeon-marquee__name">Two Chapters</span>
       </div>
       <button
         type="button"
@@ -59,13 +70,10 @@ const gauntletsCleared = computed(
 
     <section class="dungeon-hero">
       <div class="dungeon-hero__copy">
-        <span class="dungeon-eyebrow">A CAMPAIGN OF SEVEN DOORS</span>
-        <h1>Seven gauntlets.<br /><span>Forty-two trials.</span></h1>
-        <p>
-          Each gauntlet has its own operators, its own locked opening groups and
-          its own idea of a fair target. Clear every trial to open the next door.
-          Every board is fixed: the same hand, every run.
-        </p>
+        <h1>
+          {{ DUNGEON_GAUNTLETS.length }} gauntlets.<br />
+          <span>{{ dungeonTotal }} trials.</span>
+        </h1>
       </div>
 
       <div class="dungeon-progress" data-testid="dungeon-progress">
@@ -77,65 +85,94 @@ const gauntletsCleared = computed(
           <span :style="{ width: `${percent}%` }"></span>
         </div>
         <div class="dungeon-progress__foot">
-          <span>{{ gauntletsCleared }} / {{ entries.length }} gauntlets cleared</span>
+          <span>{{ gauntletsCleared }} / {{ DUNGEON_GAUNTLETS.length }} gauntlets cleared</span>
           <span>{{ percent }}%</span>
         </div>
       </div>
     </section>
 
-    <ol class="gauntlet-list">
-      <li v-for="entry in entries" :key="entry.gauntlet.id">
-        <button
-          type="button"
-          class="gauntlet-card"
-          :class="{
-            'gauntlet-card--locked': !entry.unlocked,
-            'gauntlet-card--cleared': entry.complete,
-          }"
-          :style="{ '--gauntlet-accent': entry.gauntlet.accent }"
-          :disabled="!entry.unlocked"
-          :data-testid="`gauntlet-${entry.gauntlet.id}`"
-          @click="openGauntlet(entry.gauntlet.id)"
-        >
-          <span class="gauntlet-card__index">{{ entry.numeral }}</span>
-          <span class="gauntlet-card__sigil" aria-hidden="true">{{ entry.gauntlet.sigil }}</span>
+    <section
+      v-for="chapter in groups"
+      :key="chapter.group.id"
+      class="dungeon-chapter"
+      :style="{ '--group-accent': chapter.group.accent }"
+      :data-testid="`dungeon-group-${chapter.group.id}`"
+    >
+      <header class="chapter-marquee">
+        <div class="chapter-marquee__identity">
+          <span class="chapter-marquee__sigil" aria-hidden="true">{{ chapter.group.sigil }}</span>
+          <div>
+            <span class="chapter-marquee__chapter">{{ chapter.group.chapter }}</span>
+            <h2>{{ chapter.group.name }}</h2>
+            <p>{{ chapter.group.theme }}</p>
+          </div>
+        </div>
+        <div class="chapter-marquee__progress">
+          <span>
+            <em>Gauntlets</em>
+            {{ chapter.clearedGauntlets }} / {{ chapter.gauntlets.length }}
+          </span>
+          <span>
+            <em>Trials</em>
+            {{ chapter.clearedTrials }} / {{ chapter.totalTrials }}
+          </span>
+        </div>
+      </header>
 
-          <span class="gauntlet-card__body">
-            <span class="gauntlet-card__title-row">
-              <strong>{{ entry.gauntlet.name }}</strong>
-              <span v-if="entry.complete" class="gauntlet-card__stamp">CLEARED</span>
-              <span v-else-if="!entry.unlocked" class="gauntlet-card__stamp gauntlet-card__stamp--locked">
-                SEALED
+      <ol class="gauntlet-list">
+        <li v-for="entry in chapter.gauntlets" :key="entry.gauntlet.id">
+          <button
+            type="button"
+            class="gauntlet-card"
+            :class="{
+              'gauntlet-card--locked': !entry.unlocked,
+              'gauntlet-card--cleared': entry.complete,
+            }"
+            :style="{ '--gauntlet-accent': entry.gauntlet.accent }"
+            :disabled="!entry.unlocked"
+            :data-testid="`gauntlet-${entry.gauntlet.id}`"
+            @click="openGauntlet(entry.gauntlet.id)"
+          >
+            <span class="gauntlet-card__index">{{ entry.numeral }}</span>
+            <span class="gauntlet-card__sigil" aria-hidden="true">{{ entry.gauntlet.sigil }}</span>
+
+            <span class="gauntlet-card__body">
+              <span class="gauntlet-card__title-row">
+                <strong>{{ entry.gauntlet.name }}</strong>
+                <span v-if="entry.complete" class="gauntlet-card__stamp">CLEARED</span>
+                <span v-else-if="!entry.unlocked" class="gauntlet-card__stamp gauntlet-card__stamp--locked">
+                  SEALED
+                </span>
+              </span>
+              <span class="gauntlet-card__theme">{{ entry.gauntlet.theme }}</span>
+              <span class="gauntlet-card__difficulty">
+                <DifficultyChip :difficulty="entry.firstDifficulty" compact />
+                <span class="gauntlet-card__arrow" aria-hidden="true">→</span>
+                <DifficultyChip :difficulty="entry.lastDifficulty" compact />
+                <span class="gauntlet-card__trials">{{ entry.gauntlet.trials.length }} trials</span>
+              </span>
+              <span v-if="!entry.unlocked" class="gauntlet-card__locked">
+                Clear {{ entry.lockedBy }} to open this door.
               </span>
             </span>
-            <span class="gauntlet-card__theme">{{ entry.gauntlet.theme }}</span>
-            <span class="gauntlet-card__difficulty">
-              <DifficultyChip :difficulty="entry.firstDifficulty" compact />
-              <span class="gauntlet-card__arrow" aria-hidden="true">→</span>
-              <DifficultyChip :difficulty="entry.lastDifficulty" compact />
-              <span class="gauntlet-card__trials">{{ entry.gauntlet.trials.length }} trials</span>
-            </span>
-            <span v-if="!entry.unlocked" class="gauntlet-card__locked">
-              Clear {{ entry.lockedBy }} to open this door.
-            </span>
-          </span>
 
-          <span class="gauntlet-card__side">
-            <span class="gauntlet-card__count">{{ entry.cleared }} / {{ entry.gauntlet.trials.length }}</span>
-            <span class="gauntlet-card__pips" aria-hidden="true">
-              <span
-                v-for="(trial, trialIndex) in entry.gauntlet.trials"
-                :key="trial.id"
-                :class="{ 'is-cleared': trialIndex < entry.cleared }"
-              ></span>
+            <span class="gauntlet-card__side">
+              <span class="gauntlet-card__count">{{ entry.cleared }} / {{ entry.gauntlet.trials.length }}</span>
+              <span class="gauntlet-card__pips" aria-hidden="true">
+                <span
+                  v-for="(trial, trialIndex) in entry.gauntlet.trials"
+                  :key="trial.id"
+                  :class="{ 'is-cleared': trialIndex < entry.cleared }"
+                ></span>
+              </span>
+              <span class="gauntlet-card__enter">
+                {{ entry.complete ? 'Revisit' : entry.unlocked ? 'Enter ▸' : 'Locked' }}
+              </span>
             </span>
-            <span class="gauntlet-card__enter">
-              {{ entry.complete ? 'Revisit' : entry.unlocked ? 'Enter ▸' : 'Locked' }}
-            </span>
-          </span>
-        </button>
-      </li>
-    </ol>
+          </button>
+        </li>
+      </ol>
+    </section>
 
     <p class="dungeon-footnote">
       Progress and your best score for each trial are kept on this device. Every
@@ -204,15 +241,6 @@ const gauntletsCleared = computed(
   padding: 6px 4px 24px;
 }
 
-.dungeon-eyebrow {
-  display: block;
-  margin-bottom: 8px;
-  font-family: var(--font-pixel);
-  font-size: 0.56rem;
-  letter-spacing: 0.2em;
-  color: #ff8fa3;
-}
-
 .dungeon-hero h1 {
   margin: 0 0 12px;
   font-family: var(--font-display);
@@ -224,15 +252,6 @@ const gauntletsCleared = computed(
 
 .dungeon-hero h1 span {
   color: #ff8fa3;
-}
-
-.dungeon-hero p {
-  max-width: 62ch;
-  margin: 0;
-  font-family: var(--font-mono);
-  font-size: 1.02rem;
-  line-height: 1.4;
-  color: var(--ink-muted);
 }
 
 .dungeon-progress {
@@ -284,6 +303,103 @@ const gauntletsCleared = computed(
   font-family: var(--font-mono);
   font-size: 0.82rem;
   color: var(--ink-muted);
+}
+
+.dungeon-chapter {
+  margin-bottom: 22px;
+}
+
+.chapter-marquee {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+  padding: 9px 13px;
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--group-accent) 13%, transparent), transparent 52%),
+    linear-gradient(180deg, #241a34, #171226);
+  border: 3px solid var(--group-accent);
+  outline: 3px solid #09080f;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 6px 0 #09080f;
+}
+
+.chapter-marquee__identity {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.chapter-marquee__sigil {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  font-size: 1.4rem;
+  line-height: 1;
+  color: var(--group-accent);
+  background: rgba(9, 8, 15, 0.6);
+  border: 2px solid color-mix(in srgb, var(--group-accent) 55%, transparent);
+  text-shadow: 0 3px 0 #09080f;
+}
+
+.chapter-marquee__chapter {
+  display: block;
+  margin-bottom: 2px;
+  font-family: var(--font-pixel);
+  font-size: 0.48rem;
+  letter-spacing: 0.18em;
+  color: var(--group-accent);
+}
+
+.chapter-marquee h2 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+  font-weight: 400;
+  line-height: 1.2;
+  color: var(--ink-cream);
+  text-shadow: 0 3px 0 #09080f;
+}
+
+.chapter-marquee p {
+  margin: 2px 0 0;
+  font-family: var(--font-mono);
+  font-size: 0.88rem;
+  line-height: 1.3;
+  color: var(--ink-muted);
+}
+
+.chapter-marquee__progress {
+  display: flex;
+  gap: 14px;
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  color: var(--ink-cream);
+}
+
+.chapter-marquee__progress span {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+  padding-left: 14px;
+  border-left: 1px solid color-mix(in srgb, var(--group-accent) 30%, transparent);
+  white-space: nowrap;
+}
+
+.chapter-marquee__progress em {
+  font-style: normal;
+  font-family: var(--font-pixel);
+  font-size: 0.44rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--group-accent);
 }
 
 .gauntlet-list {
@@ -515,6 +631,12 @@ const gauntletsCleared = computed(
 @media (max-width: 560px) {
   .screen-dungeon {
     padding: 12px 12px 32px;
+  }
+  .chapter-marquee__progress {
+    width: 100%;
+  }
+  .chapter-marquee__progress span {
+    align-items: flex-start;
   }
   .gauntlet-card {
     padding: 11px 10px;

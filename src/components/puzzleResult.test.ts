@@ -28,6 +28,7 @@ function dungeonResult(): PuzzleResult {
 function mountResult(options: {
   progress: DungeonProgress
   complete?: boolean
+  result?: PuzzleResult
 }) {
   const nextDungeonTrial = vi.fn()
   const exitPuzzleToHub = vi.fn()
@@ -36,7 +37,7 @@ function mountResult(options: {
   const context = {
     menuOpen: ref(false),
     tutorialOpen: ref(false),
-    lastResult: ref<PuzzleResult | null>(dungeonResult()),
+    lastResult: ref<PuzzleResult | null>(options.result ?? dungeonResult()),
     puzzlePlayerName: ref('Ada'),
     boardState: () => 'idle',
     topThree: () => [],
@@ -76,6 +77,24 @@ describe('dungeon result screen', () => {
 
     await wrapper.find('[data-testid="back-to-gauntlet-btn"]').trigger('click')
     expect(exitPuzzleToHub).toHaveBeenCalledOnce()
+  })
+
+  it('reveals the reference solution when the player gave up', () => {
+    const progress: DungeonProgress = {
+      [`${GAUNTLET.id}/${TRIAL.id}`]: { score: 0, clearedAt: 1, revealed: true },
+    }
+    const { wrapper } = mountResult({
+      progress,
+      result: { ...dungeonResult(), revealed: true, score: 40 },
+    })
+
+    expect(wrapper.find('[data-testid="puzzle-result-stamp"]').text()).toContain(
+      'SOLUTION REVEALED'
+    )
+    expect(wrapper.text()).toContain('reference score')
+    expect(wrapper.text()).toContain('adds no best score')
+    expect(wrapper.find('[data-testid="revealed-solution"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="next-trial-btn"]').exists()).toBe(true)
   })
 
   it('opens the next gauntlet when the gatekeeper falls', async () => {

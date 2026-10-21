@@ -12,8 +12,14 @@ and in the table server. If a rule changes, it changes here — the spec in
 | [approxMath.ts](approxMath.ts) | Fast double probes used only by deterministic puzzle search; the winning tree is rebuilt exactly |
 | [deck.ts](deck.ts) | Deck pools, sprite paths, dealing a hand, generating the round target |
 | [binds.ts](binds.ts) | Automatic opening binds: Dragon runs, Rook copies, products and per-kind card ranges and caps |
-| [puzzles.ts](puzzles.ts) | The seven difficulty tiers, deterministic hourly, two daily and weekly periods, recipe cabinet, generated hands/targets, reference solutions and attempt validation |
-| [dungeon.ts](dungeon.ts) | The fixed dungeon campaign: seven themed gauntlets, their trials, generation and pure unlock/progress helpers |
+| [puzzles.ts](puzzles.ts) | Calendar and dungeon generation: hourly, two daily and weekly periods, generated hands/targets, reference solutions and attempt validation |
+| [puzzleDifficulty.ts](puzzleDifficulty.ts) | The seven difficulty tiers and their ranks, accents and descriptions |
+| [recipeKit.ts](recipeKit.ts) | The `PuzzleRecipe` shape, shared recipe defaults, operator groups and the compact bind-rule builder |
+| [calendarRecipes.ts](calendarRecipes.ts) | The calendar recipe cabinet behind the hourly, daily and weekly pools |
+| [chaosRecipes.ts](chaosRecipes.ts) | The Trials of Chaos recipes: fractional, negative, crowded and large-target variants kept out of the calendar pools |
+| [puzzleRecipes.ts](puzzleRecipes.ts) | Recipe lookup across both cabinets, plus the calendar pool for a difficulty |
+| [dungeonContent.ts](dungeonContent.ts) | The fixed dungeon script: two chapters, their gauntlets and trials |
+| [dungeon.ts](dungeon.ts) | Dungeon generation, chapter lookup and pure unlock/progress helpers |
 | [constants.ts](constants.ts) | The forty famous constants used by the constants target mode: values, symbols, and the line explaining each one |
 | [workspace.ts](workspace.ts) | The five workspaces: groups, positions, selection, merging, ungroup, undo/redo, tidy |
 
@@ -30,7 +36,10 @@ Things worth knowing before editing:
   as the target; `createDungeonPuzzle()` runs the same generator from a fixed
   gauntlet/trial seed. `validatePuzzleAttempt()` replays a submitted board
   against the hand, checks enabled operators, recomputes the score and is the
-  only scoring path for boards.
+  only scoring path for boards. Fractional Chaos puzzles keep the reference
+  board's exact decimal target in `targetExact`; everything else compares the
+  numeric target exactly. Calendar pools stay positive-integer only, so adding
+  Chaos recipes cannot reshuffle an existing hourly, daily or weekly board.
 - Every evaluator returns an `EvalResult` with `ok: false` and a message instead
   of throwing or returning `NaN`, so an illegal board can be reported in the UI.
   On success `exactValue` is the canonical 50-digit decimal string; `value` is

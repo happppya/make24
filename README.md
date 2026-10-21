@@ -5,7 +5,9 @@ with operators until one group hits the target, and the **cheapest** board wins
 the round — every operator costs points, so the elegant route beats the long one.
 Playable solo or online against friends in real time, with an hourly board, two
 daily boards and a weekly trial on shared leaderboards, plus **The Dungeon** —
-seven themed gauntlets of six fixed trials that climb from easy to impossible.
+two chapters of seven themed gauntlets and six fixed trials each, from easy
+arithmetic in the Cellar to the fractional, negative and nine-card boards of
+Trials of Chaos.
 Optional opening **binds** fuse consecutive ranks or duplicate cards into free
 locked groups before play starts. Numbers run on a 50-digit decimal engine; the board,
 target and results show five decimal places by default, and a gameplay slider
