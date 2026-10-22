@@ -1,5 +1,6 @@
 import { approxBinary, approxUnary, type ApproxResult } from './approxMath'
 import { bindRuleLabels, createBoundGroups, createDefaultBindRules } from './binds'
+import { decimalString, toDecimal } from './decimal'
 import { dealHand } from './deck'
 import {
   OPERATOR_CATALOG,
@@ -387,7 +388,7 @@ function buildPuzzle(request: PuzzleBuildRequest): PuzzleDefinition {
   // fraction) has to step in.
   const wantsNarrowTarget =
     recipe.allowNegative || recipe.allowFractional || recipe.targetMin >= 10_000_000
-  const maxHandAttempts = recipe.requireBind ? 160 : wantsNarrowTarget ? 300 : MAX_HAND_ATTEMPTS
+  const maxHandAttempts = recipe.requireBind ? 320 : wantsNarrowTarget ? 300 : MAX_HAND_ATTEMPTS
 
   let hand: Card[] = []
   let startingNodes: ExprNode[] = []
@@ -400,6 +401,7 @@ function buildPuzzle(request: PuzzleBuildRequest): PuzzleDefinition {
     startingNodes = createBoundGroups(hand, bindRules)
     const bindCount = startingNodes.filter((group) => group.kind === 'bind').length
     if (recipe.requireBind && bindCount === 0) continue
+    if (recipe.minBinds !== undefined && bindCount < recipe.minBinds) continue
     // A bind does the work of several merges without spending operators, so the
     // recipe's difficulty floor drops for the hands it fuses at the deal.
     const requiredOperators = Math.max(1, recipe.minOperators - bindCount * 2)
@@ -419,9 +421,16 @@ function buildPuzzle(request: PuzzleBuildRequest): PuzzleDefinition {
       if (!rebuilt) continue
       const value = rebuilt.value
       if (!recipeAcceptsValue(value, recipe)) continue
+      // Whole-number recipes must land on a genuinely whole exact value. A
+      // double can look integral while the 50-digit replay still carries a
+      // residual tail (exp/log routes do this constantly), and that board
+      // would never validate against the integer printed on the puzzle.
+      const rebuiltExact = nodeExactValue(rebuilt)
+      if (!recipe.allowFractional && !toDecimal(rebuiltExact).isInteger()) continue
+      const exactTarget = decimalString(rebuiltExact)
       referenceSolution = rebuilt
-      target = value
-      if (recipe.allowFractional) targetExact = rebuilt.exactValue
+      target = Number(exactTarget)
+      if (recipe.allowFractional) targetExact = exactTarget
       break
     }
   }
@@ -437,8 +446,9 @@ function buildPuzzle(request: PuzzleBuildRequest): PuzzleDefinition {
     allowedOperators.operators.add = true
     const fallback = buildFallbackExpression(createBoundGroups(hand, bindRules), allowedOperators)
     referenceSolution = fallback
-    target = fallback.value
-    if (recipe.allowFractional) targetExact = fallback.exactValue
+    const exactTarget = decimalString(nodeExactValue(fallback))
+    target = Number(exactTarget)
+    if (recipe.allowFractional) targetExact = exactTarget
   }
 
   const settings = settingsForPuzzle(

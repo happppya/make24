@@ -33,6 +33,8 @@ export interface PuzzleRecipe {
   binds?: BindRulesConfig
   /** A bind-themed recipe only accepts hands that actually produce one. */
   requireBind?: boolean
+  /** Minimum opening bind groups a hand must produce. */
+  minBinds?: number
 }
 
 export const ALL_OPERATOR_GROUPS: OperatorCategory[] = [

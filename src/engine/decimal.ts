@@ -294,8 +294,12 @@ export function formatNumber(value: NumericInput, decimalPlaces = DEFAULT_DECIMA
   const places = clampPlaces(decimalPlaces)
   const abs = d.abs()
 
-  // Very small or very large values read better in scientific notation; doing
-  // this before the integer check also stops a tiny value from rounding to 0.
+  // Whole numbers stay readable up to ten billion. Beyond that the digit count
+  // costs more than the precision it adds, so fall back to scientific notation.
+  if (d.isInteger() && abs.lte('1e10')) return d.toFixed(0)
+
+  // Very small or very large values read better in scientific notation.
+  // Checking before the final rounding also stops a tiny value becoming 0.
   if (abs.gte('1e7') || abs.lt('1e-4')) {
     return trimExponential(d.toExponential(places))
   }

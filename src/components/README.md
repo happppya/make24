@@ -12,6 +12,7 @@ import `useGame` or talk to the server.
 | [DifficultyChip.vue](DifficultyChip.vue) | The shared seven-tier difficulty badge used by calendar, dungeon and result screens |
 | [PuzzleCadenceCard.vue](PuzzleCadenceCard.vue) | One calendar board card: tier, reset clock, target, rules, top three and play button |
 | [TutorialOverlay.vue](TutorialOverlay.vue) | The player's guide, opened from the title screen |
+| [GauntletLoreDialog.vue](GauntletLoreDialog.vue) | The ledger reader opened from a gauntlet page: one connected story fragment with previous/next pages |
 | [TutorialShot.vue](TutorialShot.vue) | An annotated screenshot: image, numbered pins and legend |
 | [screens/](screens) | One component per game phase (see its README) |
 

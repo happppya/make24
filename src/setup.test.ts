@@ -478,6 +478,14 @@ describe('Make 24 Remastered — Math & Operators Engine', () => {
     expect(formatNumber('0.1', 32)).toBe('0.1')
     expect(cleanFloat(0.1 + 0.2)).toBe(0.3)
 
+    // Integers stay spelled out up to ten billion instead of turning into 1e7.
+    expect(formatNumber(10_000_000)).toBe('10000000')
+    expect(formatNumber('9999999999')).toBe('9999999999')
+    expect(formatNumber('1e10')).toBe('10000000000')
+    expect(formatNumber('-1e10')).toBe('-10000000000')
+    expect(formatNumber('10000000001')).toBe('1e10')
+    expect(formatNumber('12345678.5')).toBe('1.23457e7')
+
     expect(
       formatNumber('1.2345678901234567890123456789012345', 32)
     ).toBe('1.23456789012345678901234567890123')

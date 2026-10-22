@@ -168,6 +168,80 @@ describe('dungeon content', () => {
     }
   })
 
+  it('gives every Chaos door its own recipe and lets the last doors grow to twenty cards', () => {
+    const chaos = DUNGEON_GROUPS[1]!
+    const trials = chaos.gauntlets.flatMap((gauntlet) =>
+      gauntlet.trials.map((trial) => ({ gauntlet, trial }))
+    )
+
+    // A gauntlet is a run of different ideas, not the same puzzle re-labelled.
+    expect(new Set(trials.map(({ trial }) => trial.recipeId)).size).toBe(trials.length)
+
+    for (const { gauntlet, trial } of trials) {
+      const puzzle = getDungeonPuzzle(gauntlet.id, trial.id)!
+      const recipe = puzzleRecipe(trial.recipeId)!
+      // A last-resort fold falls outside the recipe's own target band and would
+      // quietly replace the advertised puzzle with a plain sum.
+      expect(puzzle.target, `${gauntlet.id}/${trial.id}`).toBeGreaterThanOrEqual(
+        recipe.targetMin
+      )
+      expect(puzzle.target, `${gauntlet.id}/${trial.id}`).toBeLessThanOrEqual(
+        recipe.targetMax
+      )
+      expect(puzzle.settings.numCards).toBe(recipe.cardCounts[0])
+    }
+
+    const impossible = chaos.gauntlets.flatMap((gauntlet) =>
+      gauntlet.trials
+        .filter((trial) => trial.difficulty === 'impossible')
+        .map((trial) => getDungeonPuzzle(gauntlet.id, trial.id)!)
+    )
+    expect(impossible.length).toBeGreaterThanOrEqual(6)
+    expect(Math.max(...impossible.map((puzzle) => puzzle.settings.numCards))).toBe(20)
+    expect(impossible.every((puzzle) => puzzle.settings.numCards >= 17)).toBe(true)
+
+    const door = (gauntletId: string, trialId: string) => getDungeonPuzzle(gauntletId, trialId)!
+
+    const halfTide = door('decimal-sea', 'half-tide')
+    expect(halfTide.target).toBeGreaterThan(0)
+    expect(halfTide.target).toBeLessThan(1)
+
+    const oddParts = door('scrapheap', 'odd-parts')
+    expect(oddParts.settings.binds.rook.enabled).toBe(true)
+    expect(oddParts.settings.binds.dragon.enabled).toBe(false)
+
+    const salvage = door('scrapheap', 'salvage')
+    expect(salvage.settings.binds.dragon.enabled).toBe(true)
+    expect(salvage.settings.binds.rook.enabled).toBe(false)
+
+    const backwash = door('undertow', 'backwash')
+    expect(backwash.settings.allowedOperators.operators.add).toBe(false)
+
+    const brine = door('undertow', 'sinkhole')
+    expect(brine.target).toBeLessThan(0)
+    expect(Number.isInteger(brine.target)).toBe(false)
+
+    const titan = door('scrapheap', 'nine-scraps')
+    expect(titan.settings.numCards).toBeGreaterThanOrEqual(18)
+    expect(titan.settings.allowedOperators.operators.add).toBe(false)
+    expect(titan.settings.allowedOperators.operators.mult).toBe(false)
+
+    // The two twenty-card crown doors are loose hands: no free locks to hide behind.
+    for (const [gauntletId, trialId] of [
+      ['billion-vault', 'vault-of-nine'],
+      ['sphinx', 'the-answer'],
+    ] as const) {
+      const puzzle = door(gauntletId, trialId)
+      expect(puzzle.settings.numCards).toBe(20)
+      expect(puzzle.bindLabels).toHaveLength(0)
+    }
+
+    // The final door inverts the theme: a huge hand over a tiny target.
+    const lastLight = door('last-light', 'last-light')
+    expect(lastLight.settings.numCards).toBe(20)
+    expect(lastLight.target).toBeLessThan(10_000)
+  })
+
   it('returns null for unknown gauntlets, trials and recipes', () => {
     expect(getDungeonPuzzle('nowhere', 'first-light')).toBeNull()
     expect(getDungeonPuzzle('cellar', 'nowhere')).toBeNull()

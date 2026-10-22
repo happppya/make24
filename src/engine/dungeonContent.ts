@@ -9,6 +9,17 @@ export interface DungeonTrial {
   blurb: string
 }
 
+export interface DungeonLore {
+  /** Title of this page in the House ledger. */
+  heading: string
+  /** A line the Reckoners left on the page. */
+  epigraph: string
+  /** Who wrote the epigraph. */
+  source: string
+  /** The fragment itself, in reading order. */
+  paragraphs: string[]
+}
+
 export interface DungeonGauntlet {
   id: string
   name: string
@@ -18,6 +29,8 @@ export interface DungeonGauntlet {
   theme: string
   /** Longer briefing shown when the gauntlet is opened. */
   intro: string
+  /** A page of the connected story read from the gauntlet screen. */
+  lore: DungeonLore
   trials: DungeonTrial[]
 }
 
@@ -55,6 +68,16 @@ export const DUNGEON_GROUPS: DungeonGroup[] = [
         theme: 'Damp stone, loose cards, clean arithmetic.',
         intro:
           'The first door is the easiest one. Loose cards, short hands and nothing that bites. Learn the floor before the floor learns you.',
+        lore: {
+          heading: 'The first chalk mark',
+          epigraph: 'Every house begins with a mark someone meant to erase.',
+          source: 'The First Dealer, on the cellar wall',
+          paragraphs: [
+            'The House of Twenty-Four has no front door, only a hatch in the cellar floor. The First Dealer built it after his daughter vanished in the middle of a game, and then he kept building, room after room, as if the next one might give her back. The chalk mark was the first thing he made. Four strokes, six strokes, a line beneath them. He never rubbed it out.',
+            'One card from that first deck has no rank and no suit. The lamplighter calls it the Twenty-Fourth Card, though it is not a card at all. It is the place where a name should be. When the House is quiet, she can hear it being dealt.',
+            'She keeps the ledger now. Every room tells her something, and every room lies a little. The first door is easy because the House is still teaching her its shape. Behind it, the Foundry is already warm.',
+          ],
+        },
         trials: [
           {
             id: 'first-light',
@@ -109,6 +132,16 @@ export const DUNGEON_GROUPS: DungeonGroup[] = [
         theme: 'Powers, factorials, and a target that grows.',
         intro:
           'Everything here gets bigger. Factorials, powers and five-figure targets. The trick is not making the number; it is stopping at the right one.',
+        lore: {
+          heading: 'The deck is a mold',
+          epigraph: 'We did not print fifty-two cards. We printed one card fifty-two times.',
+          source: "Foundry Master's rule",
+          paragraphs: [
+            'The Foundry presses every deck in the House from one plate. A rank is only a thickness of ink. A suit is only a colour of heat. The Master says that is why the cards come apart so easily: they were never whole to begin with, only copies of a thing he will not name.',
+            'The plate was cut in the shape of the missing card. Every deck since has been wrong in the same place. The Master keeps the rejects in a drawer and forbids the apprentices to count them. At night he sets a second place at his table. Nobody has ever seen who it is for.',
+            'The press needs a number before it can run, and the number comes down through the pipes from the Signal Room. No one has heard the pipes ring in years. The Master still waits by them every morning, with his coat on.',
+          ],
+        },
         trials: [
           {
             id: 'bellows',
@@ -162,6 +195,16 @@ export const DUNGEON_GROUPS: DungeonGroup[] = [
         theme: 'Bits, shifts and joined digits.',
         intro:
           'The room only speaks in whole numbers. Build the target out of bits, shifts and digits stitched together. Fractional answers are static.',
+        lore: {
+          heading: 'A voice on the wire',
+          epigraph: 'A number is only a promise once someone can receive it.',
+          source: 'Signal Room log, page one',
+          paragraphs: [
+            'Every evening a number comes down the wires. The first one is always the same, the one the House was built around. Under it, too faint to read, there is a second signal. The engineers thought it was noise. Then they noticed it repeated at the pace of a deal.',
+            'The room went quiet for a week. Men stopped sleeping in their bunks and started sleeping beside the receivers. One of them wrote that a message can wait, but a pulse cannot. Whatever was sending the second signal had been doing it for a very long time.',
+            'They built the Observatory to see who it belonged to. The log ends with a drawing of a lens and a note in the margin: aim above the room.',
+          ],
+        },
         trials: [
           {
             id: 'carrier-wave',
@@ -215,6 +258,16 @@ export const DUNGEON_GROUPS: DungeonGroup[] = [
         theme: 'Trig, logarithms and reciprocal routes.',
         intro:
           'Look up. The targets here live behind degrees, logarithms and inverses. A domain error is the same as a wrong answer: the instrument goes dark.',
+        lore: {
+          heading: 'The number that would not fit',
+          epigraph: 'We looked for a number no hand could make. The sky returned the same room.',
+          source: 'Margin note, Observatory ledger',
+          paragraphs: [
+            'The Reckoners pointed the great lens at the sky and asked for something unreachable. For a year the instrument gave them whole numbers, all positive, all close to the first. They celebrated. Then the youngest astronomer asked why the sky looked so much like the ceiling.',
+            'The first lens had been cut from a card the House already knew. It could only see what the House could see. They ground a second lens from the blank card and looked again. The sky was full of unfinished numbers, and at the centre of it was a dark room with a table.',
+            'One of them wrote that the answer had never been out there. It was in the House, waiting for someone to stop asking the wrong question. They went down to count the hands. None of them filed a report.',
+          ],
+        },
         trials: [
           {
             id: 'moonrise',
@@ -268,6 +321,16 @@ export const DUNGEON_GROUPS: DungeonGroup[] = [
         theme: 'Arrangements, derangements and strange beasts.',
         intro:
           'Count the ways. Combinations, permutations, Stirling numbers and factorials prowl these cages. Every arrangement is legal until the cards run out.',
+        lore: {
+          heading: 'The escaped arrangement',
+          epigraph: 'Count every hand and one will still be missing.',
+          source: 'Menagerie census, final entry',
+          paragraphs: [
+            'The Menagerie was built to hold every arrangement the Reckoners could name. They filled cages with every order, every reversal, every row that almost repeated. The census was finite. The beasts were not. On the day the last cage was counted, one arrangement was already gone.',
+            'It can wear any face until someone observes it, which is why it cannot be kept in a row. The Reckoners built stronger cages. The cages became locks. The locks became rooms, and the rooms became the rest of the House.',
+            'The Ringmaster says the escaped thing is not dangerous. It is the only thing that can reach every door. That is why the Vault was built around it, and why the Dealer never stopped looking for it. He called it his daughter. The Ringmaster calls it the missing hand.',
+          ],
+        },
         trials: [
           {
             id: 'two-rabbits',
@@ -321,6 +384,16 @@ export const DUNGEON_GROUPS: DungeonGroup[] = [
         theme: 'Binds, locks and keyed groups.',
         intro:
           'The vault deals its own opening groups. Dragons and rooks are welded shut before you arrive, and every lock counts toward the same target.',
+        lore: {
+          heading: 'The locks came before the door',
+          epigraph: 'A lock is a rule that has learned to close by itself.',
+          source: 'Vault inscription',
+          paragraphs: [
+            'The Clockwork Vault holds no gold. It holds rules. Consecutive cards fuse when they touch, duplicates stack into a single weight, and every lock takes away a door before anyone reaches it. The Vault Master calls this security. The lamplighter calls it a house with too many walls.',
+            'There are twenty-four keyholes in the inner door. The Master insists that is a coincidence. The key is not metal. It is any hand that spends every card and still arrives, which is why so few people have seen the room beyond.',
+            'The last lock opens onto the Abyss. The Master will not say what is down there. He only says the first proof is still running, and that the Dealer went down a long time ago with a deck that was one card short.',
+          ],
+        },
         trials: [
           {
             id: 'first-lock',
@@ -374,6 +447,16 @@ export const DUNGEON_GROUPS: DungeonGroup[] = [
         theme: 'Every operator. No mercy.',
         intro:
           'The last door. Every operator is live, the targets are monstrous, and the ledger is unforgiving. Solvable is not the same as reasonable.',
+        lore: {
+          heading: 'The proof that failed',
+          epigraph: 'We set out to prove the House had one answer. The answer became a question.',
+          source: 'Ledger, final page of Chapter I',
+          paragraphs: [
+            'The Dealer brought every card and every rule into the Abyss for a single proof: that the House had one answer, and that the answer was the one he had written on the cellar wall. The first thousand hands agreed with him. The next thousand did not.',
+            'Some reached the number by asking a smaller question. One kept going after it arrived, because no rule told it to stop. The ledger cracked along the spine. The dark filled with all the answers the Dealer had refused, and the sound they made was not a roar. It was a room full of people talking at once.',
+            'The Reckoners called the spill Chaos and sealed the second chapter behind it. The lamplighter stood in the crack with her lamp held high. Then she went in, because the Dealer had gone in first.',
+          ],
+        },
         trials: [
           {
             id: 'pressure',
@@ -436,49 +519,59 @@ export const DUNGEON_GROUPS: DungeonGroup[] = [
         accent: '#72efdd',
         theme: 'Every target is a fraction, never a whole number.',
         intro:
-          'Nothing here lands neatly. Division leaves digits behind the point, roots refuse to settle, and the closest board still has to carry all of them.',
+          'Nothing here lands neatly. One door forbids multiplication, another keeps the answer below one, and the last carries fourteen cards into a million-scale decimal.',
+        lore: {
+          heading: 'The remainder',
+          epigraph: 'When the House divided twenty-four, it did not stop.',
+          source: 'First line of Chapter II',
+          paragraphs: [
+            'What leaked out of the broken ledger became water. The first number would not divide cleanly, so it kept dividing. The sea filled with digits that never ended, with fractions that learned to repeat, with numbers that wore the faces of whole numbers and then forgot which face was theirs.',
+            'The Reckoners tried to mop it up. They built a lighthouse to warn ships, though no ship has ever come this far. The light is not a flame. It is a single point, burning at the end of a very long sum.',
+            'The First Dealer is the keeper. He rows past the lamplighter without seeing her, his coat full of salt, his hands still counting. Beyond him, the failed hands are stacked in the Scrapheap. They are still warm.',
+          ],
+        },
         trials: [
           {
             id: 'saltwater',
             title: 'Saltwater',
             difficulty: 'medium',
-            recipeId: 'chaos-decimal-medium',
-            blurb: 'Four or five loose cards, one division, and a target with a tail.',
+            recipeId: 'chaos-decimal-tide',
+            blurb: 'Five cards, no multiplication, and a target with a tail.',
           },
           {
             id: 'half-tide',
             title: 'Half Tide',
             difficulty: 'medium',
-            recipeId: 'chaos-decimal-medium',
-            blurb: 'The point is never where the cards want it. Split the difference.',
+            recipeId: 'chaos-decimal-half-tide',
+            blurb: 'Five cards and a target between zero and one. Whole numbers do not count.',
           },
           {
             id: 'recurring',
             title: 'Recurring',
             difficulty: 'hard',
-            recipeId: 'chaos-decimal-hard',
-            blurb: 'Roots and reciprocals leave a repeating tail after the decimal.',
+            recipeId: 'chaos-decimal-recurring',
+            blurb: 'Eight cards of roots and reciprocals leave a repeating tail.',
           },
           {
             id: 'long-division',
             title: 'Long Division',
             difficulty: 'hard',
-            recipeId: 'chaos-decimal-hard',
-            blurb: 'Five or six cards and a target that refuses to round.',
+            recipeId: 'chaos-decimal-long-division',
+            blurb: 'Eight cards with multiplication stripped out. Divide or fall short.',
           },
           {
             id: 'irrational-reef',
             title: 'The Irrational Reef',
             difficulty: 'expert',
-            recipeId: 'chaos-decimal-expert',
-            blurb: 'Factorials and logs around a fractional target. Mind the domains.',
+            recipeId: 'chaos-decimal-reef',
+            blurb: 'Ten cards in two locks around a fraction in the thousands. Mind the domains.',
           },
           {
             id: 'decimal-deep',
             title: 'Decimal Deep',
             difficulty: 'extreme',
-            recipeId: 'chaos-decimal-extreme',
-            blurb: 'Seven cards, the whole cabinet, and a six-figure target with a tail.',
+            recipeId: 'chaos-decimal-deep',
+            blurb: 'Fourteen cards in four locks, the whole cabinet, and a million-scale target with a tail.',
           },
         ],
       },
@@ -489,49 +582,59 @@ export const DUNGEON_GROUPS: DungeonGroup[] = [
         accent: '#ffbe0b',
         theme: 'Crowded hands and the operators nobody reaches for.',
         intro:
-          'The plain tools are gone. Eight or nine cards arrive welded into locks, and only shifts, joins, logs and counts can pull them apart. Find the ugly route that works.',
+          'No addition and no multiplication. Nine to nineteen cards arrive welded into locks, and only shifts, joins, logs and counts can pull them apart. The last door is longer than the table.',
+        lore: {
+          heading: 'Everything we could not solve',
+          epigraph: 'A wrong answer is still a hand. Do not throw it away.',
+          source: "Scrapkeeper's notice",
+          paragraphs: [
+            'The Scrapheap is where the House keeps what did not work. Every hand that missed, every route that ended in a fraction, every answer that arrived too late is piled here in a mound that smells of hot metal and old paper. The pile has learned to keep its own score.',
+            'The workers do not weld with fire. They weld with loss, because the scrap is afraid of anything that grows too neatly. Give it a rule that only ever grows, and the whole heap will lean away from you. Give it a rule that takes something back, and it will let you pass.',
+            'At the centre stands the Scrap Titan. It is made of every answer that was almost right, and it wears the Dealer\'s face. It does not want to be solved. It wants a number that will not change. The lamplighter finds a child\'s mitten in the heap and puts it in her pocket.',
+          ],
+        },
         trials: [
           {
             id: 'rust-fetch',
             title: 'Rust Fetch',
             difficulty: 'hard',
-            recipeId: 'chaos-scrap-hard',
-            blurb: 'Eight cards, no add or multiply, and every trap priced and live.',
+            recipeId: 'chaos-scrap-rust',
+            blurb: 'Nine cards, two locks, no add or multiply, and every trap priced and live.',
           },
           {
             id: 'odd-parts',
             title: 'Odd Parts',
             difficulty: 'hard',
-            recipeId: 'chaos-scrap-hard',
-            blurb: 'The binder has already done half the work. Use what it left.',
+            recipeId: 'chaos-scrap-odd-parts',
+            blurb: 'Only duplicate ranks fuse for you. Nine cards and no add or multiply.',
           },
           {
             id: 'junkyard',
             title: 'Junkyard',
             difficulty: 'expert',
-            recipeId: 'chaos-scrap-expert',
-            blurb: 'Eight or nine cards in up to four binds, and no clean way through.',
+            recipeId: 'chaos-scrap-junkyard',
+            blurb: 'Twelve cards in three locks, with both plain arithmetic operators stripped out.',
           },
           {
             id: 'salvage',
             title: 'Salvage Line',
             difficulty: 'expert',
-            recipeId: 'chaos-scrap-expert',
-            blurb: 'Every bind costs nothing, but every shortcut costs four hundred.',
+            recipeId: 'chaos-scrap-salvage',
+            blurb: 'A dragon-only salvage run. Consecutive ranks fuse; no add or multiply remains.',
           },
           {
             id: 'crusher',
             title: 'The Crusher',
             difficulty: 'extreme',
-            recipeId: 'chaos-scrap-extreme',
-            blurb: 'Nine cards, no add or multiply, and a seven-figure target.',
+            recipeId: 'chaos-scrap-crusher',
+            blurb: 'Fifteen cards, four locks, no add or multiply, and a nine-figure ceiling.',
           },
           {
             id: 'nine-scraps',
-            title: 'Nine Scraps',
+            title: 'Scrap Titan',
             difficulty: 'impossible',
-            recipeId: 'chaos-scrap-impossible',
-            blurb: 'Nine cards, four binds, and the plainest operators removed.',
+            recipeId: 'chaos-scrap-titan',
+            blurb: 'Nineteen cards, four locks, and no add or multiply anywhere.',
           },
         ],
       },
@@ -542,49 +645,59 @@ export const DUNGEON_GROUPS: DungeonGroup[] = [
         accent: '#f2c94c',
         theme: 'Targets in the tens and hundreds of millions.',
         intro:
-          'The ledger has grown teeth. Targets start in the ten millions and end a hair under a billion, so every shortcut you save has to survive the climb.',
+          'The ledger has grown teeth. Targets start in the ten millions and end under a billion; one door pins the answer near ten million, and the last opens onto twenty loose cards with no lock to hide behind.',
+        lore: {
+          heading: 'The number that ate the house',
+          epigraph: 'A number is a promise, not a size.',
+          source: 'Written inside the vault door',
+          paragraphs: [
+            'After the sea, the Dealer tried the opposite mistake. He built a number so large that no hand could miss it. Nine figures, then ten, then more zeroes than there were cards in the House. He told himself that size would make it true.',
+            'The number became a vault. The vault became weather. Counting houses grew inside it, one lending the next a little more magnitude, until nobody could agree on the last digit and everyone agreed to stop looking. The Dealer walked through the rooms for years without finding the door he had come in by.',
+            "On the inner door, in his own hand: \"A number is a promise, not a size.\" Under it, scratched out so hard the wood had split: \"I owe her.\" The Undertow is where the House keeps what it owes.",
+          ],
+        },
         trials: [
           {
             id: 'lockbox',
             title: 'Lockbox',
             difficulty: 'expert',
-            recipeId: 'chaos-big-expert',
-            blurb: 'Six or seven cards and a target in the ten millions.',
+            recipeId: 'chaos-big-lockbox',
+            blurb: 'Eight cards and a target in the ten millions. Factorials are the short route.',
           },
           {
             id: 'ten-million',
             title: 'Ten Million',
             difficulty: 'expert',
-            recipeId: 'chaos-big-expert',
-            blurb: 'Factorials and counts stack toward a very large number.',
+            recipeId: 'chaos-big-ten-million',
+            blurb: 'Nine cards, no factorials, and a tight band pinned around ten million.',
           },
           {
             id: 'counting-house',
             title: 'The Counting House',
             difficulty: 'extreme',
-            recipeId: 'chaos-big-extreme',
-            blurb: 'Seven or eight cards aimed at the hundreds of millions.',
+            recipeId: 'chaos-big-counting-house',
+            blurb: 'Twelve cards in three locks, aimed deep into the hundreds of millions.',
           },
           {
             id: 'compound-interest',
             title: 'Compound Interest',
             difficulty: 'extreme',
-            recipeId: 'chaos-big-extreme',
-            blurb: 'Two binds, a five-hundred-point toll, and a target that keeps growing.',
+            recipeId: 'chaos-big-compound',
+            blurb: 'Thirteen cards built on powers and growth. One power route is billed.',
           },
           {
             id: 'billion-door',
             title: 'The Billion Door',
             difficulty: 'impossible',
-            recipeId: 'chaos-big-impossible',
-            blurb: 'Nine cards, four binds, and a target a hair under a billion.',
+            recipeId: 'chaos-big-door',
+            blurb: 'Seventeen cards, four locks, and a target within a tenth of a billion.',
           },
           {
             id: 'vault-of-nine',
-            title: 'Vault of Nine',
+            title: 'Vault of Twenty',
             difficulty: 'impossible',
-            recipeId: 'chaos-big-impossible',
-            blurb: 'The last lock in the vault. The number is not the hard part.',
+            recipeId: 'chaos-big-vault',
+            blurb: 'Twenty loose cards and no locks. The number is not the hard part.',
           },
         ],
       },
@@ -595,49 +708,59 @@ export const DUNGEON_GROUPS: DungeonGroup[] = [
         accent: '#5bc0eb',
         theme: 'Every target sits below zero.',
         intro:
-          'The table has tilted. Build the number, then drag it under: every target on this floor is negative, and the cheapest route is the one that keeps it there.',
+          'The table has tilted. Build the number, then drag it under: one door forbids addition, another hides a fraction below the surface, and the last falls a hundred million below the table.',
+        lore: {
+          heading: 'The debt side',
+          epigraph: 'Every failed proof borrowed from the next.',
+          source: 'Ledger balance, below the line',
+          paragraphs: [
+            'The Undertow is the debt side of the ledger. Every time an answer overshot, the House borrowed the difference from the next hand. The interest was negative, so the water rose. Down here the cards are cold, the ink runs backward, and every rule has to be spoken in the past tense.',
+            'Loss is the only honest direction. Take something away, then take something else away, and eventually you arrive at the number you were trying to reach. The Reckoners who came to audit the books understood this too late. None of them came back up.',
+            'A voice under the water says the first hand is still down here, intact, waiting on a table no one has cleared. It says the Dealer goes to it every night and deals himself the same cards. Follow the cold current to the Hourglass.',
+          ],
+        },
         trials: [
           {
             id: 'low-tide',
             title: 'Low Tide',
             difficulty: 'medium',
-            recipeId: 'chaos-negative-medium',
-            blurb: 'Four or five cards. Subtract past zero and stay there.',
+            recipeId: 'chaos-negative-low-tide',
+            blurb: 'Five cards. Subtract past zero and stay there.',
           },
           {
             id: 'backwash',
             title: 'Backwash',
             difficulty: 'medium',
-            recipeId: 'chaos-negative-medium',
-            blurb: 'The target is small, dark, and on the wrong side of the line.',
+            recipeId: 'chaos-negative-backwash',
+            blurb: 'No addition allowed. Every step toward the target passes through subtraction.',
           },
           {
             id: 'cold-current',
             title: 'Cold Current',
             difficulty: 'hard',
-            recipeId: 'chaos-negative-hard',
-            blurb: 'Roots, reciprocals, and a target fifty thousand below zero.',
+            recipeId: 'chaos-negative-cold-current',
+            blurb: 'Ten cards in two dragon locks, pulling a target a hundred thousand below zero.',
           },
           {
             id: 'sinkhole',
-            title: 'Sinkhole',
-            difficulty: 'extreme',
-            recipeId: 'chaos-negative-extreme',
-            blurb: 'Factorials and counts on six or seven cards, then a long fall.',
+            title: 'Brine',
+            difficulty: 'hard',
+            recipeId: 'chaos-negative-brine',
+            blurb: 'Nine cards, negative and fractional at once. The target sits just under the surface.',
           },
           {
             id: 'below-zero',
             title: 'Below Zero',
             difficulty: 'extreme',
-            recipeId: 'chaos-negative-extreme',
-            blurb: 'Two million below the table and every digit has to be earned.',
+            recipeId: 'chaos-negative-below-zero',
+            blurb: 'Thirteen cards in three locks, then a long fall through the negative millions.',
           },
           {
             id: 'deep-freeze',
             title: 'The Deep Freeze',
             difficulty: 'impossible',
-            recipeId: 'chaos-negative-impossible',
-            blurb: 'Eight cards, every operator, and a target under the floorboards.',
+            recipeId: 'chaos-negative-deep-freeze',
+            blurb: 'Eighteen loose cards, and a target a hundred million under the floorboards.',
           },
         ],
       },
@@ -648,49 +771,59 @@ export const DUNGEON_GROUPS: DungeonGroup[] = [
         accent: '#ff8fa3',
         theme: 'Binds, shifts and digit joins under a heavy toll.',
         intro:
-          'The clock does not run here, but every shortcut is billed as if it does. Locks arrive fused, digits want to join, and nothing is free.',
+          'The clock does not run here, but every shortcut is billed as if it does. Locks arrive fused, digits want to join, and the last door carries twenty cards into six groups.',
+        lore: {
+          heading: 'The hand dealt forever',
+          epigraph: 'The House does not measure time. It measures deals.',
+          source: 'Hourglass, lower bulb',
+          paragraphs: [
+            'The Hourglass does not count seconds. It counts deals. Every grain is a card that was never played. When the glass turns, the first hand is dealt again, and somewhere in the House a chair scrapes back from a table.',
+            'In the lower bulb there is a table with two chairs. One is empty. The other is still warm. A hand lies face down between them, and the top card is blank. The lamplighter sits in the empty chair and waits, but nobody comes to take the other one.',
+            'The glass turns whenever someone tries to leave. It always points toward the Sphinx. The Sphinx has been waiting for the right question, and the lamplighter is beginning to understand that she has been carrying it since the cellar.',
+          ],
+        },
         trials: [
           {
             id: 'cracked-glass',
             title: 'Cracked Glass',
             difficulty: 'hard',
-            recipeId: 'chaos-hourglass-hard',
-            blurb: 'Binds, shifts and joins under a three-hundred-point toll.',
+            recipeId: 'chaos-hourglass-cracked',
+            blurb: 'Eight cards, two locks, shifts and joins under a three-hundred-point toll.',
           },
           {
             id: 'sandfall',
             title: 'Sandfall',
             difficulty: 'hard',
-            recipeId: 'chaos-hourglass-hard',
-            blurb: 'Six or seven cards, two locks, and a target in the hundred thousands.',
+            recipeId: 'chaos-hourglass-sandfall',
+            blurb: 'Nine cards with multiplication removed. Joins and shifts have to cover for it.',
           },
           {
             id: 'two-chambers',
             title: 'Two Chambers',
             difficulty: 'expert',
-            recipeId: 'chaos-hourglass-expert',
-            blurb: 'Seven cards under two locks, with four hundred points a shortcut.',
+            recipeId: 'chaos-hourglass-two-chambers',
+            blurb: 'Twelve cards under four locks, with four hundred points a shortcut.',
           },
           {
             id: 'the-turn',
             title: 'The Turn',
             difficulty: 'expert',
-            recipeId: 'chaos-hourglass-expert',
-            blurb: 'The hand turns over; the joins are the only way through.',
+            recipeId: 'chaos-hourglass-turn',
+            blurb: 'Thirteen cards; the target only opens when the digits collide.',
           },
           {
             id: 'last-grain',
             title: 'Last Grain',
             difficulty: 'confounding',
-            recipeId: 'chaos-hourglass-confounding',
-            blurb: 'Eight cards, four binds, and five hundred a shortcut.',
+            recipeId: 'chaos-hourglass-last-grain',
+            blurb: 'Sixteen cards in six locks, and six hundred a shortcut.',
           },
           {
             id: 'shattered-hour',
             title: 'Shattered Hour',
-            difficulty: 'confounding',
-            recipeId: 'chaos-hourglass-confounding',
-            blurb: 'The glass is gone. The locks and the bill remain.',
+            difficulty: 'impossible',
+            recipeId: 'chaos-hourglass-shattered',
+            blurb: 'Twenty cards in six locks, with a four-figure bill for every shortcut.',
           },
         ],
       },
@@ -701,49 +834,59 @@ export const DUNGEON_GROUPS: DungeonGroup[] = [
         accent: '#6fd68a',
         theme: 'Counting routes and locked cages.',
         intro:
-          'The sphinx counts everything: arrangements, derangements, the cards you leave fused. Answer with a board that uses every one of them.',
+          'The sphinx counts everything: arrangements, derangements, the cards you leave fused. One floor removes addition, another only fuses duplicates, and the last answer needs twenty loose cards and no lock to hide behind.',
+        lore: {
+          heading: 'The question beneath the answer',
+          epigraph: 'The answer is not a number. It is the hand that keeps reaching.',
+          source: 'The Sphinx, first riddle',
+          paragraphs: [
+            "The Sphinx is the House's accountant, or perhaps its grief. It has counted every hand that could be dealt and every room those hands could reach. Its ledger is the only complete one in the building. The lamplighter asks to see the last page. The Sphinx says she has already seen it.",
+            'It asks what the first number means if any number can be made. The Reckoners wanted that number to be special. The ledger kept opening a thousand other doors with the same hand. They called the doors mistakes and sealed them, one after another, until the House was full of nothing else.',
+            'The Sphinx offers two ways out. Close the ledger here, or turn to the last page. The last page is a small room with one lamp, burning since the Cellar. The lamplighter turns the page.',
+          ],
+        },
         trials: [
           {
             id: 'riddle-one',
             title: 'Riddle One',
             difficulty: 'hard',
-            recipeId: 'chaos-sphinx-hard',
-            blurb: 'Counting operators and a rook of duplicates under the sphinx eye.',
+            recipeId: 'chaos-sphinx-riddle',
+            blurb: 'Eight cards and a rook of duplicates. The sphinx only counts what repeats.',
           },
           {
             id: 'counting-claws',
             title: 'Counting Claws',
             difficulty: 'hard',
-            recipeId: 'chaos-sphinx-hard',
-            blurb: 'How many ways? The target already knows.',
+            recipeId: 'chaos-sphinx-counting',
+            blurb: 'Twelve cards in a dragon lock, with addition removed. Counting routes carry the target.',
           },
           {
             id: 'riddle-room',
             title: 'The Riddle Room',
             difficulty: 'expert',
-            recipeId: 'chaos-sphinx-expert',
-            blurb: 'Seven cards, every counting route, and two locks already closed.',
+            recipeId: 'chaos-sphinx-riddle-room',
+            blurb: 'Twelve cards in two locks, with every counting family in the cabinet.',
           },
           {
             id: 'twelve-doors',
             title: 'Twelve Doors',
             difficulty: 'extreme',
-            recipeId: 'chaos-sphinx-extreme',
-            blurb: 'Eight cards and one eight-figure answer behind them.',
+            recipeId: 'chaos-sphinx-twelve-doors',
+            blurb: 'Fourteen cards fused by rank runs, all aimed at one answer in the millions.',
           },
           {
             id: 'sphinx-cage',
             title: "Sphinx's Cage",
             difficulty: 'extreme',
-            recipeId: 'chaos-sphinx-extreme',
-            blurb: 'Every counting operator shares a single target. Choose well.',
+            recipeId: 'chaos-sphinx-cage',
+            blurb: 'Fifteen cards caged by duplicate ranks. Every operator shares one target.',
           },
           {
             id: 'the-answer',
             title: 'The Answer',
             difficulty: 'impossible',
-            recipeId: 'chaos-sphinx-impossible',
-            blurb: 'Nine cards, four binds, and a number only a counting route reaches.',
+            recipeId: 'chaos-sphinx-answer',
+            blurb: 'Twenty loose cards, and a number only the full counting cabinet reaches.',
           },
         ],
       },
@@ -752,51 +895,61 @@ export const DUNGEON_GROUPS: DungeonGroup[] = [
         name: 'The Last Light',
         sigil: '✹',
         accent: '#ff4fd8',
-        theme: 'Every operator. Nine cards. No mercy.',
+        theme: 'Every operator. Up to twenty cards. No mercy.',
         intro:
-          'Past the sphinx there is one lamp left. Every operator is live, every lock is closed, and the toll is four figures. It is still solvable, and barely.',
+          'Past the sphinx there is one lamp left. Every operator is live, the hand grows from ten cards to twenty, and the toll climbs to five figures. The last door inverts the trick: a huge hand, a target small enough to lose in it.',
+        lore: {
+          heading: 'The first lamp',
+          epigraph: 'The first question was never the number. It was whether anyone would stay.',
+          source: 'The First Dealer, final line',
+          paragraphs: [
+            'The lamp in the Last Light is the one from the Cellar. It has burned through both chapters without oil. Under it sit the first table, the first hand, and the chalk mark, still unfinished. The Dealer\'s chair is empty. The cards are fanned out the way he left them.',
+            'The final door asks for a small number from a huge hand. It is not a test of reach. It is a test of restraint. The lamplighter stands there for a long time, holding the blank card, understanding at last that the Dealer never hid it. He left it blank because writing his daughter\'s name would have made the loss final.',
+            'She sets the card face up on the table. Then she takes the chair, and she deals. The House stops being a dungeon. It becomes a table again. Somewhere above her, the first chalk mark is still there, waiting for someone to finish the sentence.',
+          ],
+        },
         trials: [
           {
             id: 'dying-spark',
             title: 'Dying Spark',
             difficulty: 'extreme',
-            recipeId: 'chaos-last-extreme',
-            blurb: 'Eight cards and a five-hundred-point toll on both traps.',
+            recipeId: 'chaos-last-dying',
+            blurb: 'Ten cards, three locks, and a five-hundred-point toll on both traps.',
           },
           {
             id: 'under-nine-suns',
             title: 'Under Nine Suns',
             difficulty: 'extreme',
-            recipeId: 'chaos-last-extreme',
-            blurb: 'Every family is live, and the ledger grows hotter.',
+            recipeId: 'chaos-last-nine-suns',
+            blurb: 'Twelve cards, every family live, and the ledger grows hotter.',
           },
           {
             id: 'black-lamp',
             title: 'The Black Lamp',
             difficulty: 'confounding',
-            recipeId: 'chaos-last-confounding',
-            blurb: 'Nine cards, four binds, and seven hundred a shortcut.',
+            recipeId: 'chaos-last-black-lamp',
+            blurb: 'Fourteen cards in four locks, and seven hundred a shortcut.',
           },
           {
             id: 'nothing-left',
             title: 'Nothing Left',
             difficulty: 'confounding',
-            recipeId: 'chaos-last-confounding',
-            blurb: 'The easy routes are gone. Only the expensive ones remain.',
+            recipeId: 'chaos-last-nothing',
+            blurb: 'Sixteen cards in five locks. Only expensive routes remain.',
           },
           {
             id: 'final-toll',
             title: 'Final Toll',
             difficulty: 'impossible',
-            recipeId: 'chaos-last-impossible',
-            blurb: 'Nine cards, every trap, and a four-figure bill for the obvious move.',
+            recipeId: 'chaos-last-final-toll',
+            blurb: 'Eighteen loose cards, and a four-figure bill for the obvious move.',
           },
           {
             id: 'last-light',
             title: 'Last Light',
             difficulty: 'impossible',
-            recipeId: 'chaos-last-impossible',
-            blurb: 'The final door in the final chapter. Solvable. Barely.',
+            recipeId: 'chaos-last-light',
+            blurb: 'Twenty loose cards, every operator, and a target down in the hundreds.',
           },
         ],
       },

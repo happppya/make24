@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import DifficultyChip from '../DifficultyChip.vue'
+import GauntletLoreDialog from '../GauntletLoreDialog.vue'
 import { useGameContext } from '../../app/context'
 import { gauntletById, gauntletGroup, getDungeonPuzzle } from '../../engine/dungeon'
 import { formatNumber } from '../../engine/math'
@@ -20,6 +21,15 @@ const {
   openGauntlet,
   nextGauntletId,
 } = useGameContext()
+
+const loreOpen = ref(false)
+const loreTriggerRef = ref<HTMLButtonElement | null>(null)
+
+async function closeLore(): Promise<void> {
+  loreOpen.value = false
+  await nextTick()
+  loreTriggerRef.value?.focus()
+}
 
 const group = computed(() =>
   selectedGauntlet.value ? gauntletGroup(selectedGauntlet.value.id) ?? null : null
@@ -63,21 +73,34 @@ function trialStatus(entry: (typeof trials.value)[number]): string {
 </script>
 
 <template>
-  <main v-if="selectedGauntlet" class="screen-gauntlet" :inert="menuOpen || tutorialOpen">
+  <main v-if="selectedGauntlet" class="screen-gauntlet" :inert="menuOpen || tutorialOpen || loreOpen">
     <div class="gauntlet-marquee" :style="{ '--gauntlet-accent': selectedGauntlet.accent }">
       <div class="gauntlet-marquee__left">
         <span class="gauntlet-marquee__badge">{{ group?.chapter ?? 'THE DUNGEON' }}</span>
         <span class="gauntlet-marquee__name">{{ selectedGauntlet.name }}</span>
         <span v-if="group" class="gauntlet-marquee__group">{{ group.name }}</span>
       </div>
-      <button
-        type="button"
-        class="btn-arcade btn-arcade--tiny"
-        data-testid="gauntlet-back-btn"
-        @click="openDungeon"
-      >
-        ◂ Dungeon Map
-      </button>
+      <div class="gauntlet-marquee__actions">
+        <button
+          ref="loreTriggerRef"
+          type="button"
+          class="btn-arcade btn-arcade--tiny gauntlet-lore-btn"
+          data-testid="gauntlet-lore-btn"
+          aria-haspopup="dialog"
+          :aria-expanded="loreOpen"
+          @click="loreOpen = true"
+        >
+          ▤ Read Lore
+        </button>
+        <button
+          type="button"
+          class="btn-arcade btn-arcade--tiny"
+          data-testid="gauntlet-back-btn"
+          @click="openDungeon"
+        >
+          ◂ Dungeon Map
+        </button>
+      </div>
     </div>
 
     <section class="gauntlet-hero" :style="{ '--gauntlet-accent': selectedGauntlet.accent }">
@@ -200,6 +223,12 @@ function trialStatus(entry: (typeof trials.value)[number]): string {
     <p>That gauntlet is not on the map.</p>
     <button type="button" class="btn-arcade" @click="openDungeon">Back to the Dungeon</button>
   </main>
+
+  <GauntletLoreDialog
+    v-if="loreOpen && selectedGauntlet"
+    :gauntlet-id="selectedGauntlet.id"
+    @close="closeLore"
+  />
 </template>
 
 <style scoped>
@@ -267,6 +296,23 @@ function trialStatus(entry: (typeof trials.value)[number]): string {
   font-family: var(--font-mono);
   font-size: 0.9rem;
   color: var(--ink-muted);
+}
+
+.gauntlet-marquee__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.gauntlet-lore-btn {
+  border-color: color-mix(in srgb, var(--gauntlet-accent) 70%, #f8f2e0);
+  color: color-mix(in srgb, var(--gauntlet-accent) 72%, #fff);
+}
+
+.gauntlet-lore-btn:hover:not(:disabled) {
+  border-color: var(--gauntlet-accent);
+  background: color-mix(in srgb, var(--gauntlet-accent) 18%, #38324f);
 }
 
 .gauntlet-hero {
